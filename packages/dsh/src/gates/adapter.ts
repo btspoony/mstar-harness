@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
-  assignmentHeaderRegion,
+  assignmentFrontmatterEntries,
   readAssignmentSource,
   validateIntegrationMergeLease,
 } from '@mstar-harness/engine'
@@ -41,7 +41,7 @@ import { storeAuthorityRefusals } from './store-authority.ts'
 import { readExecutionWorkflowSource } from './workflow-selection.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
-import { assignmentTextFromFields, isAssignmentShaped, planIdOf, resolveDispatchHard } from './dispatch-assignment.ts'
+import { assignmentTextFromFields, isAssignmentShaped, planIdOfEntries, resolveDispatchHard } from './dispatch-assignment.ts'
 import { dispatchGateCore, hasTerminalRefusal } from './dispatch-core.ts'
 import { leaseGateViolations } from './dispatch-lease.ts'
 import { recordDispatch, recordWorkflowVerdict as appendWorkflowVerdict, AGENT_FLOW_LOGGER } from './agent-flow.ts'
@@ -293,15 +293,19 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // parallel-worktree case, not an unverifiable dispatch.
     const assignmentSource = preResolved ?? readAssignmentSource(prompt, { harnessDir })
     const text = assignmentSource.ok ? assignmentSource.text : prompt
-    const headerRegion = assignmentHeaderRegion(text)
-    const planId = assignmentSource.ok ? planIdOf(headerRegion) : undefined
+    // ONE parse per dispatch, made HERE because the plan id selects the
+    // lifecycle before the core runs: the same entries feed the plan id, the
+    // L1/L2 worktree checks, the read-only-role read and every composition
+    // leg downstream.
+    const entries = assignmentFrontmatterEntries(text)
+    const planId = assignmentSource.ok ? planIdOfEntries(entries) : undefined
     const selectionHint = planId === undefined ? hint : { ...hint, planId }
     const activeSource = harnessDir !== null && assignmentSource.ok && isAssignmentShaped(text)
       ? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
       : undefined
-    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, assignmentSource, exec?.agent, hint, activeSource)
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, assignmentSource, exec?.agent, hint, activeSource, { entries, planId })
     if (exec !== undefined) {
-      violations.push(...await leaseGateViolations(harnessDir, exec, writable, text, assignmentSource, selectionHint, activeSource))
+      violations.push(...await leaseGateViolations(harnessDir, exec, writable, assignmentSource, { entries, planId }, selectionHint, activeSource))
     }
     // Agent-flow ledger — the ONE recording point for both dispatch paths
     // (spec §2.1.1: this shared core sits behind the `tools/pre-execute`

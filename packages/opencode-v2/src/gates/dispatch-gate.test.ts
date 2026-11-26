@@ -319,16 +319,15 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     }
   });
 
-  test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", async () => {
-    const logs: string[] = [];
-    const harness = await fixture((_level, message) => logs.push(message));
-    await harness.invoke(makeEvent("project-manager", "fullstack-dev", LEGACY_BODY_LABEL));
-    expect(harness.bodyCalls()).toBe(1);
-    const joined = logs.join("\n");
-    expect(joined).toContain("dispatch.assignment.legacy-format");
-    expect(joined).toContain("front-matter document");
-    expect(joined).toContain("Assignment file:");
-    expect(joined).not.toContain("document.frontmatter.absent");
+  test("a body-label prompt refuses dispatch.assignment.legacy-format in the soft default (terminal)", async () => {
+    const harness = await fixture();
+    // No repo hard setting, no document enforcement: the retired format has
+    // no verified declaration, so the subagent is never spawned.
+    await expect(harness.invoke(makeEvent("project-manager", "fullstack-dev", LEGACY_BODY_LABEL))).rejects.toMatchObject({
+      _tag: "Tool.Error",
+      message: expect.stringContaining("dispatch.assignment.legacy-format"),
+    });
+    expect(harness.bodyCalls()).toBe(0);
   });
 
   test("an empty pointed file is validated as an invalid Assignment, not a silent prompt", async () => {

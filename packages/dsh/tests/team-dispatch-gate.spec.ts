@@ -239,9 +239,10 @@ Do the thing.
 
     const decision = await app.ctx.waterfall('tools/pre-execute', teamTaskCreateExec(LEGACY_BODY_LABEL), defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(advisories).toHaveLength(1)
-    expect(codesOf(advisories[0])).toContain('dispatch.assignment.legacy-format')
+    // Terminal on the team carrier too: the same core, the same veto.
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(advisories).toHaveLength(0)
   })
 
   it('a team carrier naming an out-of-home pointer is denied in the default mode (same terminal refusal)', async () => {

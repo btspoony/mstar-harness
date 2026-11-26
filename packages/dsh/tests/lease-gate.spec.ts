@@ -258,8 +258,11 @@ Do the thing.
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' })
-    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
+    // Terminal: the retired format declares nothing a gate could verify, so
+    // the default (soft) mode vetoes it — no advisory is emitted.
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(advisories).toHaveLength(0)
   })
 })
 

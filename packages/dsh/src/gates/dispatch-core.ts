@@ -11,15 +11,14 @@
  *
  * No barrel: importers name this module by explicit relative path.
  */
+import { dirname } from 'node:path'
 import {
-  assignmentHeaderRegion,
+  assignmentFrontmatterEntries,
   composeDispatchGate,
   isReadOnlyAssignmentRole,
-  legacyAssignmentShape,
-  legacyFormatViolation,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
 } from '@mstar-harness/engine'
-import type { AssignmentSourceResult, ValidationResult } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING } from './_shared.ts'
 import type { Config } from './_shared.ts'
@@ -27,6 +26,7 @@ import { isRootLikeAgent } from './steering.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { worktreeL1Violations, worktreeL2Violations } from './dispatch-worktree.ts'
+import { planIdOfEntries } from './dispatch-assignment.ts'
 
 /**
  * True when any violation is a TERMINAL refusal — a verdict independent of
@@ -101,15 +101,14 @@ export function dispatchCallerOf(config: Config, agent: unknown): string {
  * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
  * host adapter's `beforeDispatch` share ONE code path.
  *
- * Header-region scoping: the engine `assignmentHeaderRegion`
- * slice is computed ONCE and feeds the composition AND the worktree parsers
- * (fields, branch forms, direct-on exception, worktree tracks) — body-quoted
- * field examples after a `# Task` / `# Target` / `---` marker never leak
- * into the header fields the gate validates (the same discipline
- * enforcement / plan-id / lease already honor). Well-formed assignments
- * (fields in the header) slice to the full text, so their verdicts are
- * unchanged. The composition never throws: unexpected failures degrade to
- * the silent non-shaped result.
+ * ONE parse per dispatch: the front matter entries (the caller's, else this
+ * core's own) feed the read-only-role read, the worktree L1/L2 track
+ * questions and every composition leg (fields, branch forms, direct-on
+ * exception, enforcement) — no leg reparses the resolved document. Parsers
+ * are front matter-scoped, so body-quoted field examples after a
+ * `# Task` / `# Target` / `---` marker never leak into a gate. The
+ * composition never throws: unexpected failures degrade to the silent
+ * non-shaped result.
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
@@ -125,6 +124,10 @@ export function dispatchCallerOf(config: Config, agent: unknown): string {
  *   terminal here, and a resolved document is consumed verbatim — no stage
  *   of one dispatch may read the source a second time, so a file swapped
  *   mid-dispatch cannot split the decision from the record.
+ * @param decision - the caller's ALREADY-parsed view of that document (the
+ *   adapter needs the plan id for workflow selection before it gets here) —
+ *   handed on so the L1/L2 checks, the read-only-role read and the
+ *   composition all consume one parse. Omitted → this core parses once.
  */
 export async function dispatchGateCore(
   config: Config,
@@ -134,6 +137,7 @@ export async function dispatchGateCore(
   callerAgent: unknown,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
+  decision?: { entries: Map<string, FrontmatterEntry> | null; planId: string | undefined },
 ): Promise<{ violations: ValidationResult[]; writable: boolean | undefined; text: string }> {
   // compass D14/D16 — the ONE resolution per dispatch: the caller hands its
   // already-resolved `AssignmentSourceResult`; this core NEVER reads the
@@ -150,18 +154,19 @@ export async function dispatchGateCore(
     }
   }
   const text = source.text
-  const header = assignmentHeaderRegion(text)
-  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...await worktreeL1Violations(harnessDir, header, hint, activeSource)]
-  // D16 — an Assignment-shaped document whose fields live in the retired
-  // body-label grammar is refused `dispatch.assignment.legacy-format` on
-  // EVERY gate (commands `dispatch validate` parity). The refusal
-  // supersedes the schema's absent-fence row the composition emits for the
-  // same unfenced text — one defect, one message.
-  const legacy = legacyAssignmentShape(text)
-  if (legacy) violations.push(legacyFormatViolation())
+  // One parse per decision: the adapter's parse when it handed one in, else
+  // this core's — and it feeds the L1/L2 worktree checks, the read-only-role
+  // read and every composition leg, so no leg reparses the resolved
+  // document. D16 recognition belongs to that one composition (one owner for
+  // the whole host family).
+  const entries = decision?.entries ?? assignmentFrontmatterEntries(text)
+  const violations: ValidationResult[] = [
+    ...worktreeL2Violations(entries),
+    ...await worktreeL1Violations(harnessDir, entries, decision?.planId ?? planIdOfEntries(entries), hint, activeSource),
+  ]
   // Read-only roles (scout/explore) skip the branch-form gate entirely;
   // the role is the parsed front matter field of the document.
-  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? '') ? false : undefined
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
   // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
   // role, DERIVED from the calling session — an explicit binding is honoured
@@ -170,8 +175,8 @@ export async function dispatchGateCore(
   // fail-closed contract: an empty binding emits
   // dispatch.anti-recursion.empty-binding) + default-branch gate (Assignment
   // branch forms, else $MSTAR_WORKING_BRANCH; direct-on exception only when
-  // its branch is the one being checked) + header-region enforcement. Never
-  // throws. The caller is read LIVE — `dispatchBinding` is volatile (a
+  // its branch is the one being checked) + D16 + header-region enforcement.
+  // Never throws. The caller is read LIVE — `dispatchBinding` is volatile (a
   // settings save applies on the next dispatch) — and an explicitly blank
   // value still fails closed.
   violations.push(
@@ -179,11 +184,17 @@ export async function dispatchGateCore(
       caller: dispatchCallerOf(config, callerAgent),
       callerRequired: true,
       writable,
+      entries,
       // Pointer provenance: a resolved `Assignment file:` carrier commits to
       // the Assignment contract, so empty or unrelated file content is ONE
       // invalid Assignment — never a silent non-Assignment pass.
       fileCarrier: source.path !== undefined,
-    }).violations.filter((v) => !(legacy && v.code === 'document.frontmatter.absent')),
+      // Source-relative `worktree_path` base: the pointed FILE's own
+      // directory (CLI parity). Git control discovery stays on the checkout —
+      // `cwd` is left unset on purpose, so an assignment home outside the
+      // repository never moves which checkout the gate inspects.
+      assignmentDir: source.path === undefined ? undefined : dirname(source.path),
+    }).violations,
   )
   return { violations, writable, text }
 }

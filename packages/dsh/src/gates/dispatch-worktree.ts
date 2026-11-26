@@ -11,20 +11,19 @@
  * No barrel: importers name this module by explicit relative path.
  */
 import {
-  assignmentHeaderRegion,
   collectActiveLifecycleBranches,
   l1PreDispatchCheck,
   l2PreDispatchCheck,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   probeCheckoutRoot,
   readActiveLifecycleBranchDocs,
   readMainWorktree,
 } from '@mstar-harness/engine'
-import type { ValidationResult, WorkflowSnapshot, WorktreeTrack } from '@mstar-harness/engine'
+import type { FrontmatterEntry, ValidationResult, WorkflowSnapshot, WorktreeTrack } from '@mstar-harness/engine'
 import { asRecord } from './_shared.ts'
 import { activeRowsOf, readExecutionWorkflowSource, refusalOf } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead, SessionHint } from './workflow-selection.ts'
-import { assignmentHeaderValue, planIdOf } from './dispatch-assignment.ts'
+import { assignmentEntriesValue } from './dispatch-assignment.ts'
 
 /**
  * One worktree-gate violation line (dsh-side codes live in the
@@ -51,18 +50,19 @@ function worktreeViolation(code: string, message: string, fix?: string): Validat
  *
  * Pure over the parsed fields + the filesystem; the engine probes
  * `git -C <path> branch --show-current` per valid track (bounded, fails
- * closed). compass D14 — the caller passes the RESOLVED assignment document
- * (the `readAssignmentSource` output shared by the gate composition), so a
- * pointer and the inline form answer the same track questions.
- * @param assignmentText - the resolved Assignment document.
+ * closed). compass D14 — the caller passes the parse it already made of the
+ * RESOLVED assignment document (`assignmentFrontmatterEntries`), so a pointer
+ * and the inline form answer the same track questions and no leg reparses the
+ * document.
+ * @param entries - the decision's ONE front-matter parse (`null` = unparseable).
  */
-export function worktreeL2Violations(assignmentText: string): ValidationResult[] {
+export function worktreeL2Violations(entries: Map<string, FrontmatterEntry> | null): ValidationResult[] {
   // The parallel-track declaration is the SHARED schema's own shape: a
   // `worktree_path` / `working_branch` string list (or a scalar, the serial
   // norm). Read from the parsed fields — the one projection the field gate,
   // the branch gate and this check share — never a second decode of the
   // entries, so no shape this check accepts can be one the schema rejects.
-  const fields = parseAssignmentFields(assignmentText)
+  const fields = parseAssignmentFieldsFromFrontmatter(entries)
   const worktreePaths = fields.worktreePaths ?? (fields.worktreePath?.trim() ? [fields.worktreePath] : [])
   const workingBranches = fields.workingBranches ?? (fields.workingBranch?.trim() ? [fields.workingBranch] : [])
   // ≥2 declared tracks is the parallel declaration; a single Worktree path is
@@ -174,22 +174,21 @@ async function activeSnapshotRows(harnessDir: string, hint?: SessionHint, active
  * engine owns that distinction). The engine probes are subprocess-based
  * and fail closed.
  * @param harnessDir - the plugin's resolved `{HARNESS_DIR}` (null when none).
- * @param assignmentText - the resolved Assignment document (the
- *   `readAssignmentSource` output shared by the gate composition — the gate
- *   slices its own front matter, so a pointer and the inline form answer the
- *   same row-scope questions).
+ * @param entries - the decision's ONE front matter parse (the caller already
+ *   made it for plan selection; this check never parses the document again).
+ * @param planId - the plan id that same parse resolved (undefined = no plan
+ *   row to compare against).
  * @param hint - the carrying session's selection hint (which lifecycle's
  *   snapshot carries the L1 metadata to compare against).
  */
 export async function worktreeL1Violations(
   harnessDir: string | null,
-  assignmentText: string,
+  entries: Map<string, FrontmatterEntry> | null,
+  planId: string | undefined,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
 ): Promise<ValidationResult[]> {
   if (harnessDir === null) return []
-  const header = assignmentHeaderRegion(assignmentText)
-  const planId = planIdOf(header)
   if (planId === undefined || planId === '') return []
   const read = await activeSnapshotRows(harnessDir, hint, activeSource)
   if (read.rows === null || read.snapshot === null) return []
@@ -201,7 +200,7 @@ export async function worktreeL1Violations(
   const snapshot = read.snapshot
   try {
     const lifecycleBranches = collectActiveLifecycleBranches(await readActiveLifecycleBranchDocs({ harnessDir }))
-    const expectedMainBranch = assignmentHeaderValue(header, 'Main worktree branch')
+    const expectedMainBranch = assignmentEntriesValue(entries, 'Main worktree branch')
       ?? (typeof snapshot.branch?.base === 'string' ? snapshot.branch.base : '')
     return l1PreDispatchCheck({
       workflowType: snapshot.type,

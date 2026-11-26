@@ -14,8 +14,8 @@
  * resolution answers a root):
  * - hard-default: `.mstar/` full markers + hard compass.
  * - soft-default: `.mstar/` full markers + soft compass.
- * - hard-custom: `.mstarc` custom `workflow_dir`/`project_dir` (Phase-5
- *   F1) + hard compass; canonical paths are the DECLARED dir names.
+ * - hard-custom: `.mstarc` custom `workflow_dir`/`project_dir` + hard
+ *   compass; canonical paths are the DECLARED dir names.
  * - retired-legacy: a sparse `.agents/` harness (retired candidate —
  *   classification refuses `harness.root-retired`).
  * - retired-declared: root `.mstarc` `harness_dir` (retired declaration —
@@ -139,7 +139,7 @@ function buildSoftDefault(base: string): Tree {
 function buildHardCustom(base: string): Tree {
   const { root, harness } = buildTree(base, "hard-custom");
   // Custom layout: coordination docs live under the DECLARED dir names,
-  // never workflows//projects/ (Phase-5 F1).
+  // never workflows//projects/.
   mkdirSync(join(harness, "cw-wf"), { recursive: true });
   mkdirSync(join(harness, "cw-pj"), { recursive: true });
   writeFileSync(join(harness, "status.json"), VALID_STATUS);
@@ -503,15 +503,16 @@ No branch form here.
     expect(pointerResult?.reason).toContain("assignment.field.delegation");
   });
 
-  test("a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries", async () => {
+  test("a body-label prompt is vetoed in the soft tree with both recoveries (the refusal is terminal)", async () => {
     const gate = gate2();
-    const result = (await gate.handler(dispatchEvent(LEGACY_BODY_LABEL))) as { block: boolean } | undefined;
-    expect(result).toBeUndefined();
-    const joined = gate.warnings.join("\n");
-    expect(joined).toContain("dispatch.assignment.legacy-format");
-    expect(joined).toContain("front-matter document");
-    expect(joined).toContain("Assignment file:");
-    expect(joined).not.toContain("document.frontmatter.absent");
+    // Soft compass: no repo hard flag, no document enforcement — yet the
+    // retired format has no verified declaration, so the dispatch is blocked.
+    const result = (await gate.handler(dispatchEvent(LEGACY_BODY_LABEL))) as { block: boolean; reason: string } | undefined;
+    expect(result?.block).toBe(true);
+    expect(result?.reason).toContain("dispatch.assignment.legacy-format");
+    expect(result?.reason).toContain("front-matter document");
+    expect(result?.reason).toContain("Assignment file:");
+    expect(result?.reason).not.toContain("document.frontmatter.absent");
   });
 
   test("the legacy refusal blocks under the document-own hard enforcement tree", async () => {

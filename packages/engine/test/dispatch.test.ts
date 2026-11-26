@@ -65,6 +65,7 @@ import {
   legacyAssignmentShape,
   legacyFormatViolation,
   validateAssignmentFields,
+  validateControlWriteAssignment,
   readAssignmentSource,
 } from "../src/dispatch.js";
 import { validateDocumentFrontmatter } from "../src/document-schema.js";
@@ -1139,14 +1140,14 @@ enforcement: hard
     expect(parseAssignmentFields("")).toEqual({});
   });
 
-  test("F1: an unfenced key-only body is NOT an Assignment — the public path requires a real fence", () => {
+  test("an unfenced key-only body is NOT an Assignment — the public path requires a real fence", () => {
     const body = "execute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nworking_branch: feature/foo";
     expect(parseAssignmentFields(body)).toEqual({});
     expect(assignmentHeaderRegion(body)).toBe("");
     expect(parseEnforcementFlag(`${body}\nenforcement: hard\n`)).toEqual({ hard: false, source: "none" });
   });
 
-  test("F1: the explicit extracted-block callers read a fence-stripped block", () => {
+  test("the explicit extracted-block callers read a fence-stripped block", () => {
     const text = `---
 execute_as: fullstack-dev
 delegation: forbidden
@@ -1166,7 +1167,7 @@ enforcement: hard
     expect(parseAssignmentFields(assignmentHeaderRegion(text))).toEqual(parseAssignmentFields(text));
   });
 
-  test("F3: an unterminated fence declares no fields (the schema refuses the document)", () => {
+  test("an unterminated fence declares no fields (the schema refuses the document)", () => {
     const text = "---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\n";
     expect(parseAssignmentFields(text)).toEqual({});
     expect(parseEnforcementFlag(text)).toEqual({ hard: false, source: "none" });
@@ -1345,7 +1346,7 @@ enforcement: hard
   test("compass frontmatter form: enforcement: hard → hard, source compass", () => {
     expect(parseEnforcementFlagFromFrontmatter("enforcement: hard\n")).toEqual({ hard: true, source: "compass" });
   });
-  test("F2: the flat compass profile accepts flat-only shapes the document profile refuses", () => {
+  test("the flat compass profile accepts flat-only shapes the document profile refuses", () => {
     const block = "iteration_id: 20260808-demo\nstatus: active\nreview_targets: [a,]\nenforcement: hard\n";
     // The strict document profile refuses the trailing flow-list separator,
     // so the flag vanishes; the flat profile the compass was validated with
@@ -1468,7 +1469,7 @@ enforcement: hard
     expect(assignmentHeaderRegion("# Target\nplan body only\n")).toBe("");
   });
 
-  test("unfenced key-only text is body prose → empty slice (F1)", () => {
+  test("unfenced key-only text is body prose → empty slice", () => {
     expect(assignmentHeaderRegion("execute_as: fullstack-dev\nenforcement: hard")).toBe("");
   });
 
@@ -1556,7 +1557,7 @@ task_budget: S — one focused implementer round
     });
   });
 
-  test("F3: an unterminated Assignment fence is refused through schema validation, never silently non-Assignment", () => {
+  test("an unterminated Assignment fence is refused through schema validation, never silently non-Assignment", () => {
     const result = composeDispatchGate(
       "---\nexecute_as: fullstack-dev\ndelegation: forbidden\ntask_category: logic\nenforcement: hard\n",
       { cwd },
@@ -1566,7 +1567,7 @@ task_budget: S — one focused implementer round
     expect(result.violations.map((v) => v.code)).toContain("document.frontmatter.absent");
   });
 
-  test("F3: ordinary prompts stay silent even when they open with a `---` rule", () => {
+  test("ordinary prompts stay silent even when they open with a `---` rule", () => {
     for (const text of ["---\n\n# Notes\n\nprose\n", "## Assignment\n\n**Execute as**: fullstack-dev\n"]) {
       expect(composeDispatchGate(text, { cwd }).shaped).toBe(false);
     }
@@ -1826,7 +1827,7 @@ describe("readAssignmentSource — one Assignment source resolver (compass D14)"
     expect(result.code).toBe("dispatch.assignment.path");
   });
 
-  test("a filesystem-root sdd_dir base keeps <segment>/assignments containment (F1 regression)", () => {
+  test("a filesystem-root sdd_dir base keeps <segment>/assignments containment", () => {
     // `.mstarc` sdd_dir = "/" — the canonical write-home root is the
     // filesystem root itself, where `root + sep` would be `//` and string
     // slicing would corrupt the identity segment. The filesystem root is
@@ -1908,13 +1909,32 @@ describe("legacyAssignmentShape / legacyFormatViolation — the one D16 recogniz
     expect(legacyAssignmentShape(`${VALID_ASSIGNMENT}\n**Execute as**: fullstack-dev\n**Delegation**: forbidden\n`)).toBe(false);
   });
 
-  test("the violation names both recoveries and the rewritten-target rule", () => {
+  test("the violation names both recoveries, the rewritten-target rule, and is terminal", () => {
     const v = legacyFormatViolation();
     expect(v.code).toBe("dispatch.assignment.legacy-format");
     expect(v.severity).toBe("high");
     expect(v.fix).toContain("front-matter");
     expect(v.fix).toContain("Assignment file:");
     expect(v.fix).toContain("rewritten");
+    // No verified declaration exists in the retired format, so the refusal is
+    // a veto independent of enforcement (soft never downgrades it).
+    expect(v.terminal).toBe(true);
+  });
+
+  test("composition emits the retired-format refusal itself — one owner, terminal, no absent-fence row", () => {
+    const cwd = gateFixture({ prefix: "dispatch-legacy-", harness: true });
+    try {
+      const result = composeDispatchGate("## Assignment\n\n**Execute as**: fullstack-dev\n**Delegation**: forbidden\n", { cwd });
+      const codes = result.violations.map((v) => v.code);
+      expect(codes).toContain("dispatch.assignment.legacy-format");
+      expect(codes).not.toContain("document.frontmatter.absent");
+      expect(result.violations.find((v) => v.code === "dispatch.assignment.legacy-format")?.terminal).toBe(true);
+      // Soft enforcement keeps the violations as the verdict; it never turns
+      // the terminal refusal into an allow decision by itself.
+      expect(result.enforcement).toEqual({ hard: false, source: "none" });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });
 
@@ -1973,11 +1993,60 @@ task_budget: S
   test("a valid hard-mode two-track dispatch is not blocked (no branch-field violations)", () => {
     const cwd = gateFixture({ prefix: "dispatch-parallel-hard-", harness: true });
     try {
-      const text = assignment({ working_branch: ["feature/a", "feature/b"], enforcement: "hard", task_budget: "S" });
+      // A GENUINE two-track declaration: a paired `worktree_path` list with one
+      // `working_branch` per track, under the document's own hard enforcement.
+      const text = assignment({
+        working_branch: ["feature/a", "feature/b"],
+        worktree_path: ["/srv/track-a", "/srv/track-b"],
+        enforcement: "hard",
+        task_budget: "S",
+      });
       const result = composeDispatchGate(text, { cwd });
       expect(result.enforcement).toEqual({ hard: true, source: "assignment" });
       expect(result.violations.filter((v) => v.code.startsWith("assignment.field.branch"))).toEqual([]);
       expect(result.hardBlocked).toBe(false);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+
+  test("a control-domain Assignment cannot declare parallel tracks — the list is refused before any checkout check", () => {
+    // `validateControlWriteAssignment` compares ONE declared checkout with the
+    // Git-derived control root; a list leaves that checkout (and every
+    // relative target) unverified, so the shape itself is refused, terminally.
+    const list = validateAssignmentFields(assignment({
+      write_domain: "control",
+      worktree_path: ["/srv/ctl-a", "/srv/ctl-b"],
+      working_branch: ["feature/ctl-a", "feature/ctl-b"],
+      control_write_paths: [".mstar/status.json"],
+    }));
+    const parallel = list.violations.find((v) => v.code === "assignment.field.control-write-parallel-tracks");
+    expect(parallel).toBeDefined();
+    expect(parallel?.terminal).toBe(true);
+
+    // The serial control norm stays untouched.
+    const scalar = validateAssignmentFields(assignment({
+      write_domain: "control",
+      worktree_path: "/srv/ctl",
+      working_branch: "feature/ctl",
+      control_write_paths: [".mstar/status.json"],
+    }));
+    expect(scalar.violations.some((v) => v.code === "assignment.field.control-write-parallel-tracks")).toBe(false);
+  });
+});
+
+describe("control-domain write checks — checkout anchor and relative base stay distinct", () => {
+  test("a relative worktree_path resolves from the pointed file's directory while Git discovery stays on the checkout", () => {
+    const cwd = gateFixture({ prefix: "dispatch-control-dir-", harness: true });
+    try {
+      // `<cwd>/.mstar/assignments/../..` IS the checkout: the file-relative
+      // base proves the pointed file's own directory is carried into the check.
+      const text = assignment({ write_domain: "control", worktree_path: "../..", working_branch: "feature/ctl" });
+      const fromFile = validateControlWriteAssignment(text, { cwd, assignmentDir: join(cwd, ".mstar", "assignments") });
+      expect(fromFile.some((v) => v.code === "dispatch.control-write.worktree-not-control")).toBe(false);
+      // The same text read from the checkout base names the parent directory.
+      const fromCheckout = validateControlWriteAssignment(text, { cwd });
+      expect(fromCheckout.some((v) => v.code === "dispatch.control-write.worktree-not-control")).toBe(true);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

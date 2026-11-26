@@ -61,6 +61,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
+  assignmentFrontmatterEntries,
   assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
   composeDispatchGate,
@@ -70,9 +71,7 @@ import {
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
-  legacyAssignmentShape,
-  legacyFormatViolation,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseSimpleFrontmatter,
   probeCollaborationAuthority,
   readAssignmentSource,
@@ -697,31 +696,31 @@ export function validateDispatchAssignment(
       // silent path.
       const carrier = source.path;
       const fileCarrier = carrier !== undefined;
-      // D16 — an Assignment-shaped document whose fields live in the
-      // retired body-label grammar is refused
-      // `dispatch.assignment.legacy-format`; the refusal supersedes the
-      // schema's absent-fence row for the same unfenced text (one defect,
-      // one message).
-      const legacy = legacyAssignmentShape(text);
+ // One parse per decision: the role read and the composition share this
+ // parse (the composition also owns the D16 legacy refusal).
+      const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch
  // gates — the engine composition's `writable` flag.
-      const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
+      const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? "") ? false : undefined;
       const composed = composeDispatchGate(text, {
         writable,
+        entries,
         fileCarrier,
         // Source-relative `worktree_path` resolves from the pointed file's
-        // own directory (CLI parity); inline prompts keep the checkout base.
-        cwd: carrier === undefined ? undefined : path.dirname(carrier),
+        // own directory (CLI parity); Git discovery stays on the checkout
+        // (`cwd` unset), so an out-of-repo assignment home never changes the
+        // inspected repository.
+        assignmentDir: carrier === undefined ? undefined : path.dirname(carrier),
       });
-      // Clean path: reuse the engine violations as-is; only the legacy
-      // refusal allocates, prepending its diagnostic and dropping the
-      // superseded row.
-      violations = legacy
-        ? [legacyFormatViolation(), ...composed.violations.filter((violation) => violation.code !== "document.frontmatter.absent")]
-        : composed.violations;
+      violations = composed.violations;
       enforcementHard = composed.enforcement.hard;
+      // A TERMINAL violation (source refusal or the retired-format one) is
+      // a veto enforcement cannot soften. This host has no refusal channel
+      // (`I-001258`), so it is surfaced through `hardBlocked` + the error
+      // log for any refusal-capable caller — never downgraded to a warning.
+      terminal = violations.some((violation) => violation.terminal === true);
     }
- // Header flag, terminal source refusal, else repo-level hard (`.mstarc` →
+ // Header flag, a terminal refusal, else repo-level hard (`.mstarc` →
  // compass) — the same precedence the status-write gate and dsh dispatches
  // honor.
     const hard = terminal || enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
@@ -731,7 +730,7 @@ export function validateDispatchAssignment(
       for (const violation of gated.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         if (hard) {
-          const reason = terminal ? "terminal source refusal" : "Enforcement: hard";
+          const reason = terminal ? "a terminal refusal" : "Enforcement: hard";
           log(
             "error",
             `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per ${reason}; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,

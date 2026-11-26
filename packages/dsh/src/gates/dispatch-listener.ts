@@ -108,9 +108,10 @@ async function gateAssignmentText(
     ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
   // The admitted pointer's resolved document is handed to the native start
-  // seam for THIS call, so the child executes the version the gate decided
-  // on instead of reading the file a second time.
-  if (source.ok) handOffResolvedCarrier(exec.agent, prompt, source)
+  // seam for THIS call (keyed by the tool call id, scoped by the
+  // `tools/execute` wrapper), so the child executes the version the gate
+  // decided on instead of reading the file a second time.
+  if (source.ok) handOffResolvedCarrier(exec.callId, source)
   return undefined
 }
 

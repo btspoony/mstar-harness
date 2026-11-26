@@ -121,6 +121,7 @@
  * `LoaderEntryView` and T2's `fallbacks-structural.ts`).
  */
 import { isAbsolute, resolve } from 'node:path'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Context } from '@deepseek-ai/cordis'
 import { parseAssignmentFields, readAssignmentSource, resolveHarnessDir } from '@mstar-harness/engine'
 import type { AssignmentSourceResult } from '@mstar-harness/engine'
@@ -1190,41 +1191,59 @@ function unusableDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'har
  * `Assignment file:` pointer BEFORE it decides, and the native start seam
  * must consume THAT document instead of reading the file again — a rewrite
  * between the two seams would otherwise start the child on a version the
- * gate never approved or recorded. Keyed by the calling agent (`spec.parent`
- * IS `exec.agent` on the delegation tool) and the carrier text; an entry is
- * single-use, so only a start that follows an admitted call consumes one.
- * A start that did not traverse pre-execution resolves the source itself.
+ * gate never approved or recorded.
+ *
+ * Bound to the ONE tool call that produced it (`ToolExecution.callId`): the
+ * delegation body runs inside that call's scope (`runWithDispatchCall`), so
+ * overlapping calls from the same parent cannot overwrite each other's
+ * snapshot and a start only ever consumes its own call's document. An
+ * unconsumed snapshot is dropped when its call settles, so a call that
+ * starts nothing (denied downstream, or a team carrier) can never supply a
+ * later start's document — that start resolves the source itself.
  */
-const resolvedCarriers = new WeakMap<object, Map<string, AssignmentSourceResult>>()
+const resolvedCarriers = new Map<string, AssignmentSourceResult>()
 
-/** Bound for unmatched handoffs (an admitted pointer whose tool starts nothing). */
-const RESOLVED_CARRIER_LIMIT = 8
+/** The tool call whose body is currently executing (empty outside a call). */
+const activeCall = new AsyncLocalStorage<string>()
 
 /**
  * Hand one resolved file carrier to the native start seam for the admitted
  * call. Only a resolved POINTER is handed over: an inline document is
  * already the text the child receives.
- * @param caller - the dispatching agent (`exec.agent`, the start's `parent`).
- * @param carrierText - the tool call's carrier text verbatim.
- * @param source - the gate's ONE resolution of that carrier.
+ * @param callId - the delegation tool call's id (`ToolExecution.callId`).
+ * @param source - the gate's ONE resolution of that call's carrier.
  */
-export function handOffResolvedCarrier(caller: unknown, carrierText: string, source: AssignmentSourceResult): void {
-  if (typeof caller !== 'object' || caller === null || !source.ok || source.path === undefined) return
-  const byCarrier = resolvedCarriers.get(caller) ?? new Map<string, AssignmentSourceResult>()
-  resolvedCarriers.set(caller, byCarrier)
-  // shortcut: unmatched entries are bounded, not expired — an admitted
-  // pointer whose tool starts no child is dropped by the next handoff.
-  if (byCarrier.size >= RESOLVED_CARRIER_LIMIT) byCarrier.clear()
-  byCarrier.set(carrierText, source)
+export function handOffResolvedCarrier(callId: string, source: AssignmentSourceResult): void {
+  if (!source.ok || source.path === undefined) return
+  resolvedCarriers.set(callId, source)
 }
 
-/** Consume one handed-off carrier for this start (single use), if any. */
-function takeResolvedCarrier(caller: unknown, carrierText: string): AssignmentSourceResult | undefined {
-  if (typeof caller !== 'object' || caller === null) return undefined
-  const byCarrier = resolvedCarriers.get(caller)
-  const source = byCarrier?.get(carrierText)
-  if (source === undefined) return undefined
-  byCarrier!.delete(carrierText)
+/**
+ * Run one tool call's body inside its own scope, so a `startActivation` the
+ * body performs reads that call's handoff (and nothing else's). Calls without
+ * a handoff skip the scope entirely — the wrapper charges nothing to the
+ * ordinary call.
+ * @param callId - the dispatching tool call's id.
+ * @param body - the call's around-dispatch chain, ending in the tool body.
+ */
+export function runWithDispatchCall<T>(callId: string, body: () => Promise<T>): Promise<T> {
+  if (!resolvedCarriers.has(callId)) return body()
+  return activeCall.run(callId, async () => {
+    try {
+      return await body()
+    } finally {
+      // An unconsumed handoff must not outlive its call.
+      resolvedCarriers.delete(callId)
+    }
+  })
+}
+
+/** Consume this call's handed-off carrier (single use), if any. */
+function takeResolvedCarrier(): AssignmentSourceResult | undefined {
+  const callId = activeCall.getStore()
+  if (callId === undefined) return undefined
+  const source = resolvedCarriers.get(callId)
+  resolvedCarriers.delete(callId)
   return source
 }
 
@@ -1275,7 +1294,7 @@ function wrapSubagentsService(
       // exemption).
       const startDirectory = effectiveStartDirectory(spec, currentDirectoryOf(spec.parent, ctx))
       // compass D14 — ONE assignment-source resolution for this start: the
-      // pre-execution gate's own resolution when the call traversed it
+      // pre-execution gate's own resolution when THIS call traversed it
       // (`handOffResolvedCarrier`), else this seam resolves against the
       // applicable control harness root. A pointer the resolver refuses
       // propagates through the evaluator (never a containment bypass); a
@@ -1283,7 +1302,7 @@ function wrapSubagentsService(
       // folded, exactly as the joined projection the gate reads), so the gate
       // and the preset merge both read the document — never the pointer line.
       const carrierText = promptText(spec)
-      const assignmentSource = takeResolvedCarrier(spec.parent, carrierText)
+      const assignmentSource = takeResolvedCarrier()
         ?? readAssignmentSource(carrierText, { harnessDir: harnessRootFor(startDirectory) })
       carrier = assignmentSource.ok && assignmentSource.text !== carrierText
         ? foldPromptText(spec, assignmentSource.text)

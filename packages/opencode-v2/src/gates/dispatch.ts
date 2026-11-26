@@ -19,11 +19,10 @@ type EngineModule = typeof Engine;
 export type DispatchGateApi = Pick<
  EngineModule,
  | "applyEnforcement"
+ | "assignmentFrontmatterEntries"
  | "composeDispatchGate"
  | "isReadOnlyAssignmentRole"
- | "legacyAssignmentShape"
- | "legacyFormatViolation"
- | "parseAssignmentFields"
+ | "parseAssignmentFieldsFromFrontmatter"
  | "readAssignmentSource"
  | "resolveHarnessDir"
  | "resolveRepoEnforcement"
@@ -35,7 +34,7 @@ export type DispatchGateServices = {
 };
 
 type InputRecord = Record<string, unknown>;
-type GateViolation = { severity: string; code: string; message: string; fix?: string };
+type GateViolation = { severity: string; code: string; message: string; fix?: string; terminal?: boolean };
 
 function record(value: unknown): InputRecord | null {
  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as InputRecord : null;
@@ -101,7 +100,10 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  // prompts keep the silent path.
  const carrier = source.path;
  const fileCarrier = carrier !== undefined;
- const fields = api.parseAssignmentFields(text);
+ // One parse per decision: the target-role read and the composition share
+ // this parse (the composition also owns the D16 refusal).
+ const entries = api.assignmentFrontmatterEntries(text);
+ const fields = api.parseAssignmentFieldsFromFrontmatter(entries);
  // Normalize both sides the way the engine does (strip a leading @,
  // lowercase, take the first whitespace token) so `@QC-Specialist` or
  // `qc-specialist-2 (security lens)` in the prompt still matches the
@@ -115,28 +117,25 @@ function dispatchEffect(event: DispatchBeforeEvent, api: DispatchGateApi, logger
  `input.agent target "${input.agent}" does not match Assignment Execute as "${fields.executeAs}". Align the prompt's declared Execute as role with input.agent, or correct input.agent to the intended target; no subagent was spawned.`,
  ));
  }
- // D16 — an Assignment-shaped document whose fields live in the retired
- // body-label grammar is refused `dispatch.assignment.legacy-format`;
- // the refusal supersedes the schema's absent-fence row for the same
- // unfenced text (one defect, one message).
- const legacy = api.legacyAssignmentShape(text);
  const writable = api.isReadOnlyAssignmentRole(fields.executeAs ?? "") ? false : undefined;
  const caller = typeof event.agent === "string" ? event.agent : "";
  const composed = api.composeDispatchGate(text, {
  caller,
  callerRequired: true,
  writable,
+ entries,
  fileCarrier,
  // Source-relative `worktree_path` resolves from the pointed file's own
- // directory (CLI parity); inline prompts keep the checkout base.
- cwd: carrier === undefined ? undefined : dirname(carrier),
+ // directory (CLI parity); Git discovery stays on the checkout (`cwd`
+ // unset), so an out-of-repo assignment home never changes the inspected
+ // repository.
+ assignmentDir: carrier === undefined ? undefined : dirname(carrier),
  });
- // Clean path: reuse the engine violations as-is; only the legacy refusal
- // allocates, prepending its diagnostic and dropping the superseded row.
- violations = legacy
- ? [api.legacyFormatViolation(), ...composed.violations.filter((violation) => violation.code !== "document.frontmatter.absent")]
- : composed.violations;
+ violations = composed.violations;
  enforcementHard = composed.enforcement.hard;
+ // A TERMINAL violation (source refusal or the retired-format one) has no
+ // verdict enforcement could soften: the subagent is never spawned.
+ terminal = violations.some((violation) => violation.terminal === true);
  }
  const hard = terminal || enforcementHard || (harnessDir !== null && api.resolveRepoEnforcement(harnessDir).hard);
  const hardBlocked = hard && violations.length > 0;

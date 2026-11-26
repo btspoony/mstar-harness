@@ -24,10 +24,11 @@ import {
   detectStoreRuntime,
   eventTargetPaths,
   harnessDocKindOfTarget,
+  assignmentFrontmatterEntries,
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   probeCollaborationAuthority,
   resolveExecutionReadRoute,
   resolveHarnessDir,
@@ -313,7 +314,15 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
  * failure (`error`): Gate 2 skips itself either way (see `gateTaskDispatch`),
  * but the two produce different one-time warnings.
  */
-type DispatchGateFn = (text: string, options?: { caller?: string; callerRequired?: boolean; writable?: boolean; fileCarrier?: boolean; cwd?: string }) => {
+type DispatchGateFn = (text: string, options?: {
+  caller?: string;
+  callerRequired?: boolean;
+  writable?: boolean;
+  fileCarrier?: boolean;
+  cwd?: string;
+  assignmentDir?: string;
+  entries?: ReturnType<typeof assignmentFrontmatterEntries>;
+}) => {
   ok: boolean;
   shaped: boolean;
   enforcement: { hard: boolean };
@@ -327,14 +336,12 @@ type ReadAssignmentSourceFn = (
   | { ok: true; text: string; path?: string }
   | { ok: false; severity: string; code: string; message: string; fix?: string; terminal?: boolean };
 
-/** The engine exports Gate 2 calls: one composition, one resolver and the
- * ONE shared D16 recognizer (hosts keep no local copy of the retired
- * grammar). */
+/** The engine exports Gate 2 calls: one composition and one resolver (D16
+ * recognition and its refusal are the composition's — hosts keep no local
+ * copy of the retired grammar). */
 type DispatchEngineGates = {
   gate: DispatchGateFn;
   readSource: ReadAssignmentSourceFn;
-  legacyShape: (text: string) => boolean;
-  legacyViolation: () => ValidationResult;
 };
 
 type ComposeDispatchGateLoad =
@@ -349,14 +356,11 @@ export function loadComposeDispatchGate(): Promise<ComposeDispatchGateLoad> {
     .then((mod) =>
       typeof mod.composeDispatchGate === "function" &&
       typeof mod.readAssignmentSource === "function" &&
-      typeof mod.legacyAssignmentShape === "function" &&
-      typeof mod.legacyFormatViolation === "function"
+      typeof mod.assignmentFrontmatterEntries === "function"
         ? ({
             status: "ok",
             gate: mod.composeDispatchGate as DispatchGateFn,
             readSource: mod.readAssignmentSource as ReadAssignmentSourceFn,
-            legacyShape: mod.legacyAssignmentShape,
-            legacyViolation: mod.legacyFormatViolation,
           } as const)
         : ({ status: "missing" } as const),
     )
@@ -394,7 +398,7 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
   }
   const message =
     reason === "missing"
-      ? "mstar-gates: installed engine lacks composeDispatchGate or the shared D16 recognizer — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
+      ? "mstar-gates: installed engine lacks composeDispatchGate or the shared Assignment parsers — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
       : `mstar-gates: task dispatch gate (Gate 2) disabled: engine import failed — ${error instanceof Error ? error.message : String(error)}; status gate unaffected`;
   try {
     (
@@ -456,28 +460,27 @@ function validateDispatchEntry(
   // commits to the Assignment contract, so its bytes validate as one even
   // without a recognized core key. Inline prompts keep the silent path.
   const carrier = source.path;
-  const fileCarrier = carrier !== undefined;
-  // D16 — an Assignment-shaped document whose fields live in the retired
-  // body-label grammar is refused `dispatch.assignment.legacy-format`;
-  // the refusal supersedes the schema's absent-fence row for the same
-  // unfenced text (one defect, one message).
-  const legacy = engine.legacyShape(text);
+  // One parse per decision: the role read and the composition share this
+  // parse (the composition also owns the D16 refusal).
+  const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
-  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? "") ? false : undefined;
   const composed = engine.gate(text, {
     writable,
-    fileCarrier,
+    entries,
+    fileCarrier: carrier !== undefined,
     // Source-relative `worktree_path` resolves from the pointed file's own
-    // directory (CLI parity); inline prompts keep the checkout base.
-    cwd: carrier === undefined ? undefined : dirname(carrier),
+    // directory (CLI parity); Git discovery stays on the checkout (`cwd`
+    // unset), so an out-of-repo assignment home never changes the inspected
+    // repository.
+    assignmentDir: carrier === undefined ? undefined : dirname(carrier),
   });
-  // Clean path: reuse the engine violations as-is; only the legacy refusal
-  // allocates, prepending its diagnostic and dropping the superseded row.
   return {
-    violations: legacy
-      ? [engine.legacyViolation(), ...composed.violations.filter((violation) => violation.code !== "document.frontmatter.absent")]
-      : composed.violations,
-    hard: composed.enforcement.hard,
+    violations: composed.violations,
+    // The composition's own enforcement flag, plus TERMINAL violations (a
+    // source refusal or the retired-format one): a terminal verdict blocks
+    // on every compass setting — soft mode never downgrades it.
+    hard: composed.enforcement.hard || composed.violations.some((violation) => violation.terminal === true),
   };
 }
 

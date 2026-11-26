@@ -130,27 +130,37 @@ function scalarEntryValue(entry: FrontmatterEntry): string | undefined {
 }
 
 /**
+ * Read one Assignment field from an ALREADY-parsed entry map — the shared
+ * scalar read both the header-region and the decision-parse consumers use
+ * (one grammar, one interpretation of an empty value).
+ * @param entries - the parsed front matter (`null` = unparseable block).
+ * @param label - the field label or snake_case key to read (e.g. `Plan Path`).
+ */
+export function assignmentEntriesValue(entries: Map<string, FrontmatterEntry> | null, label: string): string | undefined {
+  const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
+  const entry = entries?.get(key)
+  if (entry === undefined) return undefined
+  const scalar = scalarEntryValue(entry)
+  if (scalar === undefined) return undefined
+  const value = stripWrappingCodeSpan(scalar.trim())
+  return value === '' ? undefined : value
+}
+
+/**
  * Parse one Assignment front matter field value by its snake_case key
  * (`parseAssignmentFields` semantics: the fenced front matter block is the
  * only field contract). Returns the trimmed value or undefined when the
  * field is absent/empty.
  *
  * Callers MUST pass the engine `assignmentHeaderRegion(assignmentText)`
- * slice. The legacy display label is still accepted (converted to its
- * snake_case key) so the worktree/lease consumers migrate without a second
- * grammar.
+ * slice, unless they hold the decision's ONE parse and use
+ * {@link assignmentEntriesValue} directly.
  *
  * @param headerRegion - `assignmentHeaderRegion(assignmentText)`, never the raw text.
  * @param label - the field label or snake_case key to read (e.g. `Plan Path`).
  */
 export function assignmentHeaderValue(headerRegion: string, label: string): string | undefined {
-  const key = /^[a-z0-9_]+$/.test(label) ? label : labelToFrontmatterKey(label)
-  const entry = frontmatterEntriesOf(headerRegion)?.get(key)
-  if (entry === undefined) return undefined
-  const scalar = scalarEntryValue(entry)
-  if (scalar === undefined) return undefined
-  const value = stripWrappingCodeSpan(scalar.trim())
-  return value === '' ? undefined : value
+  return assignmentEntriesValue(frontmatterEntriesOf(headerRegion), label)
 }
 
 /** First whitespace-delimited token of a header value (paths in this convention never contain spaces). */
@@ -174,17 +184,27 @@ export function isNaValue(value: string | undefined): value is undefined {
  * resolves a plan id).
  */
 export function planIdOf(headerRegion: string): string | undefined {
-  const planPath = assignmentHeaderValue(headerRegion, 'plan_path')
+  return planIdOfEntries(frontmatterEntriesOf(headerRegion))
+}
+
+/**
+ * {@link planIdOf} over an already-parsed entry map: a caller that hoisted the
+ * decision's ONE parse (the host adapter) reads the plan id without parsing
+ * the document again.
+ * @param entries - the decision's front matter parse (`null` = unparseable).
+ */
+export function planIdOfEntries(entries: Map<string, FrontmatterEntry> | null): string | undefined {
+  const planPath = assignmentEntriesValue(entries, 'plan_path')
   if (!isNaValue(planPath)) {
     const id = basename(firstToken(planPath) ?? '')
     return id.endsWith('.md') ? id.slice(0, -3) : id
   }
-  const sddDir = assignmentHeaderValue(headerRegion, 'sdd_dir')
+  const sddDir = assignmentEntriesValue(entries, 'sdd_dir')
   if (!isNaValue(sddDir)) {
     const id = basename(firstToken(sddDir) ?? '')
     return id === '' ? undefined : id
   }
-  const planId = assignmentHeaderValue(headerRegion, 'plan_id')
+  const planId = assignmentEntriesValue(entries, 'plan_id')
   return isNaValue(planId) ? undefined : planId
 }
 

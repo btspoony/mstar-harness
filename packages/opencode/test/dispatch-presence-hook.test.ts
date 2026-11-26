@@ -1044,11 +1044,15 @@ describe("D14/D16 assignment source (pointer parity and legacy refusal)", () => 
     expect(result!.ok).toBe(false);
     const legacy = result!.violations.find((v) => v.code === "dispatch.assignment.legacy-format");
     expect(legacy).toBeDefined();
+    expect(legacy!.terminal).toBe(true);
     expect(legacy!.fix).toContain("front-matter document");
     expect(legacy!.fix).toContain("Assignment file:");
     // The schema's generic absent-fence row is superseded — one defect, one message.
     expect(result!.violations.some((v) => v.code === "document.frontmatter.absent")).toBe(false);
-    expect(warnings.some((w) => w.includes("dispatch.assignment.legacy-format"))).toBe(true);
+    // No refusal channel on this host (`I-001258`): the terminal refusal is
+    // surfaced through `hardBlocked` (the error log), never a warn-only line.
+    expect(result!.hardBlocked).toBe(true);
+    expect(warnings.some((w) => w.includes("dispatch.assignment.legacy-format"))).toBe(false);
   });
 
   test("a pointer resolving to a legacy body-label file refuses dispatch.assignment.legacy-format too", () => {

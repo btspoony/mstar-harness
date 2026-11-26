@@ -281,7 +281,7 @@ const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
 
 /**
- * The CALLING sessions the anti-recursion caller derivation reads (F7): a ROOT
+ * The CALLING sessions the anti-recursion caller derivation reads: a ROOT
  * session carries no `header.parentSession` (the coordinator seat), an
  * in-process subagent child stamps it at creation. Neither carries a durable
  * id/cwd, so the session-hint derivation stays as cheap as the agent-less
@@ -629,7 +629,7 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
   })
 })
 
-/* ---------------------------------- F7: derived caller ---------------------------------- */
+/* ---------------------------------- derived caller ---------------------------------- */
 
 /* -------------------- boot diagnostic: explicit soft vs a repo hard arm -------------------- */
 
@@ -663,7 +663,7 @@ describe('boot enforcement diagnostic — Config soft suppresses a repo/compass 
   })
 })
 
-describe('F7 — the anti-recursion caller is DERIVED from the calling session, never invented', () => {
+describe('the anti-recursion caller is DERIVED from the calling session, never invented', () => {
   it('dispatchCallerOf: a ROOT session reads the explicit binding verbatim (or the coordinator); a child/unreadable session is EMPTY', () => {
     expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, rootAgent)).toBe('fullstack-dev')
     // An explicitly blank value on a ROOT session stays blank — never replaced
@@ -681,7 +681,7 @@ describe('F7 — the anti-recursion caller is DERIVED from the calling session, 
   })
 
   it('REGRESSION (reported bypass): a CHILD session with no explicit binding dispatching Execute as fullstack-dev is refused with dispatch.anti-recursion.empty-binding', async () => {
-    // Before F7 the schema default fabricated `project-manager` for every
+    // Before this derivation the schema default fabricated `project-manager` for every
     // caller, so a leaf could dispatch a same-role child and pass the
     // anti-recursion precheck. A leaf must not dispatch: the caller is empty.
     const app = booted = await bootApp({ enforcement: 'hard' })
@@ -1483,20 +1483,21 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     expect(violationCodes(advisories[0])).toContain('dispatch.assignment.shape')
   })
 
-  it('a body-label prompt refuses dispatch.assignment.legacy-format with both recoveries', async () => {
+  it('a body-label prompt is vetoed in the default mode with both recoveries (the refusal is terminal)', async () => {
     const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
 
-    expect(decision).toEqual({ kind: 'allow' }) // warn mode: advisory, not a veto
-    expect(advisories).toHaveLength(1)
-    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
-    const legacy = advisories[0]!.result.violations.find((v) => v.code === 'dispatch.assignment.legacy-format')
-    expect(legacy!.fix).toContain('front-matter document')
-    expect(legacy!.fix).toContain('Assignment file:')
+    // No verified declaration exists in the retired format, so no soft setting
+    // downgrades it: the dispatch is vetoed before the advisory channel.
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(decision.kind === 'deny' && decision.reason).toContain('front-matter document')
+    expect(decision.kind === 'deny' && decision.reason).toContain('Assignment file:')
     // The schema's generic absent-fence row is superseded — one defect, one message.
-    expect(violationCodes(advisories[0])).not.toContain('document.frontmatter.absent')
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('document.frontmatter.absent')
+    expect(advisories).toHaveLength(0)
   })
 
   it('the legacy refusal under Enforcement: hard denies the dispatch', async () => {
@@ -1508,15 +1509,16 @@ describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy
     expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
   })
 
-  it('a pointer resolving to a legacy body-label file refuses dispatch.assignment.legacy-format too', async () => {
+  it('a pointer resolving to a legacy body-label file is vetoed with dispatch.assignment.legacy-format too', async () => {
     const app = booted = await bootApp({ dispatchBinding: '' })
     const advisories = captureAdvisories(app.ctx)
     const pointer = pointerInHome(app.harnessDir, LEGACY_BODY_LABEL)
 
-    await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
 
-    expect(advisories).toHaveLength(1)
-    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.legacy-format')
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(advisories).toHaveLength(0)
   })
 })
 
@@ -1540,9 +1542,9 @@ describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
 
   it('a pointer whose document carries enforcement: hard plus a violation denies exactly as the inline form (no Config enforcement)', async () => {
     // No `enforcement` in Config, no compass arm: the ONLY hard source is the
-    // Assignment document's own flag. The inline form denies; before F1 the
-    // pointer resolved hard from the pointer LINE (no front matter) and
-    // allowed in warn mode.
+    // Assignment document's own flag. The inline form denies; reading the
+    // pointer LINE (no front matter) instead of the document used to allow in
+    // warn mode.
     const app = booted = await bootApp({ dispatchBinding: '' })
 
     const inlineDecision = await app.ctx.waterfall('tools/pre-execute', subagentExec(HARD_HEADER_FLAG), defaultAllow)
@@ -1595,7 +1597,7 @@ describe('dispatch gate — worktree L2 isolation shapes', () => {
   }
 
   /** Front-matter parallel-track document: both tracks as flow or block list values. */
-  function parallelTracksDoc(pathA: string, branchA: string, pathB: string, branchB: string, flow: boolean): string {
+  function parallelTracksDoc(pathA: string, branchA: string, pathB: string, branchB: string, flow: boolean, hard = false): string {
     const paths = flow ? `worktree_path: [${pathA}, ${pathB}]` : `worktree_path:\n  - ${pathA}\n  - ${pathB}`
     const branches = flow ? `working_branch: [${branchA}, ${branchB}]` : `working_branch:\n  - ${branchA}\n  - ${branchB}`
     return `---
@@ -1604,7 +1606,7 @@ delegation: forbidden
 task_category: logic
 task_budget: S — parallel tracks
 ${paths}
-${branches}
+${branches}${hard ? '\nenforcement: hard' : ''}
 ---
 
 ## Assignment
@@ -1669,6 +1671,70 @@ Two parallel writable tracks.
     const codes = violationCodes(advisories[0])
     expect(codes.filter((code) => code.startsWith('assignment.field.branch') || code.startsWith('worktree.l2.'))).toEqual([])
     expect(codes).not.toContain('document.frontmatter.invalid')
+  }, 60_000)
+
+  it('a correctly paired two-track declaration under HARD enforcement is admitted with no veto', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/hard-a', 'feature/hard-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      // A ROOT session supplies the caller identity: a hard dispatch must clear
+      // the anti-recursion binding too, not only the track checks.
+      subagentExec(parallelTracksDoc(tracks.get('feature/hard-a')!, 'feature/hard-a', tracks.get('feature/hard-b')!, 'feature/hard-b', true, true), rootAgent),
+      defaultAllow,
+    )
+
+    // Genuinely hard (the document's own flag vetoes ANY violation), so an
+    // allow proves the pair is clean rather than soft mode hiding a refusal.
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  }, 60_000)
+
+  it('a pointed control-write assignment resolves worktree_path from the POINTED file, while Git discovery stays on the checkout', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const branch = execFileSync('git', ['-C', app.root, 'branch', '--show-current'], { encoding: 'utf8' }).trim()
+    // `<app.root>/.mstar/assignments/../..` IS the control checkout: only the
+    // pointed file's own directory makes that relative path resolve onto it.
+    const doc = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — control write
+write_domain: control
+worktree_path: ../..
+working_branch: ${branch}
+control_write_paths:
+  - .mstar/status.json
+---
+
+## Assignment
+
+Update control state.
+`
+    const pointed = join(assignmentsDir, 'control-relative.md')
+    writeFileSync(pointed, doc)
+    const advisories = captureAdvisories(app.ctx)
+    const priorCwd = process.cwd()
+    try {
+      // The control checkout is the checkout the gate inspects: run from it,
+      // exactly as a session in that repo does.
+      process.chdir(app.root)
+      const viaPointer = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${pointed}`), defaultAllow)
+      expect(viaPointer).toEqual({ kind: 'allow' })
+      expect(violationCodes(advisories[advisories.length - 1])).not.toContain('dispatch.control-write.worktree-not-control')
+      advisories.length = 0
+
+      // Negative control: the SAME document inline has no pointed directory,
+      // so the relative path resolves against the checkout and misses it.
+      await app.ctx.waterfall('tools/pre-execute', subagentExec(doc), defaultAllow)
+      expect(violationCodes(advisories[advisories.length - 1])).toContain('dispatch.control-write.worktree-not-control')
+    } finally {
+      process.chdir(priorCwd)
+    }
   }, 60_000)
 
   it('duplicate worktree_path keys refuse as document.frontmatter.invalid instead of entering isolation', async () => {

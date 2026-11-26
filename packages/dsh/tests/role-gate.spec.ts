@@ -111,9 +111,9 @@ function writeLiveRoleGate(app: BootResult, mode: 'off' | 'warn' | 'hard'): void
 }
 
 /** The delegation tool call the `tools/pre-execute` listener gates. */
-function subagentCall(prompt: string, agent?: unknown): ToolExecution {
+function subagentCall(prompt: string, agent?: unknown, callId = 'call-1'): ToolExecution {
   return {
-    callId: 'call-1' as ToolExecution['callId'],
+    callId: callId as ToolExecution['callId'],
     name: 'subagent',
     arguments: { description: 'probe', prompt },
     ...(agent === undefined ? {} : { agent: agent as ToolExecution['agent'] }),
@@ -124,6 +124,20 @@ function subagentCall(prompt: string, agent?: unknown): ToolExecution {
 
 /** The registry's bare default decision (the waterfall's terminal `next()`). */
 const allowNext = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
+
+/** A successful dispatch outcome (the around-dispatch waterfall's terminal value). */
+const okResult = { isError: false as const, value: null, content: [] }
+
+/**
+ * Run one tool call's body inside the `tools/execute` scope the plugin
+ * registers — the seam that lets a start consume THAT call's carrier handoff.
+ */
+async function runInCall(app: BootResult, exec: ToolExecution, body: () => Promise<unknown>): Promise<void> {
+  await app.ctx.waterfall('tools/execute', exec, async () => {
+    await body()
+    return okResult
+  })
+}
 
 /** One activation spec for the fake provider (the non-consumed fields are additive). */
 function specFor(request: RecordedRequest, provider: string = PROVIDER): SubagentActivationSpecView {
@@ -726,23 +740,78 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const file = join(assignmentsDir, 'one-read.md')
     writeFileSync(file, CANONICAL_PROMPT)
     const pointer = `Assignment file: ${file}`
-    // The SAME agent object: the delegation tool hands `exec.agent` to the
-    // start seam as `parent`, which is the carrier handoff's key.
     const caller = parentAgent(workspace)
+    const exec = subagentCall(pointer, caller, 'call-one-read')
 
-    const decision = await app.ctx.waterfall('tools/pre-execute', subagentCall(pointer, caller), allowNext)
+    const decision = await app.ctx.waterfall('tools/pre-execute', exec, allowNext)
     expect(decision.kind).toBe('allow')
 
     // Controlled boundary, no timer: the file is rewritten AFTER the gate's
     // decision and BEFORE the start seam runs. A second read would start the
     // child on the rewritten document.
     writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
-    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller }))
+    await runInCall(app, exec, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
 
     expect(provider.starts).toHaveLength(1)
     const sent = provider.starts[0]!.request as RecordedRequest
     expect(promptTextOf(sent)).toBe(CANONICAL_PROMPT)
     expect(sent.agentPreset).toBe(PRESET_ID)
+  })
+
+  it('(ac) overlapping admitted calls from one parent each consume their OWN resolved document', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'overlap.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+    const rewritten = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
+
+    // Two calls on the SAME pointer text and parent: the second admission
+    // resolves the rewritten document. A handoff keyed by parent + text would
+    // let the second overwrite the first's snapshot.
+    const first = subagentCall(pointer, caller, 'call-overlap-a')
+    const second = subagentCall(pointer, caller, 'call-overlap-b')
+    expect((await app.ctx.waterfall('tools/pre-execute', first, allowNext)).kind).toBe('allow')
+    writeFileSync(file, rewritten)
+    expect((await app.ctx.waterfall('tools/pre-execute', second, allowNext)).kind).toBe('allow')
+
+    await runInCall(app, first, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
+    await runInCall(app, second, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller })))
+
+    expect(provider.starts).toHaveLength(2)
+    const startedFirst = provider.starts[0]!.request as RecordedRequest
+    const startedSecond = provider.starts[1]!.request as RecordedRequest
+    expect(promptTextOf(startedFirst)).toBe(CANONICAL_PROMPT)
+    expect(startedFirst.agentPreset).toBe(PRESET_ID)
+    expect(promptTextOf(startedSecond)).toBe(rewritten)
+  })
+
+  it('(ad) an admitted call that starts nothing leaves no snapshot for a later start', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'orphan.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+    const rewritten = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
+
+    const exec = subagentCall(pointer, caller, 'call-orphan')
+    expect((await app.ctx.waterfall('tools/pre-execute', exec, allowNext)).kind).toBe('allow')
+    // The call runs without an activation (a downstream denial or a carrier
+    // that starts no child): its handoff must die with the call.
+    await runInCall(app, exec, async () => {})
+    writeFileSync(file, rewritten)
+
+    // A later direct start resolves the source ITSELF — never the dropped
+    // snapshot of an earlier call.
+    await startActivationViaNativeChannel(app, specFor({ ...textPrompt(pointer), cwd: workspace, parent: caller }))
+
+    expect(provider.starts).toHaveLength(1)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent)).toBe(rewritten)
   })
 })
 

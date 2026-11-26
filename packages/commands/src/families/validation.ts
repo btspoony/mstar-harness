@@ -62,6 +62,7 @@ import {
   validateQcReport,
   validateRoleMapping,
   validateSchemaYaml,
+  type AssignmentSourceResult,
   type GateResult,
   type ActiveLifecycleBranch,
   type QcAlignmentAssignment,
@@ -315,6 +316,20 @@ function frontMatterScalar(text: string, key: string): string {
     return "";
   }
 }
+/**
+ * why: every validation verb that reads a named assignment file goes through
+ * the ONE source resolver (compass D14) instead of a bare `readFileSync`. The
+ * CLI's input is already a file, so its content is the resolver's inline input
+ * and a pointer line inside it follows the same containment rules every
+ * dispatch gate uses — a pointer-form assignment answers the same question on
+ * the CLI as it does at a gate. A refusal is terminal for the verb: validating
+ * a text that is not the named assignment would report fields on the wrong
+ * body.
+ */
+function resolveAssignmentFile(file: string, context: InvocationContext): AssignmentSourceResult {
+  const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
+  return readAssignmentSource(readFileSync(file, "utf8"), { harnessDir });
+}
 /** why: the count line sums these markers, so the wording lives here once. */
 const UNCLASSIFIED_MARKER_PREFIX = "unclassified comment @";
 /** why: the two arms are not the same question - `undefined` means no ratchet
@@ -400,8 +415,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // containment rules every gate shares. The resolver's refusal is
         // terminal for this command: validating a text that is not the
         // assignment source would report field violations on the wrong body.
-        const harnessDir = context.controlRoot ?? resolveProcessHarnessDir(context.cwd);
-        const source = readAssignmentSource(readFileSync(file, "utf8"), { harnessDir });
+        const source = resolveAssignmentFile(file, context);
         if (!source.ok) {
           return rejected(
             id,
@@ -588,17 +602,27 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // Each assignment is a FILE the caller named: `launchDirectoryPaths`
         // already refused every relative one on an unnamed workspace. The
         // alignment fields are front matter keys — plan_id, review_range and
-        // diff_basis — never body labels.
-        const assignments: QcAlignmentAssignment[] = files.map((named) => {
+        // diff_basis — never body labels, and the file resolves through the
+        // shared source resolver (a pointer-form assignment aligns on the
+        // document it names).
+        const assignments: QcAlignmentAssignment[] = [];
+        for (const named of files) {
           const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
-          const text = readFileSync(file, "utf8");
-          return {
-            planId: frontMatterScalar(text, "plan_id"),
-            reviewRange: frontMatterScalar(text, "review_range"),
-            diffBasis: frontMatterScalar(text, "diff_basis"),
-          };
-        });
+          const source = resolveAssignmentFile(file, context);
+          if (!source.ok) {
+            return rejected(
+              id,
+              { ok: false, violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }] },
+              source.code,
+            );
+          }
+          assignments.push({
+            planId: frontMatterScalar(source.text, "plan_id"),
+            reviewRange: frontMatterScalar(source.text, "review_range"),
+            diffBasis: frontMatterScalar(source.text, "diff_basis"),
+          });
+        }
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
           { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "review_range" }, { key: "diffBasis", label: "diff_basis" },
         ];
@@ -615,8 +639,18 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // shared rule already required to be absolute on an unnamed workspace.
         const file = absolute(context.cwd, named);
         if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
-        const text = readFileSync(file, "utf8");
-        const mode = input.mode ?? parseAssignmentFields(text).executionMode ?? "";
+        // why: the seat count is read from the caller's assignment through the
+        // ONE source resolver — `dispatch validate` and this verb must answer
+        // the same for one assignment file, including its pointer form.
+        const source = resolveAssignmentFile(file, context);
+        if (!source.ok) {
+          return rejected(
+            id,
+            { ok: false, violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix }] },
+            source.code,
+          );
+        }
+        const mode = input.mode ?? parseAssignmentFields(source.text).executionMode ?? "";
         const reviewers = input.reviewers ?? [];
         const result = executionModeToN(mode, { seats: reviewers });
         if (!result.ok) return rejected(id, result, "review.seats.invalid");

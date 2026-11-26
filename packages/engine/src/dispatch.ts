@@ -369,6 +369,18 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<s
   return fields;
 }
 
+/**
+ * One non-throwing YAML parse of the document's front matter — the value a
+ * host hands back to {@link composeDispatchGate} as `entries` so a decision
+ * parses the same resolved document ONCE (host role/plan reads reuse it too,
+ * via {@link parseAssignmentFieldsFromFrontmatter}). `null` means the block
+ * does not parse; the schema layer owns that refusal (it re-reads to report
+ * the line-numbered cause), so `null` is not a reusable parse.
+ */
+export function assignmentFrontmatterEntries(text: string): Map<string, FrontmatterEntry> | null {
+  return safeEntries(assignmentFrontmatter(text).yaml);
+}
+
 /** Where the `Enforcement` flag was declared (roadmap §8.5 C4/D2). */
 export type EnforcementSource = "assignment" | "compass" | "mstarc" | "none";
 
@@ -556,6 +568,15 @@ function branchFormsFromFields(fields: AssignmentFields): AssignmentBranchForms 
 export function parseAssignmentBranchForms(assignmentText: string): AssignmentBranchForms {
   return branchFormsFromFields(parseAssignmentFields(assignmentText));
 }
+
+/**
+ * The branch forms of ALREADY-parsed fields — {@link parseAssignmentBranchForms}
+ * without a second parse, for a caller that hoisted the decision's one parse.
+ * @param fields - fields from `parseAssignmentFields` / `parseAssignmentFieldsFromFrontmatter`.
+ */
+export function assignmentBranchFormsOf(fields: AssignmentFields): AssignmentBranchForms {
+  return branchFormsFromFields(fields);
+}
 /**
  * Parse the Assignment's `Branch policy: direct on <branch> — <reason>`
  * exception branch. Returns the branch ONLY for the well-formed direct-on
@@ -650,13 +671,31 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
       `unknown Write domain: ${JSON.stringify(fields.writeDomain)}`, 'set "write_domain: control" or "write_domain: work" in the Assignment front matter'));
   }
   if (fields.writeDomain === "control") {
-    if (describeAbsence(fields.worktreePath) !== undefined && !(fields.worktreePaths !== undefined && fields.worktreePaths.some((path) => path.trim() !== ""))) {
-      violations.push(violation("high", "assignment.field.control-write-missing-worktree",
-        "control-domain assignment requires Worktree path", 'add "worktree_path: <control checkout path>" to the Assignment front matter'));
-    }
-    if (describeAbsence(fields.workingBranch) !== undefined && !(fields.workingBranches !== undefined && fields.workingBranches.some((branch) => branch.trim() !== "")) && describeAbsence(fields.branchPolicy) !== undefined) {
-      violations.push(violation("high", "assignment.field.control-write-missing-branch",
-        "control-domain assignment requires a branch form", `add exactly one of the front matter keys working_branch / branch_policy: ${BRANCH_FORMS_HINT}`));
+    // A control write inspects ONE checkout: with a parallel `worktree_path` /
+    // `working_branch` LIST there is no single declared checkout for
+    // `validateControlWriteAssignment` to compare against the Git-derived
+    // control root, and every relative target would go unverified. Refuse the
+    // list instead of counting it as presence — `terminal`, because the
+    // checkout equality and target ownership cannot be proven from this
+    // document at all (soft enforcement must not admit the write).
+    const parallelWorktrees = fields.worktreePaths?.some((path) => path.trim() !== "") === true;
+    const parallelBranches = fields.workingBranches?.some((branch) => branch.trim() !== "") === true;
+    if (parallelWorktrees || parallelBranches) {
+      violations.push({
+        ...violation("high", "assignment.field.control-write-parallel-tracks",
+          "a control-domain Assignment writes ONE checkout \u2014 a parallel working_branch / worktree_path list leaves the control checkout and every relative write target unverifiable",
+          'declare scalar "worktree_path: <control checkout>" and "working_branch: <its branch>", or dispatch each parallel track as its own work-domain Assignment'),
+        terminal: true,
+      });
+    } else {
+      if (describeAbsence(fields.worktreePath) !== undefined) {
+        violations.push(violation("high", "assignment.field.control-write-missing-worktree",
+          "control-domain assignment requires Worktree path", 'add "worktree_path: <control checkout path>" to the Assignment front matter'));
+      }
+      if (describeAbsence(fields.workingBranch) !== undefined && describeAbsence(fields.branchPolicy) !== undefined) {
+        violations.push(violation("high", "assignment.field.control-write-missing-branch",
+          "control-domain assignment requires a branch form", `add exactly one of the front matter keys working_branch / branch_policy: ${BRANCH_FORMS_HINT}`));
+      }
     }
     if (!fields.controlWritePaths?.length) {
       violations.push(violation("high", "assignment.field.control-write-paths-missing",
@@ -1040,14 +1079,22 @@ export function legacyAssignmentShape(text: string): boolean {
  * must target a REWRITTEN front-matter assignment, not the same invalid
  * bytes. Hosts and the CLI call this builder instead of formatting their
  * own copies.
+ *
+ * `terminal`: a retired-format document declares no front matter, so there
+ * is no declaration a gate can verify — the refusal is a veto on every
+ * host that CAN refuse, independent of the soft/hard setting (advisory
+ * only where the host has no refusal channel at all, `I-001258`).
  */
 export function legacyFormatViolation(): ValidationResult {
-  return violation(
-    "high",
-    "dispatch.assignment.legacy-format",
-    "the Assignment carries its fields as `**Label**` body lines \u2014 the retired format; front matter is the only field contract",
-    "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home pointing at the rewritten document",
-  );
+  return {
+    ...violation(
+      "high",
+      "dispatch.assignment.legacy-format",
+      "the Assignment carries its fields as `**Label**` body lines \u2014 the retired format; front matter is the only field contract",
+      "rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home pointing at the rewritten document",
+    ),
+    terminal: true,
+  };
 }
 
 /**
@@ -1089,6 +1136,22 @@ export type ComposeDispatchGateOptions = {
    * genuinely unshaped inline prompts.
    */
   fileCarrier?: boolean;
+  /**
+   * The caller's OWN parse of this document ({@link assignmentFrontmatterEntries}),
+   * reused by shape validation, field parsing, the branch-form read and the
+   * enforcement read — a host decision parses its resolved document once.
+   * `null` (unparseable block) is not a reuse: the schema layer reports its
+   * own line-numbered refusal. Omitted → the composition parses.
+   */
+  entries?: Map<string, FrontmatterEntry> | null;
+  /**
+   * Source-relative base for a `worktree_path` declared by a POINTED file
+   * (that file's own directory, CLI parity, compass D14). Deliberately
+   * separate from {@link cwd}: `cwd` still anchors Git control discovery, so
+   * an assignment home outside the repository never changes which checkout
+   * the gate inspects.
+   */
+  assignmentDir?: string;
 };
 
 /**
@@ -1096,7 +1159,10 @@ export type ComposeDispatchGateOptions = {
  * and the header-region enforcement flag.
  */
 export type ComposeDispatchGateResult = GateResult & {
- /** Assignment front matter was recognized (fenced block carrying a core key). */
+ /**
+  * Assignment shape was recognized: front matter carrying a core key, or the
+  * retired body-label grammar (which the composition then refuses).
+  */
   shaped: boolean;
  /** Enforcement parsed from the Assignment front matter only (never the body). */
   enforcement: EnforcementFlag;
@@ -1141,17 +1207,27 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
   };
   try {
     const fileCarrier = opts.fileCarrier === true;
-    const shaped = isAssignmentShaped(text);
+    // D16 — the retired body-label grammar is refused HERE, once, for every
+    // host: the document declares no front matter, so the refusal is
+    // terminal (no verified declaration exists) and soft enforcement never
+    // downgrades it. Its `document.frontmatter.absent` sibling below
+    // describes the same defect, so that row is superseded.
+    const legacy = legacyAssignmentShape(text);
+    // Shape: Assignment front matter carrying a core key, OR the retired
+    // body-label grammar — the latter must reach its refusal, never pass as
+    // an ordinary prompt.
+    const shaped = legacy || isAssignmentShaped(text);
     if (!shaped && !fileCarrier) return silent;
 
-    const violations: ValidationResult[] = [];
+    const violations: ValidationResult[] = legacy ? [legacyFormatViolation()] : [];
     const writable = opts.writable !== false;
 
-    // One parse per decision: the document front matter is parsed ONCE here
-    // and the entries are reused by schema validation, field parsing, the
-    // enforcement read and every gate below — never reparsed per leg.
+    // One parse per decision: the document front matter is parsed ONCE — by
+    // the caller when it hands its own parse in (`entries`), else here — and
+    // the entries are reused by schema validation, field parsing, the
+    // enforcement read and every gate below, never reparsed per leg.
     const { yaml } = assignmentFrontmatter(text);
-    const entries = safeEntries(yaml);
+    const entries = opts.entries !== undefined ? opts.entries : safeEntries(yaml);
     const fields = parseAssignmentFieldsFromFrontmatter(entries);
     const forms = branchFormsFromFields(fields);
 
@@ -1163,7 +1239,11 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     // task body can neither satisfy nor disable a gate. `fileCarrier` marks
     // a resolved `Assignment file:` carrier: its content must validate as an
     // Assignment even when no core key is recognized.
-    violations.push(...validateAssignmentFields(text, { writable, fileCarrier, entries }).violations);
+    violations.push(
+      ...validateAssignmentFields(text, { writable, fileCarrier, entries }).violations.filter(
+        (schemaViolation) => !(legacy && schemaViolation.code === "document.frontmatter.absent"),
+      ),
+    );
 
  // (3) Anti-recursion NEVER red line — CALLER identity vs the dispatch's
  // `Execute as` (issue #156: the spawn-target binding omp/opencode/cursor
@@ -1180,7 +1260,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
  // Assignment's own forms, else $MSTAR_WORKING_BRANCH (env fallback
  // shared by all adapters / ).
     if (writable && fields.writeDomain === "control") {
-      violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd, fields, forms }));
+      violations.push(...validateControlWriteAssignment(text, { cwd: opts.cwd, assignmentDir: opts.assignmentDir, fields, forms }));
     } else if (writable) {
       const branch =
         forms.createForm?.name ?? forms.workingBranch ?? forms.directOn?.branch ?? process.env.MSTAR_WORKING_BRANCH;

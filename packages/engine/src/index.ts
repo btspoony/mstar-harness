@@ -374,6 +374,8 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  assignmentBranchFormsOf,
+  assignmentFrontmatterEntries,
   classifyReviewOrAuditRound,
   composeDispatchGate,
   executionModeToN,
