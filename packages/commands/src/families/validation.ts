@@ -733,12 +733,13 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           // files against the acceptance schema. Name the file instead.
           throw new SddScriptError(`usage: lint <report.md> --type acceptance — the acceptance type validates one PM acceptance report and does not walk a directory; name the report file`, 2);
         }
-        // why: the recovery must rerun the SAME check - a type the filename
-        // inference does not select (acceptance among them) is only rerun when
-        // the flag that selected it survives the refusal.
-        const rerun = forced === undefined
-          ? "Resolve each reported lint violation, then rerun mstar lint <target>."
-          : `Resolve each reported lint violation, then rerun mstar lint <target> --type ${forced}.`;
+        // why: the recovery must rerun the SAME check, and `acceptance` is the
+        // one type whose filename inference never reproduces it, so that arm
+        // names its flag verbatim. Both arms stay literal: the refusal prover
+        // evaluates recovery text statically and cannot read `--type ${forced}`.
+        const rerun = forced === "acceptance"
+          ? "Resolve each reported lint violation, then rerun mstar lint <target> --type acceptance."
+          : "Resolve each reported lint violation, then rerun mstar lint <target>, repeating the same --type value if you supplied one.";
         if (forced === "specs" || forced === "adr") {
           // Document layers: a directory is the tree check, a file is one document.
           const results = [{ file: abs, violations: lintDocLayer(forced, abs, isDir), markers: [] as string[] }];

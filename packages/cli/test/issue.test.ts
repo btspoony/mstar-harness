@@ -262,7 +262,10 @@ describe("mstar issue CLI bundle", () => {
     const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
   });
-  test("obsolete closes a removed subject end to end: show, list, export, reopen", async () => {
+  // The budget covers ~11 bundle spawns; the default 5s bound kills the case
+  // on a loaded CI shard (reproduced at 5.08s under CPU contention) — same
+  // reason the reopen case above declares 30s.
+  test("obsolete closes a removed subject end to end: show, list, export, reopen", { timeout: 30_000 }, async () => {
     const { root, harness } = await makeHarness();
     const captureFile = join(root, "obsolete-capture.json");
     writeJson(captureFile, capturePayload({ occurrenceKey: "obsolete-run", rootCauseKey: "obsolete-cause" }));

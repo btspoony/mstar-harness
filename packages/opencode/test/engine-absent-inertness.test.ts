@@ -34,37 +34,29 @@ import { join } from "node:path";
 const ENGINE_STUB = `const unavailable = () => {
   throw new Error("engine unavailable");
 };
+export class SymlinkResolutionError extends Error {}
 export const applyEnforcement = unavailable;
 export const assertStoreRuntimeSupported = unavailable;
-export const caseFoldedDocKind = unavailable;
+export const assignmentFrontmatterEntries = unavailable;
 export const caseFoldedRegisterRoot = unavailable;
 export const composeDispatchGate = unavailable;
-export const decodeExecutionSessionRef = unavailable;
 export const detectStoreRuntime = unavailable;
-export const probeCollaborationAuthority = unavailable;
-export const executionContextFor = unavailable;
 export const extractFrontmatterAndBody = unavailable;
 export const harnessDocKindOfTarget = unavailable;
 export const isReadOnlyAssignmentRole = unavailable;
 export const isStoreAuthorityTarget = unavailable;
 export const landedPathOf = unavailable;
-export const parseAssignmentFields = unavailable;
+export const parseAssignmentFieldsFromFrontmatter = unavailable;
 export const parseSimpleFrontmatter = unavailable;
-export const queryDashboard = unavailable;
+export const probeCollaborationAuthority = unavailable;
+export const readAssignmentSource = unavailable;
 export const readJson = unavailable;
 export const resolveExecutionReadRoute = unavailable;
 export const resolveHarnessDir = unavailable;
-export const resolveProjectDir = unavailable;
 export const resolveRepoEnforcement = unavailable;
-export const resolveWorkflowDir = unavailable;
-export const resumeExecutionSession = unavailable;
-export const serializeExecutionValue = unavailable;
-export const validateExecutionIdentity = unavailable;
 export const validateProjectRegister = unavailable;
 export const validateStatus = unavailable;
 export const validateWorkflowSnapshot = unavailable;
-export const withStoreRead = unavailable;
-export class SymlinkResolutionError extends Error {}
 `;
 
 /** Probe: load the real plugin source, drive the hook, report no-throw + abort logs. */
