@@ -63,13 +63,14 @@ import {
   parseEnforcementFlag,
   parseEnforcementFlagFromFrontmatter,
   legacyAssignmentShape,
+  assignmentFrontmatterParse,
   legacyFormatViolation,
   validateAssignmentFields,
   validateControlWriteAssignment,
   readAssignmentSource,
 } from "../src/dispatch.js";
 import { validateDocumentFrontmatter } from "../src/document-schema.js";
-import { parseDocumentFrontmatterEntries } from "../src/document-frontmatter.js";
+import { parseDocumentFrontmatterEntries, DocumentFrontmatterError } from "../src/document-frontmatter.js";
 import { resolveAssignmentDir } from "../src/path.js";
 
 /** snake_case keys the fixture builder emits; arrays become YAML block lists. */
@@ -1294,6 +1295,37 @@ delegation: forbidden
 `;
     const gate = validateAssignmentFields(text);
     expect(gate.violations.some((v) => v.code === "document.frontmatter.invalid")).toBe(true);
+  });
+
+  test("assignmentFrontmatterParse keeps the structured refusal and the composition reports it without reparsing", () => {
+    const malformed = `---
+execute_as: fullstack-dev
+delegation: forbidden
+  broken: [unclosed
+---
+
+## Assignment
+`;
+    const parsed = assignmentFrontmatterParse(malformed);
+    expect(parsed.entries).toBe(null);
+    expect(parsed.parseError).toBeInstanceOf(DocumentFrontmatterError);
+    expect(parsed.parseError!.line).toBe(4);
+    expect(parsed.parseError!.fix).toContain("move the line out to its own key");
+
+    // The composition reports the CARRIED diagnostic byte-identically to the
+    // schema layer's own reparse of the same block: the document is parsed
+    // ONCE per decision either way, and a host that keeps the diagnostic
+    // (dsh dispatch gates) skips the schema layer's extra read entirely.
+    const carried = composeDispatchGate(malformed, { entries: null, parseError: parsed.parseError });
+    const reparsed = composeDispatchGate(malformed);
+    const invalidRows = (gate: { violations: { code: string; message: string; fix?: string }[] }) =>
+      gate.violations.filter((v) => v.code === "document.frontmatter.invalid");
+    expect(carried.ok).toBe(false);
+    expect(reparsed.ok).toBe(false);
+    expect(invalidRows(carried).map((v) => v.message)).toEqual(invalidRows(reparsed).map((v) => v.message));
+    expect(invalidRows(carried).map((v) => v.fix)).toEqual(invalidRows(reparsed).map((v) => v.fix));
+    expect(invalidRows(carried)[0]!.message).toContain("assignment:4:");
+    expect(invalidRows(carried)[0]!.fix).toBe(parsed.parseError!.fix);
   });
 
   test("composeDispatchGate and validateControlWriteAssignment reach the same verdicts on a front matter Assignment", () => {

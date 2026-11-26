@@ -12,7 +12,7 @@
  * No barrel: importers name this module by explicit relative path.
  */
 import { type Context } from '@deepseek-ai/cordis'
-import { applyEnforcement, assignmentFrontmatterEntries, parseAssignmentFieldsFromFrontmatter, readAssignmentSource } from '@mstar-harness/engine'
+import { applyEnforcement, assignmentFrontmatterParse, parseAssignmentFieldsFromFrontmatter, readAssignmentSource } from '@mstar-harness/engine'
 import type { GateResult } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord, formatViolation } from './_shared.ts'
@@ -82,9 +82,11 @@ async function gateAssignmentText(
   // ONE parse per dispatch, made HERE so every stage of this decision reads the
   // same entries: the enforcement policy, the adapter's plan id / worktree /
   // lease / composition legs and the advisory role. A malformed block parses
-  // to `null` once; the schema layer performs the only other read, and only to
-  // report the line-numbered refusal.
-  const entries = assignmentFrontmatterEntries(text)
+  // ONCE to `entries: null` and its structured refusal (`parseError`) is
+  // carried into the schema layer, which reports the exact line-numbered
+  // cause — no stage ever re-parses the rejected block.
+  const parse = assignmentFrontmatterParse(text)
+  const entries = parse.entries
   // The adapter owns the shared dispatch-gate core; the exec context is
   // passed so the lease gate (session-id bound — see leaseGateViolations)
   // joins the SAME verdict as the field/branch/anti-recursion checks.
@@ -92,7 +94,7 @@ async function gateAssignmentText(
   // gate decision share the single resolution instead of each re-reading
   // the compass.
   const hard = resolveDispatchHard(harnessDir, config, text, entries)
-  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source, entries)
+  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source, entries, parse.parseError)
   const verdict = applyEnforcement(result, { hard })
   // A terminal source refusal is a VETO, decided BEFORE enforcement, the
   // advisory role and the preset channel: the resolver proved there is no

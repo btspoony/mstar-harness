@@ -18,7 +18,7 @@ import {
   isReadOnlyAssignmentRole,
   parseAssignmentFieldsFromFrontmatter,
 } from '@mstar-harness/engine'
-import type { AssignmentSourceResult, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, DocumentFrontmatterError, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING, sessionCwdOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
@@ -127,7 +127,10 @@ export function dispatchCallerOf(config: Config, agent: unknown): string {
  * @param decision - the caller's ALREADY-parsed view of that document (the
  *   adapter needs the plan id for workflow selection before it gets here) —
  *   handed on so the L1/L2 checks, the read-only-role read and the
- *   composition all consume one parse. Omitted → this core parses once.
+ *   composition all consume one parse. `entries` `null` is a FAILED parse,
+ *   reused as the caller's verdict input (`parseError` carries its
+ *   diagnostic into the composition, so the schema layer never re-parses);
+ *   `undefined` (no parse handed in) → this core parses once.
  */
 export async function dispatchGateCore(
   config: Config,
@@ -137,7 +140,7 @@ export async function dispatchGateCore(
   callerAgent: unknown,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
-  decision?: { entries: Map<string, FrontmatterEntry> | null; planId: string | undefined },
+  decision?: { entries?: Map<string, FrontmatterEntry> | null; planId: string | undefined; parseError?: DocumentFrontmatterError | null },
 ): Promise<{ violations: ValidationResult[]; writable: boolean | undefined; text: string }> {
   // compass D14/D16 — the ONE resolution per dispatch: the caller hands its
   // already-resolved `AssignmentSourceResult`; this core NEVER reads the
@@ -157,9 +160,12 @@ export async function dispatchGateCore(
   // One parse per decision: the adapter's parse when it handed one in, else
   // this core's — and it feeds the L1/L2 worktree checks, the read-only-role
   // read and every composition leg, so no leg reparses the resolved
-  // document. D16 recognition belongs to that one composition (one owner for
-  // the whole host family).
-  const entries = decision?.entries ?? assignmentFrontmatterEntries(text)
+  // document. A FAILED parse (`entries: null`) is REUSED as the caller's
+  // verdict input — its structured diagnostic rides into the composition
+  // (`parseError`), which hands it to the schema layer for the line-numbered
+  // refusal without a second read of the rejected block. D16 recognition
+  // belongs to that one composition (one owner for the whole host family).
+  const entries = decision?.entries !== undefined ? decision.entries : assignmentFrontmatterEntries(text)
   const violations: ValidationResult[] = [
     ...worktreeL2Violations(entries),
     ...await worktreeL1Violations(harnessDir, entries, decision?.planId ?? planIdOfEntries(entries), hint, activeSource),
@@ -185,6 +191,9 @@ export async function dispatchGateCore(
       callerRequired: true,
       writable,
       entries,
+      // The caller's kept parse refusal (failed parse): the schema layer
+      // reports the carried line-numbered diagnostic instead of re-parsing.
+      parseError: decision?.parseError,
       // Pointer provenance: a resolved `Assignment file:` carrier commits to
       // the Assignment contract, so empty or unrelated file content is ONE
       // invalid Assignment — never a silent non-Assignment pass.

@@ -1820,6 +1820,14 @@ Two parallel writable tracks.
     expect(decision).toEqual({ kind: 'allow' })
     expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
     expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
+    // The refusal is the listener parse's ONE structured diagnostic, carried
+    // through the adapter/core/composition into the schema layer — it still
+    // names the document line and the recovery, never a second read of the
+    // rejected block.
+    const invalid = advisories[0]!.result.violations.find((v) => v.code === 'document.frontmatter.invalid')!
+    expect(invalid.message).toContain('assignment:7:')
+    expect(invalid.message).toContain('duplicate key')
+    expect(invalid.fix).toContain('remove this repeated')
   }, 60_000)
 
   it('an unterminated fence declares nothing at the worktree gate — schema refusal only, no track pairing', async () => {

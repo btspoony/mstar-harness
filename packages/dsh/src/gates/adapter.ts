@@ -20,13 +20,14 @@ import { join } from 'node:path'
 import { Service, type Context } from '@deepseek-ai/cordis'
 import {
   applyEnforcement,
-  assignmentFrontmatterEntries,
+  assignmentFrontmatterParse,
   readAssignmentSource,
   validateIntegrationMergeLease,
 } from '@mstar-harness/engine'
 import type {
   AssignmentSourceResult,
   AssignmentFields,
+  DocumentFrontmatterError,
   FrontmatterEntry,
   GateResult,
   HostAdapter,
@@ -276,8 +277,13 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * worktree checks, the read-only-role read and the composition;
    * `null` (unparseable block) is a reuse too — the schema layer reports the
    * refusal. Omitted → parsed here.
+   * @param preParseError - the structured refusal behind `preEntries: null`
+   * ({@link assignmentFrontmatterParse}), carried into the composition so the
+   * schema layer reports the line-numbered cause WITHOUT re-parsing the
+   * rejected block. Omitted with a caller-supplied `null` → the schema layer
+   * re-parses, as a host that kept no diagnostic always has.
    */
-  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult, preEntries?: Map<string, FrontmatterEntry> | null): Promise<GateResult> {
+  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult, preEntries?: Map<string, FrontmatterEntry> | null, preParseError?: DocumentFrontmatterError | null): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
@@ -305,14 +311,16 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // resolves enforcement), else this method's — the plan id needs it before
     // the core runs. The same entries then feed the plan id, the L1/L2
     // worktree checks, the read-only-role read and every composition leg
-    // downstream.
-    const entries = preEntries === undefined ? assignmentFrontmatterEntries(text) : preEntries
+    // downstream; a failed parse keeps ITS diagnostic (`parseError`) instead
+    // of a second read of the rejected block.
+    const parse = preEntries === undefined ? assignmentFrontmatterParse(text) : { entries: preEntries, parseError: preParseError ?? null }
+    const entries = parse.entries
     const planId = assignmentSource.ok ? planIdOfEntries(entries) : undefined
     const selectionHint = planId === undefined ? hint : { ...hint, planId }
     const activeSource = harnessDir !== null && assignmentSource.ok && isAssignmentShaped(text)
       ? await readExecutionWorkflowSource({ harnessDir }, selectionHint)
       : undefined
-    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, assignmentSource, exec?.agent, hint, activeSource, { entries, planId })
+    const { violations, writable } = await dispatchGateCore(this.config, harnessDir, text, assignmentSource, exec?.agent, hint, activeSource, { entries, planId, parseError: parse.parseError })
     if (exec !== undefined) {
       violations.push(...await leaseGateViolations(harnessDir, exec, writable, assignmentSource, { entries, planId }, selectionHint, activeSource))
     }
@@ -454,9 +462,9 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // read per dispatch, and the same parse feeds both.
     const hookSource = readAssignmentSource(prompt, { harnessDir })
     const hookText = hookSource.ok ? hookSource.text : prompt
-    const hookEntries = assignmentFrontmatterEntries(hookText)
-    const hard = resolveDispatchHard(harnessDir, this.config, hookText, hookEntries)
-    const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource, hookEntries)
+    const hookParse = assignmentFrontmatterParse(hookText)
+    const hard = resolveDispatchHard(harnessDir, this.config, hookText, hookParse.entries)
+    const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource, hookParse.entries, hookParse.parseError)
     const applied = applyEnforcement(gate, { hard })
     // A terminal source refusal is a veto, not an advisory: no enforcement
     // setting can soften the absence of a verified document.

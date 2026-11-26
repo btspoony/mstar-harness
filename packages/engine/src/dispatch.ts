@@ -51,7 +51,7 @@ import { probePathOwnership } from "./path-check.js";
 import { assertControlClean, hasHarnessRoot, readMainWorktree } from "./worktree.js";
 import { applyEnforcement } from "./core.js";
 import type { GateResult, ValidationResult, Severity } from "./core.js";
-import { extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterEntry, type FrontmatterProfile } from "./document-frontmatter.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries, type FrontmatterEntry, type FrontmatterProfile } from "./document-frontmatter.js";
 import { validateDocumentFrontmatterExtraction } from "./document-schema.js";
 
 /**
@@ -132,6 +132,16 @@ export type ValidateAssignmentFieldsOptions = {
    * unchanged when omitted.
    */
   entries?: Map<string, FrontmatterEntry> | null;
+  /**
+   * The structured refusal of the caller's parse ({@link DocumentFrontmatterError}
+   * from {@link assignmentFrontmatterParse}), carried with `entries: null`
+   * so a malformed block is parsed ONCE per decision: the schema layer
+   * reports the exact line-numbered cause from this diagnostic instead of
+   * re-parsing the rejected block. `null` (a non-structured failure) falls
+   * back to the schema layer's own parse. Omitted → the schema layer
+   * re-parses a rejected block, as before.
+   */
+  parseError?: DocumentFrontmatterError | null;
 };
 
 /** Options for {@link assertDefaultBranchProtected}. */
@@ -370,15 +380,43 @@ export function parseAssignmentFieldsFromFrontmatter(frontmatter: string | Map<s
 }
 
 /**
+ * The ONE non-throwing front matter parse of an Assignment document, with its
+ * refusal kept: `entries` is the value a host hands back to
+ * {@link composeDispatchGate} as `entries` so a decision parses the same
+ * resolved document ONCE (host role/plan reads reuse it too, via
+ * {@link parseAssignmentFieldsFromFrontmatter}); `parseError` is the
+ * structured {@link DocumentFrontmatterError} behind `entries: null` — the
+ * host threads BOTH into the composition (`entries` + `parseError`), so the
+ * schema layer reports the exact line-numbered cause without re-parsing the
+ * block. A successful parse carries `parseError: null`; a non-structured
+ * failure (defensive) carries `null` and the schema layer falls back to its
+ * own parse.
+ */
+export type AssignmentFrontmatterParse = {
+  entries: Map<string, FrontmatterEntry> | null;
+  parseError: DocumentFrontmatterError | null;
+};
+
+export function assignmentFrontmatterParse(text: string): AssignmentFrontmatterParse {
+  const { yaml } = assignmentFrontmatter(text);
+  try {
+    return { entries: parseDocumentFrontmatterEntries(yaml, "assignment"), parseError: null };
+  } catch (error) {
+    return { entries: null, parseError: error instanceof DocumentFrontmatterError ? error : null };
+  }
+}
+
+/**
  * One non-throwing YAML parse of the document's front matter — the value a
  * host hands back to {@link composeDispatchGate} as `entries` so a decision
  * parses the same resolved document ONCE (host role/plan reads reuse it too,
  * via {@link parseAssignmentFieldsFromFrontmatter}). `null` means the block
- * does not parse; the schema layer owns that refusal (it re-reads to report
- * the line-numbered cause), so `null` is not a reusable parse.
+ * does not parse; hosts that keep the refusal hand it over as
+ * `parseError` (see {@link assignmentFrontmatterParse}), and a host without
+ * one leaves the schema layer owning the line-numbered re-read.
  */
 export function assignmentFrontmatterEntries(text: string): Map<string, FrontmatterEntry> | null {
-  return safeEntries(assignmentFrontmatter(text).yaml);
+  return assignmentFrontmatterParse(text).entries;
 }
 
 /** Where the `Enforcement` flag was declared (roadmap §8.5 C4/D2). */
@@ -657,7 +695,7 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
   // YAML (entries `null`) re-runs the schema parse so the refusal reports.
   const extraction = extractFrontmatterAndBody(assignmentText);
   violations.push(
-    ...validateDocumentFrontmatterExtraction("assignment", extraction, "assignment", opts.entries === undefined ? {} : { entries: opts.entries }).violations.filter(
+    ...validateDocumentFrontmatterExtraction("assignment", extraction, "assignment", opts.entries === undefined && opts.parseError === undefined ? {} : { entries: opts.entries, parseError: opts.parseError }).violations.filter(
       (schemaViolation) => schemaViolation.code !== "document.frontmatter.missing" && !schemaViolation.message.includes("invalid branch declaration"),
     ),
   );
@@ -1140,10 +1178,23 @@ export type ComposeDispatchGateOptions = {
    * The caller's OWN parse of this document ({@link assignmentFrontmatterEntries}),
    * reused by shape validation, field parsing, the branch-form read and the
    * enforcement read — a host decision parses its resolved document once.
-   * `null` (unparseable block) is not a reuse: the schema layer reports its
-   * own line-numbered refusal. Omitted → the composition parses.
+   * `null` (unparseable block) is not a reuse by itself: with
+   * {@link ComposeDispatchGateOptions.parseError} absent the schema layer
+   * reports its own line-numbered refusal; with the parse's structured
+   * diagnostic handed over the schema layer reuses it and does not re-parse.
+   * Omitted → the composition parses.
    */
   entries?: Map<string, FrontmatterEntry> | null;
+  /**
+   * The structured refusal of the CALLER's parse ({@link DocumentFrontmatterError}
+   * from {@link assignmentFrontmatterParse}), carried with `entries: null` so
+   * a malformed block is parsed ONCE per decision: the schema layer reports
+   * the exact line-numbered cause from this diagnostic instead of re-parsing
+   * the rejected block. `null` (a non-structured failure) falls back to the
+   * schema layer's own parse. Omitted (hosts that do not thread it) → the
+   * schema layer re-parses a rejected block, as before.
+   */
+  parseError?: DocumentFrontmatterError | null;
   /**
    * Source-relative base for a `worktree_path` declared by a POINTED file
    * (that file's own directory, CLI parity, compass D14). Deliberately
@@ -1240,7 +1291,7 @@ export function composeDispatchGate(text: string, opts: ComposeDispatchGateOptio
     // a resolved `Assignment file:` carrier: its content must validate as an
     // Assignment even when no core key is recognized.
     violations.push(
-      ...validateAssignmentFields(text, { writable, fileCarrier, entries }).violations.filter(
+      ...validateAssignmentFields(text, { writable, fileCarrier, entries, parseError: opts.parseError }).violations.filter(
         (schemaViolation) => !(legacy && schemaViolation.code === "document.frontmatter.absent"),
       ),
     );

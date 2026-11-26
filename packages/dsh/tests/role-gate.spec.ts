@@ -386,6 +386,20 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     expect(sent.prompt).toBe(request.prompt)
   })
 
+  it('(j2) an explicit `agentPreset` does not bypass the terminal D16 refusal (recognized retired Assignment)', async () => {
+    // The preset exemption is caller intent for the ROLE preset — it never
+    // hands a recognized retired body-label Assignment to a provider: the
+    // terminal D16 check sits AHEAD of the preset exemption, so the same
+    // request without a preset ((p20)) and with one are refused identically.
+    const { app, provider, workspace } = await bootWithProvider()
+    const error = await startAndCatch(app, specFor({ ...textPrompt(LEGACY_BODY_LABEL_PROMPT), cwd: workspace, agentPreset: 'caller-preset' }))
+
+    expect(error.message).toContain('legacy-format')
+    expect(error.message).toContain('execute_as')
+    expect(error.message).toContain('terminal')
+    expect(provider.starts).toHaveLength(0)
+  })
+
   it('(k) an unknown provider does not produce a role-gate error (the service fails its own way)', async () => {
     const { app, workspace } = await bootWithProvider()
     const error = await startAndCatch(app, specFor({ ...textPrompt(NO_DECLARATION_PROMPT), cwd: workspace }, 'ghost-provider'))
@@ -1014,6 +1028,16 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
       expect(decision.message).toContain('legacy-format')
       expect(decision.message).toContain('execute_as')
       expect(decision.message).toContain('terminal')
+      // An explicit `agentPreset` bypasses nothing: the terminal D16 check
+      // sits ahead of the preset exemption, so every mode refuses the same
+      // retired document with a caller-supplied preset selection too.
+      const presetDecision = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, {
+        mode,
+        request: { ...gateInput(LEGACY_BODY_LABEL_PROMPT).request, agentPreset: 'caller-preset' },
+      }))
+      expect(presetDecision.kind, `${mode} + agentPreset`).toBe('refuse')
+      if (presetDecision.kind !== 'refuse') continue
+      expect(presetDecision.message).toBe(decision.message)
     }
   })
   it('(p12) the warn advisory does not tell a warn-mode operator to set warn', () => {

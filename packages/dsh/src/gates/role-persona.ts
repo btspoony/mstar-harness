@@ -691,23 +691,26 @@ function declarationScope(unfenced: string): string {
  * Evaluate the dispatch-role gate for one start — PURE (the harness-project
  * test is pre-resolved by the caller), first match wins:
  *
- * 1. `agentPreset` already set → pass (caller intent wins, silent).
- * 2. the front matter already carries a canonical `execute_as` value → pass
- *    (idempotent, silent — the binding seam reads exactly that key).
- * 3. not a harness project → pass (a non-harness project never pays the gate).
- * 4. unknown provider → pass (the service fails loud its own way).
- * 5. a prompt shaped like an Assignment that carries its fields as retired
+ * 1. a prompt shaped like an Assignment that carries its fields as retired
  *    `**Execute as**:` body labels → the D16 legacy-format refusal (the
  *    dispatch gate's `dispatch.assignment.legacy-format` cause, named here
  *    because the role gate reaches the prompt first); TERMINAL, like the
- *    shared dispatch violation — no `roleGate` mode softens it.
+ *    shared dispatch violation — no `roleGate` mode softens it, and NO
+ *    exemption (an explicit `agentPreset`, non-harness project, unknown
+ *    provider) bypasses it: a recognized retired Assignment reaches no
+ *    provider through the native start.
+ * 2. `agentPreset` already set → pass (caller intent wins, silent).
+ * 3. the front matter already carries a canonical `execute_as` value → pass
+ *    (idempotent, silent — the binding seam reads exactly that key).
+ * 4. not a harness project → pass (a non-harness project never pays the gate).
+ * 5. unknown provider → pass (the service fails loud its own way).
  * 6. exactly one distinct repair candidate (front matter key, body-label
  *    field, or declared token, all declaration-scope-scoped) → repair the
  *    prompt, then PROVE the repair: the rewritten text is parsed with the
  *    binding seam's own reader (`parseAssignmentFields` — front matter is
- *    the only field contract) and must resolve to that role. Ambiguous,
- *    none, unusable, or an unprovable repair → the configured mode (`off`
- *    silent, `warn` one advisory, `hard` refusal).
+ *    the only field contract) and must resolve to that role.
+ * 7. ambiguous, none, unusable, or an unprovable repair → the configured
+ *    mode (`off` silent, `warn` one advisory, `hard` refusal).
  *
  * @param input - the request, mode, pre-resolved harness/provider facts and
  *   the declared role-id set.
@@ -721,10 +724,20 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // soften it — the start has nothing verified to run.
   const source = input.assignmentSource
   if (source !== undefined && !source.ok) return { kind: 'refuse', message: sourceRefusalMessage(input.cwd, source) }
-  // (1) An explicit selection is caller intent — never gated.
-  if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
   const text = promptText(request)
-  // (2) A canonical front matter `execute_as` is already in place — no
+  // (1) D16 — a prompt shaped like an Assignment whose fields live in the
+  // retired body-label grammar is refused on EVERY gate, TERMINALLY, and the
+  // refusal sits AHEAD of every exemption: an explicit `agentPreset` is
+  // caller intent for the ROLE preset, not permission to hand a recognized
+  // retired Assignment to a provider (the retired document declares no front
+  // matter, so no `roleGate` mode and no preset selection may soften a start
+  // the dispatch tools already veto).
+  if (legacyAssignmentShape(text)) {
+    return { kind: 'refuse', message: legacyDeclarationMessage(input.cwd) }
+  }
+  // (2) An explicit selection is caller intent — never gated.
+  if (request.agentPreset !== undefined) return { kind: 'pass', reason: 'agent-preset' }
+  // (3) A canonical front matter `execute_as` is already in place — no
   // rewrite (byte-identical). This reads the WHOLE raw text, which is exactly
   // the input the binding seam downstream (`withRolePreset`) parses. A
   // wrapped/odd scalar is not canonical: the strict parser keeps it raw, so
@@ -733,21 +746,12 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   if (isCanonicalExecuteAs(parseAssignmentFields(text).executeAs ?? '')) {
     return { kind: 'pass', reason: 'canonical' }
   }
-  // (3) Non-harness projects are exempt (the caller resolved the child's
+  // (4) Non-harness projects are exempt (the caller resolved the child's
   // EFFECTIVE start directory, so an omitted/relative cwd is decided by the
   // directory the child inherits, never treated as non-harness blindly).
   if (!input.harnessProject) return { kind: 'pass', reason: 'non-harness' }
-  // (4) The runtime's own `NO_PROVIDER` failure must not be shadowed.
+  // (5) The runtime's own `NO_PROVIDER` failure must not be shadowed.
   if (!input.providerKnown) return { kind: 'pass', reason: 'provider-unknown' }
-  // (5) D16 — a prompt shaped like an Assignment whose fields live in the
-  // retired body-label grammar is refused on EVERY gate; the role gate is
-  // the first gate the subagent-start channel reaches, so it names the same
-  // cause the dispatch gate would. TERMINAL like the shared dispatch
-  // violation: the retired document declares no front matter, so no
-  // `roleGate` mode may soften a start the dispatch tools already veto.
-  if (legacyAssignmentShape(text)) {
-    return { kind: 'refuse', message: legacyDeclarationMessage(input.cwd) }
-  }
   // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
   // example is never a declaration, and the scan and the rewrite cannot
   // disagree about where fences are.

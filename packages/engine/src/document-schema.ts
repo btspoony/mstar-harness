@@ -230,7 +230,7 @@ export function validateDocumentFrontmatter(kind: DocumentKind, content: string,
  * exactly once (`extractFrontmatterAndBody`) and shares that split with the
  * validation instead of re-walking the document.
  */
-export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extraction: FrontmatterAndBody, source: string, opts: { entries?: Map<string, FrontmatterEntry> | null } = {}): GateResult {
+export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extraction: FrontmatterAndBody, source: string, opts: { entries?: Map<string, FrontmatterEntry> | null; parseError?: DocumentFrontmatterError | null } = {}): GateResult {
   const { frontmatter, fenced } = extraction;
   const schema = documentSchema(kind);
   const violations: ValidationResult[] = [];
@@ -243,13 +243,17 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
   }
 
   // One parse per decision: entries parsed by the caller are reused as-is;
-  // `null` means the caller's parse already refused, so fall through to the
-  // schema's own parse — it refuses again with the line-numbered diagnostic.
+  // the caller's structured parse refusal is carried in (`parseError`) and
+  // reported WITHOUT re-parsing the rejected block; only a caller that kept
+  // neither (`entries` omitted, `parseError` null) makes the schema parse its
+  // own line-numbered refusal.
   let entries: Map<string, FrontmatterEntry>;
   try {
-    // `??` deliberately treats caller-supplied `null` (invalid YAML) like an
-    // absent reuse: the schema's own parse then refuses with the precise
-    // line-numbered diagnostic — one parse per decision, no skipped refusal.
+    if (opts.parseError !== undefined && opts.parseError !== null) throw opts.parseError;
+    // `??` deliberately treats caller-supplied `null` (invalid YAML, no
+    // diagnostic handed over) like an absent reuse: the schema's own parse
+    // then refuses with the precise line-numbered diagnostic — one parse
+    // per decision, no skipped refusal.
     entries = opts.entries ?? parseDocumentFrontmatterEntries(frontmatter, source);
   } catch (error) {
     if (error instanceof DocumentFrontmatterError) {
