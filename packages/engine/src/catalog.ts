@@ -53,7 +53,15 @@ import { StoreError, type StoreContext, type StoreDb, storeDbPath } from "./stor
 
 export type CatalogEntityKind = "project" | "iteration" | "plan" | "document";
 export type CatalogRootKind = "repository" | "harness" | "plans" | "iterations" | "specs" | "knowledge" | "projects";
-export type CatalogDocumentKind = "spec" | "knowledge" | "guide" | "compass" | "plan" | "roadmap" | "review" | "other";
+export type CatalogDocumentKind = "spec" | "knowledge" | "guide" | "compass" | "plan" | "review" | "other";
+
+/**
+ * note: The ONE document-kind vocabulary, shared by the local catalog verbs and the remote contract:
+ * a wire shape that admits a value this list omits would let a retired kind re-enter through a
+ * surface that never learned it was retired.
+ */
+export const DOCUMENT_KIND_NAMES = ["spec", "knowledge", "guide", "compass", "plan", "review", "other"] as const;
+
 export type CatalogLifecycle = "active" | "archived" | "superseded";
 export type CatalogRelation =
   | "belongs-to"
@@ -84,7 +92,6 @@ const DOCUMENT_KINDS: Record<CatalogDocumentKind, true> = {
   guide: true,
   compass: true,
   plan: true,
-  roadmap: true,
   review: true,
   other: true,
 };
@@ -492,7 +499,7 @@ type EntityRecord = {
 function normalizeDocumentKind(kind: CatalogEntityKind, documentKind: unknown): CatalogDocumentKind | null {
   if (kind === "document") {
     if (documentKind === undefined || documentKind === null) {
-      throw invalid("a document entity requires documentKind (spec|knowledge|guide|compass|plan|roadmap|review|other)");
+      throw invalid("a document entity requires documentKind (spec|knowledge|guide|compass|plan|review|other)");
     }
     return requireDocumentKind(documentKind);
   }
@@ -1390,7 +1397,7 @@ function assertLocalCatalogRead(context: StoreContext): void {
     "remote.unavailable",
     "The catalog's registered rows carry a checkout-relative location that a remote observation does not have, so this " +
       "read cannot answer them. Read the portable catalog identity through the dashboard views (projects, iterations, " +
-      "roadmap) or the remote issue/roadmap reads; nothing was read.",
+      "milestones) or the remote issue reads; nothing was read.",
   );
 }
 

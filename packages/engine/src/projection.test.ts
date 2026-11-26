@@ -384,13 +384,13 @@ async function seedStandard(f: Fixture): Promise<void> {
     f.context,
     {
       kind: "document",
-      id: "doc-roadmap",
-      title: "Roadmap",
+      id: "doc-guide",
+      title: "Guide",
       rootKind: "projects",
-      relativePath: "proj-a/roadmap.md",
-      documentKind: "roadmap",
+      relativePath: "proj-a/guide.md",
+      documentKind: "guide",
     },
-    op("cat-roadmap"),
+    op("cat-guide"),
   );
   await linkCatalogEntities(
     f.context,
@@ -399,11 +399,11 @@ async function seedStandard(f: Fixture): Promise<void> {
   );
   await linkCatalogEntities(
     f.context,
-    { from: { kind: "project", id: "proj-a" }, relation: "documents", to: { kind: "document", id: "doc-roadmap" } },
-    op("link-roadmap"),
+    { from: { kind: "project", id: "proj-a" }, relation: "documents", to: { kind: "document", id: "doc-guide" } },
+    op("link-guide"),
   );
   write(join(f.iterationsDir, "iter-a/delivery-compass.md"), COMPASS);
-  write(join(f.projectsDir, "proj-a/roadmap.md"), roadmap());
+  write(join(f.projectsDir, "proj-a/guide.md"), roadmap());
 }
 
 /**

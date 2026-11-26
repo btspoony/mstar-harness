@@ -145,7 +145,7 @@ async function mixedFixture(name: string): Promise<Fixture> {
   write(agents, "specs/notes/README.md", md("# Ordinary README inside a walked root"));
   write(agents, "specs/INSTALL.md", md("# Install notes"));
   write(harness, "plans/20260918-alpha.md", md("# Alpha plan"));
-  write(harness, "projects/proj-a/roadmap.md", md("---", "project_id: proj-a", "title: Project Alpha", "status: active", "---", "", "# Project Alpha"));
+  mkdirSync(join(harness, "projects", "proj-a"), { recursive: true });
   return fixture;
 }
 
@@ -211,7 +211,8 @@ describe("catalog discovery", () => {
     expect(plan.version).toBe(CATALOG_IMPORT_PLAN_VERSION);
     expect(entityAt(plan, "iter-alpha")?.kind).toBe("iteration");
     expect(entityAt(plan, "proj-a")?.kind).toBe("project");
-    expect(entityAt(plan, "proj-a")?.title).toBe("Project Alpha");
+    // A project package is its directory: no marker file, so the title falls back to the id.
+    expect(entityAt(plan, "proj-a")?.title).toBe("proj-a");
     expect(entityAt(plan, "20260918-alpha.md")?.kind).toBe("plan");
     expect(entityAt(plan, "20260918-alpha.md")?.title).toBe("Alpha plan");
     expect(entityAt(plan, "contract.md")?.documentKind).toBe("spec");
@@ -454,7 +455,7 @@ describe("fresh-clone tracked bodies", () => {
 describe("catalog export and portability", () => {
   test("export/import preserves ids, relations and provenance without creating an execution session", async () => {
     const source = await freshWorkspace("export-source-");
-    write(source.harness, "projects/proj-a/roadmap.md", md("# Project Alpha"));
+    mkdirSync(join(source.harness, "projects", "proj-a"), { recursive: true });
     write(join(source.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     const reviewed: CatalogImportInput[] = [
       { rootKind: "projects", relativePath: "proj-a", mapping: { kind: "project", id: "proj-a", title: "Project Alpha" } },
@@ -485,7 +486,7 @@ describe("catalog export and portability", () => {
 
     // A second clone holding the same tracked bodies.
     const clone = await freshWorkspace("export-clone-");
-    write(clone.harness, "projects/proj-a/roadmap.md", md("# Project Alpha"));
+    mkdirSync(join(clone.harness, "projects", "proj-a"), { recursive: true });
     write(join(clone.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     const imported = await planCatalogImport(clone.context, catalogExportToInputs(payload));
     expect(imported.conflicts).toEqual([]);

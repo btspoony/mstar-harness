@@ -70,7 +70,7 @@ const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
     { file: "packages/cli/test/remote-host-roundtrip.test.ts", title: "a competing provider effect is surfaced as a conflict, never overwritten" },
   ],
   "5. All read models and gates": [
-    { file: "packages/engine/src/store-read.test.ts", title: "project, milestone, roadmap and flow reads use admitted snapshot evidence" },
+    { file: "packages/engine/src/store-read.test.ts", title: "project, milestone and flow reads use admitted snapshot evidence" },
     { file: "packages/engine/src/store-read.test.ts", title: "a current access check over an old traversal never serves a count, rollup or findings gate" },
     { file: "packages/cli/test/store-read.test.ts", title: "each source observation is stamped at its own snapshot, not at request time" },
     { file: "packages/cli/test/dashboard-server.test.ts", title: "a missing collaboration authority is a 503, never a 404 or an empty list" },

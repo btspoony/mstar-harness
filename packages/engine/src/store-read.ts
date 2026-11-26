@@ -2,7 +2,7 @@
  * store-read.ts -- the issue-store READ boundary (state-projection-contract §6).
  *
  * One request = one read handle (`withStoreRead`): an optional lazy projection
- * refresh for the views that need projected execution/roadmap rows, then every
+ * refresh for the views that need projected execution rows, then every
  * view query inside ONE read transaction over committed store data. The view
  * readers return DTOs only -- no source JSON is read or parsed here, and no
  * filesystem probe happens in a view (source I/O is isolated in the projection
@@ -67,15 +67,12 @@ import {
   remotePlanFindings,
   remoteProjectList,
   remoteResidualCounts,
-  remoteRoadmap,
   requireRemoteProjects,
   type RemoteCatalogRow,
   type RemoteReadView,
 } from "./collaboration-remote-read.js";
 import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
-import type { RoadmapContent } from "./roadmap-content.js";
-import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
@@ -171,14 +168,13 @@ export type DashboardView =
   | "iterations"
   | "iteration-detail"
   | "projects"
-  | "roadmap"
   | "issue-flow"
   | "overview";
 
 /**
  * Request filters. Only the fields a view needs are read: `id` for the three
  * detail views, `issue` for the issue list, `projectId` for the project-scoped
- * views (required by `roadmap`), and `limit`/`offset` for the three lists.
+ * views, and `limit`/`offset` for the three lists.
  */
 export type DashboardFilters = {
   id?: string;
@@ -357,19 +353,6 @@ export type ProjectListItem = {
 
 export type ProjectListDTO = { items: ProjectListItem[]; total: number };
 
-export type RoadmapDTO = {
-  projectId: string;
-  catalog: CatalogIdentityDTO;
-  authority: { state: "present"; revision: number; contentHash: string } | { state: "absent" };
-  content: RoadmapContent | null;
-  /**
-   * The project's authoritative milestone grouping and issue membership
-   * (§4). Required, and independent of the stored Markdown: a project with
-   * milestones but no content answers with `content: null` and this data.
-   */
-  milestones: MilestoneRead;
-};
-
 export type IssueFlowBucket = {
   /** UTC calendar day, `YYYY-MM-DD`. */
   date: string;
@@ -446,7 +429,6 @@ export type DashboardViewData = {
   iterations: IterationListDTO;
   "iteration-detail": IterationDTO | null;
   projects: ProjectListDTO;
-  roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
   overview: OverviewDTO;
 };
@@ -460,7 +442,6 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
   projects: { needsProjection: false },
-  roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
@@ -873,8 +854,8 @@ function issuePageKey(filter: IssueFilter): string {
 
 /**
  * why: Which sources each view reads and whether it requires them (contract
- * §Read/Completeness): issue/catalog/milestone/roadmap views are pure
- * collaboration; workflow/iteration views require execution and disclose an
+ * §Read/Completeness): issue/catalog/milestone views are pure collaboration;
+ * workflow/iteration views require execution and disclose an
  * optional catalog association; the overview needs both of its combined counts.
  * A project filter is catalog data, so it makes the optional collaboration
  * source required -- an unfiltered list may still render without it.
@@ -910,9 +891,6 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       return { collaboration: { scope: { kind: "query", key: "projects" }, required: true }, execution: "not-requested" };
     case "issue-flow":
       return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
-    case "roadmap":
-      if (projectId === null) usage("the roadmap view requires filters.projectId");
-      return { collaboration: { scope: { kind: "project", key: projectId }, required: true, projectIds: [projectId] }, execution: "not-requested" };
     case "workflows": {
       const { limit, offset } = page();
       return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null, projectIds: narrowed(projectId) }, execution: "required" };
@@ -1111,8 +1089,6 @@ function dashboardView(view: DashboardView, sources: StoreReadSources, filters: 
       return readIterationList(sources, filters);
     case "iteration-detail":
       return readIterationDetail(sources, filters);
-    case "roadmap":
-      return readRoadmap(sources, filters);
     case "projects":
       return readProjectList(sources);
     case "issue-flow":
@@ -1658,7 +1634,7 @@ function remoteIdentity(row: RemoteCatalogRow): CatalogIdentityDTO {
     description: row.description,
     rootKind: null,
     relativePath: null,
-    documentKind: row.documentKind as CatalogDocumentKind | null,
+    documentKind: row.documentKind,
     lifecycle: row.lifecycle,
     revision: row.revision,
     registeredAt: null,
@@ -2472,39 +2448,4 @@ function readLatestIteration(sources: StoreReadSources, projectId: string): Iter
     }
   }
   return latest;
-}
-
-// ---------------------------------------------------------------------------
-// Roadmap view
-// ---------------------------------------------------------------------------
-
-function readRoadmap(sources: StoreReadSources, filters: DashboardFilters): RoadmapDTO | null {
-  const projectId = text(filters.projectId);
-  if (projectId === null) usage("the roadmap view requires filters.projectId");
-  if (sources.remote !== null) return remoteRoadmap(sources.remote, projectId);
-  const db = collaborationSource(sources);
-  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId));
-  if (catalog === undefined) return null;
-
-  let authority: RoadmapRead;
-  try {
-    authority = readRoadmapAuthorityOn(db, projectId);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "roadmap.project-not-found") return null;
-    throw error;
-  }
-  // The milestone grouping is authoritative store data read on the SAME
-  // handle/snapshot as the content authority: it never depends on the stored
-  // Markdown, so an existing project with absent content still answers it.
-  const milestones = readMilestonesOn(db, projectId);
-  if (authority.roadmap === null) {
-    return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
-  }
-  return {
-    projectId,
-    catalog,
-    authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: authority.content,
-    milestones,
-  };
 }

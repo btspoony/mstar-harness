@@ -191,8 +191,6 @@ insert into catalog_links(from_kind, from_id, relation, to_kind, to_id)
 values ('plan', 'plan-one', 'documents', 'document', 'doc-one');
 insert into project_milestones(milestone_id, project_id, name, ordinal, created_at, updated_at)
 values ('m-one', 'p-one', 'Milestone One', 0, '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
-insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at)
-values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, milestone_id)
 values ('I-000001', 'p-one', 'First finding', 'bug', 'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', 'identity-one', 'm-one');
 insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)
@@ -359,7 +357,6 @@ async function stagedRows(location: CollaborationLocation): Promise<StagedRows> 
       "relations",
       "project_bindings",
       "project_milestones",
-      "project_roadmaps",
     ]) {
       rows[table] = db.prepare(`select * from ${table}`).all() as Array<Record<string, unknown>>;
     }
@@ -469,6 +466,56 @@ describe("collaboration cutover", () => {
       expect(counted.n).toBe(2);
     } finally {
       sourceHandle.close();
+    }
+  });
+
+  test("a source roadmap document is copied as other, and the fence drops the roadmap table", async () => {
+    const repo = makeRepo("https://github.com/acme/cutover-roadmap-source.git");
+    const source = await seedSource(repo);
+    const location = locationAt(repo);
+    // note: A combined source still carries both the retired marker row and the roadmap table that
+    // immutable execution-store migration 6 created.
+    const seeded = await openStore(source.context, "write");
+    try {
+      seeded.db.exec(`
+insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, revision, registered_at, updated_at)
+values ('document', 'doc-roadmap', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', 5, '2026-09-02T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at)
+values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
+`);
+    } finally {
+      seeded.close();
+    }
+
+    const manifest = await planCollaborationCutover(source.context);
+    expect(manifest.blockers).toEqual([]);
+    expect((await applyCollaborationCutover(source.context, manifest)).phase).toBe("verified");
+    // invariant: The retired kind becomes `other` on the combined-to-lane path with its identity,
+    // revision and registration intact - the lane's CHECK no longer admits the value.
+    const staged = await stagedRows(location);
+    // invariant: Only the retired KIND changes: identity, revision and the registration instant are
+    // the source row's own values, so the registration is preserved rather than re-created.
+    expect(staged.rows.catalog_entities!.find((row) => row.id === "doc-roadmap")).toMatchObject({
+      document_kind: "other",
+      kind: "document",
+      relative_path: "p-one/roadmap.md",
+      revision: 5,
+      registered_at: "2026-09-02T00:00:00.000Z",
+      updated_at: "2026-11-21T00:00:00.000Z",
+    });
+    expect(staged.foreignKeyViolations).toEqual([]);
+
+    // invariant: Activation fences the source and drops the retired table with it, child first.
+    expect((await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase).toBe("active");
+    const fenced = await openStore(source.context, "read");
+    try {
+      const tables = (fenced.db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name: string }>).map(
+        (row) => row.name,
+      );
+      expect(tables).not.toContain("project_roadmaps");
+      expect(tables).not.toContain("catalog_entities");
+    } finally {
+      fenced.close();
     }
   });
 

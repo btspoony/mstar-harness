@@ -1,6 +1,8 @@
 # ADR: The complete Markdown document is the roadmap authority
 
 Status: implemented — `project_roadmaps` stores one exact document per project; projections are disposable and never authoritative.
+Archived: 2026-11-27 — superseded by 2026-11-26-retire-project-roadmap.md
+Superseded-by: 2026-11-26-retire-project-roadmap.md
 
 Date: 2026-10-02
 

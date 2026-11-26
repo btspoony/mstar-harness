@@ -21,7 +21,7 @@
  *
  * Identity sources (what a proposal's id may come from, §2):
  * - iteration / project package directory names (a directory holding the
- *   canonical `delivery-compass.md` / `roadmap.md` marker) and the canonical
+ *   canonical `delivery-compass.md` marker) and the canonical
  *   `{PLANS_DIR}/<plan-id>.md` plan-file convention: the harness's own layout
  *   identity, read from the filesystem and not from a maintained index.
  * - an explicit id cell in a legacy index row (backticked first cell).
@@ -49,7 +49,7 @@ import {
   type CatalogRelation,
   type CatalogRootKind,
 } from "./catalog.js";
-import { parseCompassFrontmatterText } from "./iteration.js";
+import { parseCompassFrontmatterText, projectLocationIdentity } from "./iteration.js";
 import type { StoreContext } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
@@ -87,7 +87,6 @@ const DOCUMENT_KINDS: Record<CatalogDocumentKind, true> = {
   guide: true,
   compass: true,
   plan: true,
-  roadmap: true,
   review: true,
   other: true,
 };
@@ -107,7 +106,6 @@ const RELATIONS: Record<CatalogRelation, true> = {
 const ORDINARY_FILES: Record<string, true> = { "readme.md": true, "install.md": true, "index.md": true };
 
 const COMPASS_FILE = "delivery-compass.md";
-const ROADMAP_FILE = "roadmap.md";
 
 /** Refusal codes for import shape, semantic conflicts and partial progress. */
 export type CatalogImportErrorCode =
@@ -323,7 +321,12 @@ export type CatalogImportDrift = {
   relativePath: string;
   expectedSha256: string;
   actualSha256: string | null;
-  state: "changed" | "missing" | "refused";
+  /**
+   * note: `kind-changed` is the evidence-kind change: a location that was a digested regular file is
+   * now a directory (or the reverse). The recorded hash cannot be verified, so it is reported instead
+   * of being silently accepted as unchanged.
+   */
+  state: "changed" | "kind-changed" | "missing" | "refused";
 };
 
 export type CatalogImportVerification = {
@@ -387,6 +390,12 @@ function sourcePath(context: StoreContext, rootKind: CatalogRootKind, relativePa
 
 type SourceRead =
   | { state: "ok"; text: string; sha256: string }
+  /**
+   * note: A project package IS its directory: no marker file, no body, no digest. Recognized
+   * separately from `refused` so an ordinary project location is never reported as an
+   * unreadable source.
+   */
+  | { state: "directory" }
   | { state: "missing" | "refused"; detail: string };
 
 /**
@@ -405,6 +414,7 @@ function readSourceFile(context: StoreContext, rootKind: CatalogRootKind, relati
     return { state: "refused", detail: `${rootKind}:${relativePath} is not readable (${code ?? "unknown error"})` };
   }
   if (info.isSymbolicLink()) return { state: "refused", detail: `${rootKind}:${relativePath} is a symlink (not followed)` };
+  if (info.isDirectory()) return rootKind === "projects" ? { state: "directory" } : { state: "refused", detail: `${rootKind}:${relativePath} is not a regular file` };
   if (!info.isFile()) return { state: "refused", detail: `${rootKind}:${relativePath} is not a regular file` };
   try {
     const text = readFileSync(absolute, "utf8");
@@ -580,6 +590,8 @@ function readForEvidence(acc: Accumulator, context: StoreContext, rootKind: Cata
     recordDigest(acc, rootKind, relativePath, read.sha256);
     return { text: read.text, sourceKey };
   }
+  // note: A directory identity contributes no body evidence: the location itself is the fact.
+  if (read.state === "directory") return null;
   acc.unknowns.push({
     code: read.state === "missing" ? "source-missing" : "source-refused",
     key: sourceKey,
@@ -886,7 +898,7 @@ function collectBodies(root: string, relativeDir = ""): string[] {
 /**
  * One tracked-body proposal. `evidencePath` names the file the metadata is
  * read from: the body itself for documents, and the package marker file
- * (`delivery-compass.md` / `roadmap.md`) for a directory-located package,
+ * (`delivery-compass.md`) for a directory-located package,
  * whose own location stays the directory.
  */
 function bodyProposal(
@@ -1277,24 +1289,30 @@ export async function discoverCatalog(context: StoreContext): Promise<CatalogImp
   const projectsRoot = catalogRootDir(context, "projects");
 
   const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join(iterationsRoot, id), COMPASS_FILE));
-  const projectIds = listDirectories(projectsRoot).filter((id) => hasFile(join(projectsRoot, id), ROADMAP_FILE));
 
-  // 1. Layout identity: the harness's own directory conventions (§1).
-  for (const id of projectIds) {
-    bodyProposal(
-      acc,
-      context,
-      "projects",
+  // 1. Layout identity: the harness's own directory conventions (§1). A project
+  // package is its directory: it carries no marker file, so its location IS
+  // `projects/<id>` and it contributes no body digest.
+  for (const id of listDirectories(projectsRoot)) {
+    addEntity(acc, {
+      kind: "project",
       id,
-      "project",
-      null,
-      {
-        value: id,
-        assigned: false,
-        evidence: [{ sourceKey: sourceKeyOf("projects", `${id}/${ROADMAP_FILE}`), field: "layout.directory", value: id }],
-      },
-      `${id}/${ROADMAP_FILE}`,
-    );
+      title: fallbackTitle(id),
+      description: null,
+      rootKind: "projects",
+      relativePath: id,
+      documentKind: null,
+      lifecycle: "active",
+      sourceHash: null,
+      idAssigned: false,
+      evidence: [{ sourceKey: sourceKeyOf("projects", id), field: "layout.directory", value: id }],
+    });
+    acc.unknowns.push({
+      code: "membership",
+      key: entityKey("project", id),
+      detail: "the tracked source declares no project/iteration membership; relations are never inferred from its name or location",
+      sourceKey: sourceKeyOf("projects", id),
+    });
   }
   for (const id of iterationIds) {
     bodyProposal(
@@ -1467,7 +1485,23 @@ export async function planCatalogImport(context: StoreContext, inputs: CatalogIm
     }
 
     const existing = local.get(entityKey(kind, mapping.id.trim()));
-    if (existing !== undefined && (existing.rootKind !== proposal.rootKind || existing.relativePath !== proposal.relativePath)) {
+    // invariant: A project row registered at the retired marker path and one at its directory are the
+    // SAME project. The plan therefore carries that row's OWN location, so the import replays it as an
+    // identical registration (no second row, no relocation, registration and revision untouched)
+    // instead of failing as a duplicate at a new path.
+    const sameLocation =
+      existing !== undefined &&
+      existing.rootKind === proposal.rootKind &&
+      (existing.relativePath === proposal.relativePath ||
+        (proposal.kind === "project" && projectLocationIdentity(existing.relativePath) === projectLocationIdentity(proposal.relativePath)));
+    if (existing !== undefined && sameLocation && existing.relativePath !== proposal.relativePath) {
+      proposal.relativePath = existing.relativePath;
+      proposal.evidence = dedupeEvidence([
+        ...proposal.evidence,
+        { sourceKey, field: "existing.project-location", value: existing.relativePath },
+      ]);
+    }
+    if (existing !== undefined && !sameLocation) {
       acc.conflicts.push({
         field: "path",
         key: entityKey(kind, proposal.id),
@@ -1593,6 +1627,19 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
   for (const digest of plan.sourceDigests) {
     const read = readSourceFile(context, digest.rootKind, digest.relativePath);
     if (read.state === "ok" && read.sha256 === digest.sha256) continue;
+    // invariant: Each recorded digest was a regular file's bytes. A location that is now a directory
+    // has no comparable bytes - the evidence changed KIND - so it is drift, never "unchanged".
+    if (read.state === "directory") {
+      drift.push({
+        sourceKey: digest.sourceKey,
+        rootKind: digest.rootKind,
+        relativePath: digest.relativePath,
+        expectedSha256: digest.sha256,
+        actualSha256: null,
+        state: "kind-changed",
+      });
+      continue;
+    }
     drift.push({
       sourceKey: digest.sourceKey,
       rootKind: digest.rootKind,

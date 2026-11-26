@@ -34,6 +34,7 @@ import {
 import {
   COLLABORATION_COLUMNS,
   COLLABORATION_CUTOVER_TABLES,
+  COLLABORATION_SOURCE_DROP_TABLES,
   initializeCollaborationStore,
   mintIssueRef,
   readCollaborationStage,
@@ -455,6 +456,25 @@ function readRows(db: StoreDb, table: string, columns: readonly string[]): unkno
   return rows.map((row) => columns.map((column) => (typeof row[column] === "bigint" ? String(row[column]) : row[column])));
 }
 
+/**
+ * invariant: The one value the retired catalog kind becomes on the combined-to-lane path. The lane's
+ * CHECK no longer admits `roadmap`, so a combined source holding such a row is copied as `other`:
+ * identity, revision and registration are untouched and no catalog row is dropped. The same
+ * normalization runs on BOTH sides of the copy - the source snapshot that feeds the reviewed digest
+ * and the staged copy the verification re-reads - so the evidence stays exact.
+ */
+const RETIRED_DOCUMENT_KIND = "roadmap";
+const RETIRED_DOCUMENT_KIND_REPLACEMENT = "other";
+
+function normalizeCutoverRow(table: string, columns: readonly string[], row: unknown[]): unknown[] {
+  if (table !== "catalog_entities") return row;
+  const index = columns.indexOf("document_kind");
+  if (index < 0 || row[index] !== RETIRED_DOCUMENT_KIND) return row;
+  const normalized = [...row];
+  normalized[index] = RETIRED_DOCUMENT_KIND_REPLACEMENT;
+  return normalized;
+}
+
 function readCutoverRows(db: StoreDb): Record<string, unknown[][]> {
   const rows: Record<string, unknown[][]> = {};
   for (const table of COLLABORATION_CUTOVER_TABLES) {
@@ -477,7 +497,7 @@ function readCutoverRows(db: StoreDb): Record<string, unknown[][]> {
           `Run "mstar store upgrade --operator <name>" to reach the current combined schema, then re-plan. Nothing was written.`,
       );
     }
-    rows[table] = readRows(db, table, columns);
+    rows[table] = readRows(db, table, columns).map((row) => normalizeCutoverRow(table, columns, row));
   }
   return rows;
 }
@@ -584,8 +604,9 @@ function isProjectBindingReceipt(record: Record<string, unknown>): boolean {
 }
 
 /**
- * invariant: roadmap-store.ts persisted roadmap receipt. The writer records the returned
- * receipt PLUS the recorded outcome and the nullable reviewed provenance:
+ * invariant: The retired roadmap writer's persisted receipt, still promoted verbatim as a
+ * historical operation. It recorded the returned receipt PLUS the recorded outcome and
+ * the nullable reviewed provenance:
  * `{projectId, revision, contentHash, storeRevision, outcome: "committed",
  * provenance: {sourcePath, sourceHash} | null}`. A receipt written before those
  * two fields were recorded keeps the four-field shape, which is accepted too -
@@ -1896,7 +1917,9 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
           backupPath,
           at,
         );
-      for (const table of [...COLLABORATION_CUTOVER_TABLES].reverse()) handle.db.exec(`drop table ${table}`);
+      // invariant: The fence drops the source-only set, child before parent: a populated
+      // `project_roadmaps` references `catalog_entities`, and reverse order removes it first.
+      for (const table of [...COLLABORATION_SOURCE_DROP_TABLES].reverse()) handle.db.exec(`drop table ${table}`);
       const fence: CollaborationFence = {
         manifestId: manifest.manifestId,
         manifestDigest: digest,

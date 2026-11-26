@@ -267,25 +267,6 @@ export function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSna
           updatedAt: FIXTURE_AT,
         },
       ],
-      roadmap: {
-        contentMarkdown: [
-          "---",
-          "project_id: fixture-project",
-          "title: Fixture roadmap",
-          "status: active",
-          "created_at: 2026-11-20",
-          "---",
-          "",
-          "# Roadmap",
-          "",
-          "## Direction",
-          "",
-          "One verified remote scope.",
-          "",
-        ].join("\n"),
-        revision: 2,
-        updatedAt: FIXTURE_AT,
-      },
       catalogEntities: [
         { kind: "project", id: REMOTE_IDS.projectId, title: "Fixture project", description: null, documentKind: null, lifecycle: "active", revision: 1 },
         { kind: "plan", id: "plan-1", title: "Plan one", description: "d", documentKind: null, lifecycle: "active", revision: 1 },
@@ -345,7 +326,6 @@ export function secondSnapshot(check: ScopeCheck, coverage: "complete" | "partia
     project: {
       ...base.project,
       milestones: [],
-      roadmap: null,
       catalogEntities: [
         { kind: "project", id: check.projectId, title: "Fixture project two", description: null, documentKind: null, lifecycle: "active", revision: 1 },
       ],

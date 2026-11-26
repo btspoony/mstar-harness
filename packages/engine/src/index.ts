@@ -36,25 +36,6 @@
  * `cleanup` is the pure worktree/branch cleanup planner (immutable facts
  * in, stable `cleanup.*` remove/keep/refuse decisions out).
  */
-export type {
-  RoadmapContent,
-  RoadmapExpected,
-  RoadmapImportReview,
-  RoadmapRecord,
-  RoadmapRead,
-  RoadmapWriteReceipt,
-  RoadmapOperation,
-} from "./roadmap-store.js";
-export {
-  RoadmapError,
-  importRoadmapAuthority,
-  listRoadmapAuthority,
-  readRoadmapAuthority,
-  readRoadmapAuthorityOn,
-  replaceRoadmapAuthority,
-  reviewRoadmapImport,
-} from "./roadmap-store.js";
-export { parseRoadmapContent } from "./roadmap-content.js";
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, applyEnforcement, readDeclaredNodeFloor, warnUncheckableNodeFloor, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {
@@ -151,7 +132,6 @@ export type {
   RemotePendingIntent,
   RemotePendingIntents,
   RemoteProjectStatus,
-  RemoteRoadmap,
   RemoteSnapshot,
   RemoteAdoptionRequest,
   RemoteDispatchPermit,
@@ -468,16 +448,11 @@ export type {
   ProjectBindingTarget,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
-  RoadmapFrontmatter,
-  RoadmapStatus,
-  RoadmapValidation,
 } from "./project.js";
 export {
   BindingError,
   PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
-  PROJECT_ROADMAP_FILE,
-  ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
   bindProject,
   findingsCleanupGate,
@@ -485,7 +460,6 @@ export {
   observePlanFindings,
   readProjectBinding,
   validateProjectRegister,
-  validateRoadmap,
 } from "./project.js";
 export type { HarnessDocKind, ValidateStatusWriteDocOptions } from "./gates.js";
 export {
@@ -1210,7 +1184,6 @@ export type {
   ReadEnvelope,
   ReadProjection,
   ResidualCounts,
-  RoadmapDTO,
   StoreReadErrorCode,
   StoreReadQuery,
   StoreReadSources,

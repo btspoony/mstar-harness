@@ -21,7 +21,6 @@ import { previewExecutionRestore, restoreExecutionBackup } from "./execution-rec
 import { listPendingCatalogRegistrations } from "./catalog-registration.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { registerCatalogEntity } from "./catalog.js";
-import { readRoadmapAuthority, replaceRoadmapAuthority } from "./roadmap-store.js";
 import type { DeliveryLiftDeclaration } from "./migrate.js";
 
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-store-upgrade-minimal-")));
@@ -2963,46 +2962,13 @@ test("no-active-iteration metadata is recoverably disclosed while malformed leas
   const result = await upgradeStoreMinimal({ context, operator: "operator", operationId: "op-v1-no-active", deliveryDeclarations: V1_STANDALONE_DECLARATION });
   expect(result).toMatchObject({ verdict: "upgraded", imported: 2, authorityState: "active" });
   expect(result.dispositions).toContain(
-    "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+    "root metadata program_roadmap was not imported: the roadmap domain is retired and stores no document. status.json is preserved. Capture what the text still describes with `mstar issue add` (a piece of work) or `mstar milestone add` (a goal), put direction prose in STRATEGY.md, then leave the file as history; the 4.x export window is the only roadmap reader left",
   );
   expect(result.dispositions).toContain(
     "root metadata integration_merge_lease is historical data only and is not converted to a live store lease; the direct store-upgrade import leaves status.json unchanged, and future integration ownership uses the native serial lease operation",
   );
   expect(readFileSync(statusPath)).toEqual(sourceBytes);
 
-  const project = await registerCatalogEntity(
-    context,
-    { kind: "project", id: "_default", title: "Default project", rootKind: "projects", relativePath: "_default/roadmap.md" },
-    { operationId: "op-register-default-roadmap", actor: "store-upgrade-minimal.test" },
-  );
-  expect(project.id).toBe("_default");
-  const current = await readRoadmapAuthority(context, "_default");
-  const { collaboration: currentEvidence, ...currentRead } = current;
-  expect(currentRead).toEqual({ projectId: "_default", projectRevision: 1, roadmap: null });
-  expect(currentEvidence.completeness).toBe("complete");
-  const roadmap = [
-    "---",
-    "project_id: _default",
-    "title: Recovered legacy roadmap",
-    "status: active",
-    "created_at: 2026-10-04",
-    "---",
-    "",
-    "## Direction",
-    "",
-    "Recovered from the preserved program_roadmap source.",
-    "",
-    "## Goals",
-    "",
-    "- [ ] Keep the original roadmap goal",
-    "",
-  ].join("\n");
-  await replaceRoadmapAuthority(
-    context,
-    { projectId: "_default", expectedProjectRevision: current.projectRevision, expectedRoadmapRevision: "absent", contentMarkdown: roadmap },
-    { operationId: "op-recover-default-roadmap" },
-  );
-  expect((await readRoadmapAuthority(context, "_default")).roadmap?.contentMarkdown).toBe(roadmap);
   expect(readFileSync(statusPath)).toEqual(sourceBytes);
 });
 

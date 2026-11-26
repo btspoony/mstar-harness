@@ -7,7 +7,7 @@
  * from — states, identities, receipt outcomes and refusal codes — never a byte digest, a snapshot
  * text or a provider client.
  *
- * The lane: select and bind, observe a populated provider (portable project, roadmap, milestone
+ * The lane: select and bind, observe a populated provider (portable project, milestone
  * and one marked finding with occurrences, transitions, relations and provenance) beside an
  * unmarked issue of the SAME title, refuse every non-strict adoption, adopt only the exact
  * unmarked provider UUID, obtain exactly one send permit, record the provider's answer, re-observe
@@ -51,7 +51,7 @@ const PROVIDER_ISSUES = [
 
 /**
  * note: The extension history the provider already holds for the marked finding. A traversal
- * must materialize it (roadmap, milestone, occurrence, transition, relation, provenance), so the
+ * must materialize it (milestone, occurrence, transition, relation, provenance), so the
  * stock fixture's empty history fields alone would not prove the reconstruction.
  */
 const MARKED_RECORD: ProviderIssueRecord = {
@@ -64,7 +64,7 @@ const MARKED_RECORD: ProviderIssueRecord = {
       severity: "high",
       disposition: "open",
       impact: "A provider traversal must carry the whole extension history.",
-      acceptance: "The observation materializes the roadmap, the milestone and the issue history.",
+      acceptance: "The observation materializes the milestone and the issue history.",
       owner: "fullstack-dev",
       registeredAt: AT,
       closedAt: null,
@@ -137,27 +137,6 @@ const PROJECT_DOCUMENT = {
       updatedAt: AT,
     },
   ],
-  roadmap: {
-    contentMarkdown: [
-      "---",
-      `project_id: ${JSON.stringify(REMOTE_PROJECT.localProjectId)}`,
-      `title: ${JSON.stringify("Round-trip roadmap")}`,
-      `status: ${JSON.stringify("active")}`,
-      `created_at: ${JSON.stringify("2026-11-20")}`,
-      "---",
-      "",
-      "# Roadmap",
-      "",
-      "## Direction",
-      "",
-      "Prove the host-mediated round trip at the controlled boundary.",
-      "",
-      "- [ ] One complete extension cycle",
-      "",
-    ].join("\n"),
-    revision: 2,
-    updatedAt: AT,
-  },
   catalogEntities: [
     {
       kind: "project",
@@ -299,15 +278,11 @@ describe("remote host round trip", () => {
       binding: { state: "bound", generation: 1 },
     });
 
-    // note: The fresh observation materialized the provider's roadmap, milestone and issue history.
-    const roadmap = cli(["roadmap", "show", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]);
-    expect(roadmap.exitCode).toBe(0);
-    const roadmapData = roadmap.data;
-    expect(roadmapData.roadmap).toMatchObject({ projectId: REMOTE_PROJECT.localProjectId, revision: 2 });
-    expect(roadmapData.content).toMatchObject({ frontmatter: { project_id: REMOTE_PROJECT.localProjectId } });
-    const direction = (roadmapData.content as { direction?: unknown } | null)?.direction;
-    expect(typeof direction).toBe("string");
-    expect(String(direction)).toContain("controlled boundary");
+    // note: The fresh observation materialized the provider's milestone and issue history; the
+    // retired roadmap family is an unknown command.
+    const retired = cli(["roadmap", "show", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]);
+    expect(retired.exitCode).toBe(2);
+    expect(retired.code).toBe("command.invalid-input");
 
     const milestones = cli(["milestone", "list", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]);
     expect(milestones.exitCode).toBe(0);
@@ -681,16 +656,10 @@ describe("remote host round trip", () => {
 
     // note: The refused submission carries a DIFFERENT, valid payload, so a regression that wrote
     // it while still reporting the stale revision would become visible in the admitted cache.
-    const refusedDirection = "A refused base must never replace the admitted direction.";
+    const refusedName = "A refused base must never replace the admitted milestone.";
     fixture.setProjectDocument({
       ...PROJECT_DOCUMENT,
-      roadmap: {
-        ...PROJECT_DOCUMENT.roadmap,
-        contentMarkdown: PROJECT_DOCUMENT.roadmap.contentMarkdown.replace(
-          "Prove the host-mediated round trip at the controlled boundary.",
-          refusedDirection,
-        ),
-      },
+      milestones: [{ ...(PROJECT_DOCUMENT.milestones as Array<Record<string, unknown>>)[0]!, name: refusedName }],
     });
 
     // note: The submission addresses revision 0 while the cache already holds 1.
@@ -698,13 +667,13 @@ describe("remote host round trip", () => {
     expect(stale.exitCode).toBe(1);
     expect(stale.code).toBe("collaboration.observation-stale");
 
-    // invariant: The refused base wrote nothing: the cached revision, the admitted roadmap, the
+    // invariant: The refused base wrote nothing: the cached revision, the admitted milestone, the
     // marked finding and the visible unmarked issue all stay as the previous observation left them.
-    const roadmap = sandbox.runJson(["roadmap", "show", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]);
-    expect(roadmap.exitCode).toBe(0);
-    const direction = (roadmap.data.content as { direction?: unknown } | null)?.direction;
-    expect(String(direction)).toContain("controlled boundary");
-    expect(String(direction)).not.toContain("refused base");
+    const milestones = sandbox.runJson(["milestone", "list", "--harness", sandbox.harness, "--project", REMOTE_PROJECT.localProjectId]);
+    expect(milestones.exitCode).toBe(0);
+    const admitted = milestones.data.data as { milestones: Array<{ name: string }> };
+    expect(admitted.milestones[0]?.name).toBe("Round-trip delivery");
+    expect(admitted.milestones[0]?.name).not.toBe(refusedName);
     const status = sandbox.status();
     expect(status.data).toMatchObject({ available: true, projects: [expect.objectContaining({ revision: 1, completeness: "complete" })] });
     const listed = sandbox.runJson(["issue", "list", "--harness", sandbox.harness]);

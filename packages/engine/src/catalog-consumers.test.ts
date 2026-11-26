@@ -27,9 +27,10 @@ import {
   readExecutionCatalogPin,
   type CatalogExecutionPin,
 } from "./coordination.js";
-import { getCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
+import { getCatalog, listCatalog, registerCatalogEntity, updateCatalogEntity, type CatalogOperation } from "./catalog.js";
 import { assertKnowledgeCatalogCompleteness } from "./compound.js";
-import { assertCatalogCompleteness, readCatalogCompleteness } from "./iteration.js";
+import { assertCatalogCompleteness, projectLocationIdentity, readCatalogCompleteness } from "./iteration.js";
+import { discoverCatalog, importCatalog, planCatalogImport, verifyCatalogImport } from "./catalog-import.js";
 import { scaffoldHarness } from "./path.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { assertCatalogExecutionCommitted } from "./catalog-registration.js";
@@ -344,7 +345,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
     writeFileSync(join(harness, "iterations", iteration), "# compass\n");
     writeFileSync(join(harness, "plans", plan), "# plan\n");
     writeFileSync(join(root, ".agents", "knowledge", knowledge), "# knowledge\n");
-    writeFileSync(join(harness, "projects", "_default", "roadmap.md"), "---\nproject_id: _default\n---\n");
+
     return { iteration, plan, knowledge };
   }
 
@@ -354,7 +355,7 @@ describe("catalog discovery \u2014 the completeness query over store.db", () => 
     await registerCatalogEntity(context, { kind: "iteration", id: "20260101-iteration-one", title: "Iteration one", rootKind: "iterations", relativePath: stores.iteration }, op("reg-iteration"));
     await registerCatalogEntity(context, { kind: "plan", id: "plan-one", title: "Plan one", rootKind: "plans", relativePath: stores.plan }, op("reg-plan"));
     await registerCatalogEntity(context, { kind: "document", id: "doc-knowledge-one", title: "Knowledge one", rootKind: "knowledge", relativePath: stores.knowledge, documentKind: "knowledge" }, op("reg-doc"));
-    await registerCatalogEntity(context, { kind: "project", id: "_default", title: "Default Project", rootKind: "projects", relativePath: "_default/roadmap.md" }, op("reg-project"));
+    await registerCatalogEntity(context, { kind: "project", id: "_default", title: "Default Project", rootKind: "projects", relativePath: "_default" }, op("reg-project"));
 
     expect(existsSync(join(harness, "iterations", "README.md"))).toBe(false);
     const report = await readCatalogCompleteness(context);
@@ -420,6 +421,112 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     expect(existing.entity.relativePath).toBe("_default/roadmap.md");
     expect(existing.entity.title).toBe("Existing project");
     
+  });
+
+  test("catalog discovery: a project registered at the retired marker path is no completeness gap, and its import adds no second row", async () => {
+    const { harness, context } = await withStore("legacy-marker-location-");
+    // invariant: An older lane registered the project at `projects/<id>/roadmap.md`. The marker is
+    // history now, but the row still names this project: completeness matches on the project
+    // identity, so the directory is covered without relocating the row.
+    mkdirSync(join(harness, "projects", "legacy"), { recursive: true });
+    writeFileSync(join(harness, "projects", "legacy", "roadmap.md"), "# Legacy authority\n");
+    const registered = await registerCatalogEntity(
+      context,
+      { kind: "project", id: "legacy", title: "Legacy project", rootKind: "projects", relativePath: "legacy/roadmap.md" },
+      op("legacy-project"),
+    );
+    expect((await readCatalogCompleteness(context, ["projects"])).gaps).toEqual([]);
+    const beforeImport = (await getCatalog(context, { kind: "project", id: "legacy" })).entity;
+
+    // invariant: The plan resolves the existing row and carries ITS location, so the reviewed import
+    // replays that row instead of registering a second project at the directory path.
+    const plan = await planCatalogImport(context, [
+      { rootKind: "projects", relativePath: "legacy", mapping: { kind: "project", id: "legacy", title: "Legacy project" } },
+    ]);
+    expect(plan.conflicts).toEqual([]);
+    expect(plan.unknowns).toEqual([]);
+    expect(plan.entities.map((entity) => [entity.kind, entity.id, entity.relativePath, entity.sourceHash])).toEqual([
+      ["project", "legacy", "legacy/roadmap.md", null],
+    ]);
+    expect(plan.entities[0]!.evidence.map((entry) => entry.field)).toContain("existing.project-location");
+
+    // invariant: Applying it never fails as a duplicate and never moves the row.
+    const receipt = await importCatalog(context, plan, { operationId: "legacy-marker-import", actor: "test" });
+    expect(receipt.entities).toEqual([{ kind: "project", id: "legacy", revision: registered.revision, storeRevision: expect.any(Number) }]);
+    const after = (await getCatalog(context, { kind: "project", id: "legacy" })).entity;
+    // invariant: The row is the SAME registration: location, revision and registration instant are
+    // untouched, and no second project row exists.
+    expect(after.relativePath).toBe("legacy/roadmap.md");
+    expect(after.revision).toBe(beforeImport.revision);
+    expect(after.registeredAt).toBe(beforeImport.registeredAt);
+    expect((await listCatalog(context, { kind: "project" })).total).toBe(1);
+  });
+
+  test("a retained document under the projects root does not satisfy the project completeness check", async () => {
+    const { harness, context } = await withStore("document-not-a-project-");
+    // note: The retired roadmap body survives as a reclassified DOCUMENT at `projects/alpha/roadmap.md`.
+    // A document is not a project registration: the directory's project row is still missing and must be
+    // reported, or the gate would be satisfied by content that names no project.
+    mkdirSync(join(harness, "projects", "alpha"), { recursive: true });
+    writeFileSync(join(harness, "projects", "alpha", "roadmap.md"), "# Retained body\n");
+    await registerCatalogEntity(
+      context,
+      {
+        kind: "document", id: "doc-alpha-roadmap", title: "Retained roadmap", rootKind: "projects",
+        relativePath: "alpha/roadmap.md", documentKind: "other",
+      },
+      op("alpha-document"),
+    );
+    const report = await readCatalogCompleteness(context, ["projects"]);
+    expect(report.ok).toBe(false);
+    expect(report.gaps.map((gap) => [gap.kind, gap.id, gap.code])).toEqual([["project", "alpha", "catalog.discovery.missing-project"]]);
+
+    // invariant: A NON-project entry at the directory spelling itself - `projects/beta` registered as a
+    // document - is not a project registration either, so the directory still reports its missing row.
+    mkdirSync(join(harness, "projects", "beta"), { recursive: true });
+    await registerCatalogEntity(
+      context,
+      { kind: "document", id: "doc-beta", title: "Beta notes", rootKind: "projects", relativePath: "beta", documentKind: "other" },
+      op("beta-document"),
+    );
+    const beta = await readCatalogCompleteness(context, ["projects"]);
+    expect(beta.gaps.map((gap) => [gap.kind, gap.id])).toEqual([["project", "alpha"], ["project", "beta"]]);
+
+    // invariant: The marker alias is the LITERAL file name, so a look-alike document keeps its own identity
+    // and covers nothing.
+    expect(projectLocationIdentity("alpha/roadmapXmd")).toBe("alpha/roadmapXmd");
+    expect(projectLocationIdentity("alpha/roadmap.md")).toBe("alpha");
+    expect(projectLocationIdentity("roadmap.md")).toBe("roadmap.md");
+  });
+
+  test("a recorded source that changes evidence kind is reported as drift", async () => {
+    const { harness, context } = await withStore("evidence-kind-drift-");
+    // note: A reviewed regular-file source is digested, then replaced by a DIRECTORY at the same path.
+    mkdirSync(join(harness, "projects", "swapped"), { recursive: true });
+    writeFileSync(join(harness, "projects", "swapped", "roadmap.md"), "# marker\n");
+    const plan = await planCatalogImport(context, [
+      { rootKind: "projects", relativePath: "swapped/roadmap.md", mapping: { kind: "document", id: "doc-marker", documentKind: "other", title: "Marker" } },
+    ]);
+    expect(plan.sourceDigests).toHaveLength(1);
+
+    rmSync(join(harness, "projects", "swapped", "roadmap.md"));
+    mkdirSync(join(harness, "projects", "swapped", "roadmap.md"), { recursive: true });
+    const changed = await verifyCatalogImport(context, plan);
+    // invariant: The recorded hash cannot be verified against a directory, so the change of KIND is
+    // reported instead of being accepted as unchanged.
+    expect(changed.drift).toHaveLength(1);
+    expect(changed.drift[0]).toMatchObject({ state: "kind-changed", actualSha256: null, expectedSha256: plan.sourceDigests[0]!.sha256 });
+  });
+
+  test("catalog discovery: a directory-located project proposes as identity with no body digest", async () => {
+    const { harness, context } = await withStore("directory-identity-");
+    mkdirSync(join(harness, "projects", "plain"), { recursive: true });
+    const plan = await discoverCatalog(context);
+    const proposal = plan.entities.find((entity) => entity.kind === "project" && entity.id === "plain");
+    expect(proposal).toMatchObject({ relativePath: "plain", documentKind: null, sourceHash: null, title: "plain" });
+    // invariant: Directory identity is not a source refusal: the location itself is the fact.
+    expect(plan.unknowns.filter((unknown) => unknown.code === "source-refused")).toEqual([]);
+    expect(plan.sourceDigests.some((digest) => digest.relativePath === "plain")).toBe(false);
   });
 
   test("catalog discovery: scaffold leaves catalog registration to the store lifecycle when no store exists", async () => {
