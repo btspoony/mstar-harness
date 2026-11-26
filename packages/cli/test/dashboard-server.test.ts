@@ -140,7 +140,7 @@ function withoutHarnessDirectory(body: string): string {
 function raw(
 
   input: string,
-  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean } = {},
+  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean; body?: string } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   const url = new URL(input);
   const suppliedToken = url.searchParams.get("token");
@@ -158,7 +158,7 @@ function raw(
       );
     });
     req.once("error", reject);
-    req.end();
+    req.end(options.body);
   });
 }
 

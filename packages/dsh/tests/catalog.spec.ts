@@ -39,8 +39,10 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Context } from '@deepseek-ai/cordis'
 import {
+  addMilestone,
   appendDshLedgerRow,
   createExecutionWorkflow,
   initializeStore,
@@ -63,7 +65,7 @@ import {
 import * as catalog from '../src/gates/catalog.ts'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
+import { bootApp, collaborationDbPathAt, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 function appendLiveEvent(harnessDir: string, workflowId: string, event: Record<string, unknown>): void {
@@ -1565,5 +1567,75 @@ describe('D4 catalog identity encoding + selected compass path', () => {
     } finally {
       await rm(outsideDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('the project milestone rollup feeds the gate from the store', () => {
+  /** The store's own revision, read the way a milestone write observes it. */
+  async function observedRevision(harnessDir: string): Promise<number> {
+    const lane = new DatabaseSync(collaborationDbPathAt(harnessDir))
+    try {
+      return (lane.prepare('select revision from collaboration_meta where id = 1').get() as { revision: number }).revision
+    } finally {
+      lane.close()
+    }
+  }
+
+  async function seedProjectWithMilestones(harnessDir: string, milestones: readonly string[]): Promise<void> {
+    await registerCatalogEntity({ harnessDir }, {
+      kind: 'project',
+      id: '_default',
+      title: 'Default project',
+      rootKind: 'projects',
+      relativePath: '_default',
+      lifecycle: 'active',
+    }, { operationId: 'seed-gate-project', actor: 'project-manager' })
+    for (const [index, name] of milestones.entries()) {
+      await addMilestone({ harnessDir }, { projectId: '_default', name, effortSessions: null, ordinal: index }, {
+        operationId: `seed-gate-milestone-${index}`,
+        expectedStoreRevision: await observedRevision(harnessDir),
+      })
+    }
+  }
+
+  it('a project with stored milestones answers a present source carrying their names', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-'))
+    const harnessDir = join(root, '.mstar')
+    await mkdir(harnessDir, { recursive: true })
+    await seedStore(harnessDir)
+    await seedProjectWithMilestones(harnessDir, ['P1 foundation', 'Release the panel'])
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    if (state === null) throw new Error('expected a state section')
+    // The gate reads the store milestone rollup, not a hand-built payload: the
+    // names arrive in catalog-project order and ordinal order within the project.
+    expect(state.project.milestones).toEqual(['P1 foundation', 'Release the panel'])
+    expect(state.project.milestoneSource).toEqual({ kind: 'present', diagnostic: null })
+  })
+
+  it('a failed milestone read answers the explicit unavailable source, never an empty success', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-fail-'))
+    const harnessDir = join(root, '.mstar')
+    await mkdir(harnessDir, { recursive: true })
+    await seedStore(harnessDir)
+    await seedProjectWithMilestones(harnessDir, ['P1 foundation'])
+    // A missing milestone table is exactly the refusal class the gate must
+    // disclose: the catalog (projects) still reads, but the milestone query
+    // cannot answer — so it is unavailable, never the same empty success as a
+    // project that genuinely holds no milestones.
+    const lane = new DatabaseSync(collaborationDbPathAt(harnessDir))
+    try {
+      lane.exec('drop table project_milestones')
+    } finally {
+      lane.close()
+    }
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    if (state === null) throw new Error('expected a state section')
+    expect(state.project.milestones).toEqual([])
+    expect(state.project.milestoneSource.kind).toBe('unavailable')
+    expect(state.project.milestoneSource.diagnostic).not.toBeNull()
   })
 })

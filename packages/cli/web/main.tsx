@@ -91,6 +91,7 @@ import {
   readProjectMilestones,
   readProjects,
   projectMilestonesOutcome,
+  milestoneWriteIds,
   writeMilestone,
   type AssignableIssue,
   type MilestoneMutationRequest,
@@ -708,6 +709,17 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
 function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[]; projects: ProjectsOutcome }) {
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<ProjectMilestonesOutcome>({ kind: "loading" });
+  /**
+   * The forms' drafts live OUTSIDE the read's subtree (the overview read
+   * unmounts them on a re-read), so a typed name/effort survives an accepted
+   * write's re-read and a revision-conflict retry.
+   */
+  const [drafts] = useState(createMilestoneDraftStore);
+  const [writesState, setWritesState] = useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null });
+  /** One operation id per logical write, retained across a transport-ambiguous retry. */
+  const [operationIds] = useState(milestoneWriteIds);
+  const reloadKey = outcome.kind === "ready" ? outcome.storeRevision : 0;
+  const [reloadToken, setReloadToken] = useState(0);
   /**
    * The list's read follows the address bar: a filter change navigates, the route
    * re-derives this query, and the rows read from it. A read frozen to the defaults
