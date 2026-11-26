@@ -342,7 +342,15 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // still gates, but no row is attributed to a session whose record cannot
     // be trusted — and no pairing is created, so no settle can be
     // synthesized for a dispatch that was never admitted).
-    if (harnessDir !== null && session.kind === 'ok' && assignmentSource.ok && isAssignmentShaped(text)) {
+    // The parsed document must also DECLARE its front matter: an opening
+    // fence that never closes is refused by the schema
+    // (`document.frontmatter.absent`), so nothing in it is a declaration —
+    // recording the role/category the entries parser read from that
+    // undeclared block would attribute the row to fields no document
+    // declared (QC3-08). The verdict is the evidence; the ledger re-reads
+    // nothing.
+    if (harnessDir !== null && session.kind === 'ok' && assignmentSource.ok && isAssignmentShaped(text)
+      && !violations.some((violation) => violation.code === 'document.frontmatter.absent')) {
       const source = activeSource
       if (source?.kind === 'active') {
         try {

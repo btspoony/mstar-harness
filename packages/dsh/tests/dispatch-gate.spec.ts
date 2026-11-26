@@ -1857,3 +1857,41 @@ Two parallel writable tracks.
     expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
   }, 60_000)
 })
+
+describe('dispatch gate — the ACTIVE-workflow ledger records only a declared document (QC3-08)', () => {
+  const flowEvents = (app: BootResult) =>
+    readAgentFlow(join(app.harnessDir, 'workflows', 'wf-1'), 'wf-1')?.events ?? []
+
+  it('an unterminated fence is refused by the schema and writes NO ledger row', async () => {
+    const app = booted = await bootApp({ seedV2: true })
+    const advisories = captureAdvisories(app.ctx)
+    // Parseable YAML under an opening fence that never closes: the entries
+    // parser reads execute_as / task_category, but the document declares no
+    // front matter — the schema refuses it (`document.frontmatter.absent`),
+    // so no role or category may reach the ledger.
+    const prompt = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+
+## Assignment
+
+Do the thing, evidence-first.
+`
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.absent')
+    expect(flowEvents(app).filter((event) => event.kind === 'dispatch')).toHaveLength(0)
+
+    // The guard is the UNDECLARED document only: the same fields under a
+    // closed fence record their one row.
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    const dispatches = flowEvents(app).filter((event) => event.kind === 'dispatch')
+    expect(dispatches).toHaveLength(1)
+    expect(dispatches[0]).toMatchObject({ role: 'fullstack-dev', taskCategory: 'logic' })
+  }, 60_000)
+})
