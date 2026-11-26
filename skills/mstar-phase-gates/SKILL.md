@@ -31,7 +31,7 @@ description: Spec-Driven 双阶段门禁：Prepare（specify→clarify→plan）
 ### B. Execute：`plan(locked) → tasks → implement`
 
 - **`plan(locked)`** — 冻结基线；实现中出现新约束时**先回写 plan 再继续**。
-- **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、roadmap 批次与验收标准。每任务还须满足单轮容量判据（声明 Effort band、单轮闭合其 Files 与验证门、写明 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）。
+- **`tasks`** — 含依赖顺序、并行标记、完成判据；每任务可追踪到 plan、批次与验收标准。每任务还须满足单轮容量判据（声明 Effort band、单轮闭合其 Files 与验证门、写明 split point）→ **`mstar-artifacts/references/plan-quality-bar.md`** item 7（Task shape / session fit）。
   - **并行标签**：≥2 条实现轨同时分派 → `Dispatch mode: parallel independent tracks`；同仓可写并发 → `Worktree isolation: required`（清单 **`mstar-branch-worktree`** → **`mstar-branch-worktree/references/parallel-writable-pre-dispatch.md`**）。
 - **`implement`** — 按 tasks 顺序执行；多 task plan **默认** `Execution mode: sdd`（`mstar-sdd`）；hotfix 可 `inline`。完成进入 `InReview`；遵循 **`mstar-coding-behavior`**。
 
@@ -65,7 +65,7 @@ per-plan 门禁通过后，PM 在**迭代层面**管理以下活动（不计入 
 
 - **迭代启动**（`mstar-iteration` § Phase 1）：锁定迭代范围、**显式 branch policy**（`iteration_base_branch` / `target_branch`）、产出 compass。
 - **迭代驱动**（`mstar-iteration` § Phase 2 Autonomous Execute）：per-plan 派发循环（分支→实现→QC→**PM Acceptance**→Done→合并），跨 plan 进度追踪，更新 compass 中各 plan 状态。
-- **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行 specs/ADR 语料提升（**`mstar-doc-corpus`** 契约），更新 roadmap，标记迭代完成。
+- **迭代收口**（`mstar-iteration` § Phase 3 iteration-close）：迭代内所有 plan Done 后，执行 specs/ADR 语料提升（**`mstar-doc-corpus`** 契约），标记迭代完成。
 
 per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development plan** `Done` 后的交付尾义务（迭代行与独立 plan 相同），不影响该判定。迭代收口只做 specs/ADR 提升；语义权威 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`。
 
@@ -83,7 +83,7 @@ per-plan Done 是 per-plan 的闭环终点；compound 是每个 **development pl
 3. 意图门禁是否满足（真实目标 / 成功判据 / 非目标已写明）？
 4. `plan` 是否完成并可引用？
 5. 若 plan 涉及 UI 工作：`DESIGN.md` 是否存在且满足声明的 completeness level（见 `mstar-design-md`）？
-6. 若分批/暂缓/临时绕行，roadmap 是否落在 plan / store.db `project_roadmaps` 中，而不是只在对话里？
+6. 若分批/暂缓/临时绕行，Durable Roadmap Gate 是否落在 plan 中，而不是只在对话里？
 7. `tasks` 是否完成？
 8. Assignment 是否含 **`Task category`**（实现类任务）并与 Owner 一致？
 9. 若中途出现 plan drift，是否先回写再继续？

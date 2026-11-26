@@ -1,14 +1,14 @@
 # ADR: The dashboard project list is one complete, unpaged engine read
 
-Status: implemented — the roadmap entry offers a project chooser backed by catalog and issue project data, and unsupported parameters refuse instead of shrinking the list.
+Status: implemented — the project feature offers a project chooser backed by catalog and issue project data, and unsupported parameters refuse instead of shrinking the list.
 
 Date: 2026-10-06
 
-Scope: the `projects` dashboard view in `packages/engine/src/store-read.ts`, its `/api/projects` route in `packages/commands/src/dashboard/store-read.ts`, and the roadmap entry that consumes it.
+Scope: the `projects` dashboard view in `packages/engine/src/store-read.ts`, its `/api/projects` route in `packages/commands/src/dashboard/store-read.ts`, and the project feature that consumes it.
 
 ## Problem
 
-Opening the roadmap destination without a project selected rendered an empty state that told the reviewer to hand-edit the URL. No dashboard API listed projects, and the engine view union had no `projects` member, so the entry could not offer a chooser from honest data. Scraping an existing endpoint such as the issues list would couple the chooser to issue data and silently miss projects that have no issues.
+Opening the project destination without a project selected rendered an empty state that told the reviewer to hand-edit the URL. No dashboard API listed projects, and the engine view union had no `projects` member, so the entry could not offer a chooser from honest data. Scraping an existing endpoint such as the issues list would couple the chooser to issue data and silently miss projects that have no issues.
 
 ## Decision
 
@@ -16,7 +16,7 @@ Opening the roadmap destination without a project selected rendered an empty sta
 - The read is one SQL query over the union of catalog project ids and `issues.project_id`, left-joined to catalog metadata and open issues and grouped by project id. Order is displayed title ascending, then id ascending. A project with no open issues reports `openIssues: 0`.
 - The answer is **unpaged and complete**: every project row is returned in one response, `total === items.length`, with no paging call and no `limit`/`offset` consumption. `needsProjection` is false because catalog and issue rows are base store data, not a published projection.
 - `/api/projects` is a param-free list route. Every query parameter, whether known elsewhere (`limit`, `offset`, `project`) or unknown, is a usage refusal with the transport's standard parameter shape. There is no detail route.
-- The no-project branch loads the list and renders a chooser whose rows link to `/?project=<id>#roadmap`. Loading, empty catalog, refusal and load failure are distinct honest states; a refused read is never flattened into `{ items: [], total: 0 }` or rendered as the empty-catalog sentence.
+- The no-project branch loads the list and renders a chooser whose rows link to `/?project=<id>`. Loading, empty catalog, refusal and load failure are distinct honest states; a refused read is never flattened into `{ items: [], total: 0 }` or rendered as the empty-catalog sentence.
 - No generic catalog-kind query view, paging parameters, pager or truncation hint is added, and no project selector is added to the issues, workflow or iteration views.
 
 ## Alternatives considered
