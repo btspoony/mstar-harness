@@ -572,6 +572,18 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
     }
   });
 
+  test("a quoted compass declaration hardens exactly like the unquoted spelling", () => {
+    const root = harnessRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260808-demo", 'iteration_id: 20260808-demo\nstatus: "active"\nenforcement: "hard"\n');
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("compass frontmatter enforcement: hard → { hard: true, source: compass }", () => {
     const root = harnessRoot("mstar-compass-enf-");
     try {

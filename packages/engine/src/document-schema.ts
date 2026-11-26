@@ -190,7 +190,8 @@ function violation(severity: ValidationResult["severity"], code: string, message
 /** Strict ISO-8601 date-time shape: `YYYY-MM-DDTHH:mm:ss` with an optional
  * fractional-seconds part (`.fff…`) before the required `Z` or a `+HH:mm` /
  * `-HH:mm` offset. No normalization — the calendar day, the time ranges and
- * the offset range are validated against a real calendar.
+ * the offset range are validated against a real calendar, and a numeric
+ * offset stops at ±14:00 (the widest real zone boundary).
  * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
  */
 const ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
@@ -212,7 +213,7 @@ function isIsoDateTime(value: string): boolean {
   if (zone !== "Z") {
     const offsetHour = Number(zone.slice(1, 3));
     const offsetMinute = Number(zone.slice(4, 6));
-    if (offsetHour > 23 || offsetMinute > 59) return false;
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute > 0)) return false;
   }
   return true;
 }

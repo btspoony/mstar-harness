@@ -622,6 +622,20 @@ describe("validateDocumentFrontmatter — strict ISO-8601 generated_at", () => {
     expect(gate.ok).toBe(true);
   });
 
+  test("the numeric offset stops at ±14:00", () => {
+    const acceptance = (zone: string) =>
+      validateDocumentFrontmatter(
+        "pm-acceptance",
+        doc(ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", `generated_at: 2026-11-26T08:00:00${zone}`)),
+        "acceptance",
+      ).ok;
+    expect(acceptance("+14:00")).toBe(true);
+    expect(acceptance("-14:00")).toBe(true);
+    expect(acceptance("+14:01")).toBe(false);
+    expect(acceptance("+23:59")).toBe(false);
+    expect(acceptance("Z")).toBe(true);
+  });
+
   test("leap day 2024-02-29 passes, 2026-02-29 fails", () => {
     const leap = ACCEPTANCE_FM.replace("generated_at: 2026-11-26T08:00:00Z", "generated_at: 2024-02-29T08:00:00Z");
     expect(validateDocumentFrontmatter("pm-acceptance", doc(leap), "acceptance").ok).toBe(true);

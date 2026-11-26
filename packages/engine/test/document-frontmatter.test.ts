@@ -359,9 +359,9 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(entries.get("plans")).toEqual({ value: ["one", "two"], rawText: "", line: 2, kind: "list" });
   });
 
-  test("flat scalars keep their source text verbatim: no typing, no quote stripping", () => {
+  test("flat scalars decode their declaration text but never type it", () => {
     const entries = parseDocumentFrontmatterEntries(
-      `flag: true\ncount: 42\nnote: {}\nanchor: &value\nfolded: >`,
+      `flag: true\ncount: 42\nnote: {}\nanchor: &value\nfolded: >\nstatus: "active"\nname: 'locked'`,
       "spec-source",
       "flat",
     );
@@ -370,6 +370,10 @@ describe("parseDocumentFrontmatterEntries — entry-level flat profile", () => {
     expect(entries.get("note")).toEqual({ value: "{}", rawText: "{}", line: 4, kind: "scalar" });
     expect(entries.get("anchor")!.value).toBe("&value");
     expect(entries.get("folded")!.value).toBe(">");
+    // One boundary quote pair strips so a consumer compares the written
+    // declaration; `rawText` keeps the source lexeme.
+    expect(entries.get("status")).toEqual({ value: "active", rawText: '"active"', line: 7, kind: "scalar" });
+    expect(entries.get("name")).toEqual({ value: "locked", rawText: "'locked'", line: 8, kind: "scalar" });
   });
 
   test("a nested map refuses in the flat profile with source, line and line text", () => {

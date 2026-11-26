@@ -1051,11 +1051,11 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
  * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
  * the roadmap validator (extract/reuse the same parsing, no fork).
  * The structural parse delegates to `parseDocumentFrontmatterEntries` in
- * the flat profile — one pass, no line rescan; two compass-only behaviors
- * stay here: a double-quoted scalar keeps its JSON-escape decode (the
- * roadmap export writes values with `JSON.stringify`), and every scalar
- * keeps its source text — the compass contract never typed `true` /
- * numbers / `null`.
+ * the flat profile — one pass, no line rescan, and that profile already
+ * carries the compass scalar contract: values are the decoded declaration
+ * text (one boundary quote pair strips, a double-quoted scalar
+ * JSON-escape-decodes because the roadmap export writes values with
+ * `JSON.stringify`) and are never typed `true` / numbers / `null`.
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);
@@ -1070,9 +1070,7 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
   // One structural pass in the shared reader under the flat compass
   // profile: nested maps and block scalars refuse with the file and line,
   // and every entry carries its original scalar text, so nothing is
-  // rescanned here. Compass scalar contract: values keep their source
-  // text (never typed); a double-quoted scalar keeps its JSON-escape
-  // decode because the roadmap export writes values with `JSON.stringify`.
+  // rescanned here.
   // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
   const entries = parseDocumentFrontmatterEntries(frontmatter, filePath, "flat");
   const doc: Record<string, unknown> = {};
@@ -1081,32 +1079,12 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
   // setter, dropping the value and repointing the prototype instead.
   // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
   for (const [key, entry] of entries) {
-    if (entry.kind === "list") {
-      setOwn(doc, key, entry.value);
-      continue;
-    }
-    const raw = entry.rawText;
-    if (raw === "") {
-      // A bare `key:` is null in the compass contract.
-      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
-      setOwn(doc, key, null);
-    } else if (raw.startsWith('"') && raw.endsWith('"') && raw.length >= 2) {
-      // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
-      // \\" → quote, \\\\ → backslash; a lone backslash before any
-      // other character is preserved (JSON.stringify parity).
-      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
-      setOwn(
-        doc,
-        key,
-        raw
-          .slice(1, -1)
-          .replace(/\\(.)/g, (_, ch: string) =>
-            ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
-          ),
-      );
-    } else {
-      setOwn(doc, key, raw.replace(/^["']|["']$/g, ""));
-    }
+    // A bare `key:` with no children is null in the compass contract; a list
+    // (bare key with `- item` children, flow array, or block list) projects
+    // its items; every other scalar is the value the flat profile decoded.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const bare = entry.kind !== "list" && entry.rawText === "";
+    setOwn(doc, key, bare ? null : entry.value);
   }
   return doc;
 }

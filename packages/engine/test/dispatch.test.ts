@@ -1409,6 +1409,16 @@ enforcement: hard
     expect(parseEnforcementFlagFromFrontmatter("enforcement: 'HARD'\n")).toEqual({ hard: true, source: "compass" });
   });
 
+  test("the flat compass profile reads a quoted declaration as the value it spells", () => {
+    // The flat profile the compass is validated with decodes the declaration,
+    // so a quoted spelling reaches the flag exactly like an unquoted one.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    for (const value of ["hard", '"hard"', "'hard'", '"HARD"']) {
+      expect(parseEnforcementFlagFromFrontmatter(`enforcement: ${value}\n`, "flat")).toEqual({ hard: true, source: "compass" });
+    }
+    expect(parseEnforcementFlagFromFrontmatter('enforcement: "soft"\n', "flat")).toEqual({ hard: false, source: "compass" });
+  });
+
   test("compass present but not hard (soft / true / empty) → source compass, hard false", () => {
     expect(parseEnforcementFlagFromFrontmatter("enforcement: soft\n")).toEqual({ hard: false, source: "compass" });
     expect(parseEnforcementFlagFromFrontmatter("enforcement: true\n")).toEqual({ hard: false, source: "compass" });

@@ -16,9 +16,10 @@ export type FrontmatterAndBody = { frontmatter: string; body: string; fenced: bo
 /** Parser behavior profile. `document` (the default, host loaders) is the
  * strict accepted subset below. `flat` is the delivery-compass contract:
  * root scalars, flat flow arrays and `- item` block lists only — a nested
- * map or a `|`/`|-` block scalar refuses with its line, and scalar values
- * keep their source text verbatim (no typing, no quote stripping) because
- * the compass contract never typed them. */
+ * map or a `|`/`|-` block scalar refuses with its line, and a scalar value is
+ * the DECODED declaration text: one boundary quote pair strips and a
+ * double-quoted scalar also JSON-escape-decodes, but nothing is typed
+ * (`true`/`42`/`null` stay strings). */
 export type FrontmatterProfile = "document" | "flat";
 
 export type FrontmatterEntryKind = "scalar" | "list" | "map" | "block-scalar";
@@ -112,6 +113,22 @@ function parseScalar(raw: string): string | number | boolean | null {
   if (value === "null") return null;
   if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
   return unquote(value);
+}
+
+/**
+ * The flat (compass) scalar contract: never type `true`/`42`/`null`, but decode
+ * one boundary quote pair — and JSON-escape-decode a double-quoted scalar,
+ * because the roadmap export writes values with `JSON.stringify`. Consumers
+ * compare the decoded string; `rawText` keeps the source lexeme.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
+function decodeFlatScalar(raw: string): string {
+  if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"') {
+    return raw.slice(1, -1).replace(/\\(.)/g, (_, ch: string) =>
+      ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
+    );
+  }
+  return raw.replace(/^["']|["']$/g, "");
 }
 
 /**
@@ -554,11 +571,13 @@ function parseFrontmatterStructure(
       continue;
     }
 
-    // In the flat profile a scalar keeps its source text verbatim — the
-    // compass contract never typed `true`/numbers/`null` and never stripped
-    // quotes in the shared reader's sense, so adapters decode what they need.
+    // In the flat profile a scalar is DECODED but never typed: one boundary
+    // quote pair strips (a double-quoted scalar also JSON-escape-decodes) so
+    // consumers compare the written text, while `true`/`42`/`null` stay the
+    // strings they were. `rawText` keeps the source lexeme for consumers that
+    // need the original spelling (the plan header reader).
     // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
-    assign(target, key, profile === "flat" ? rawValue : parseScalar(rawValue), i, rawValue, "scalar");
+    assign(target, key, profile === "flat" ? decodeFlatScalar(rawValue) : parseScalar(rawValue), i, rawValue, "scalar");
     stack.push({ indent, kind: "leaf", target: {}, childIndent: null });
   }
 
