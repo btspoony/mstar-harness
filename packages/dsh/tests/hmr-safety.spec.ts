@@ -53,9 +53,11 @@ const PRESET = 'mstar-execute'
 
 /** One mstar-style Assignment prompt seeded into a child session. */
 const ASSIGNMENT_PROMPT = [
-  '**Execute as**: fullstack-dev',
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
+  '---',
+  'execute_as: fullstack-dev',
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
   '',
   'Implement the assigned work.',
 ].join('\n')

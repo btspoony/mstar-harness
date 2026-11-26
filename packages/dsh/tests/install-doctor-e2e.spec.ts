@@ -214,6 +214,19 @@ async function hostCopyInstalledMstar(dshHome: string): Promise<string> {
 
 /** One mstar-style Assignment prompt (role-preset fixture pattern). */
 const ASSIGNMENT_PROMPT = [
+  '---',
+  'execute_as: fullstack-dev',
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
+  '',
+  'Implement the assigned work.',
+].join('\n')
+
+/** The retired body-label form — the ONE legacy fixture of this spec (D16). */
+const LEGACY_BODY_LABEL_PROMPT = [
+  '## Assignment',
+  '',
   '**Execute as**: fullstack-dev',
   '**Delegation**: forbidden',
   '**Task category**: logic',
@@ -333,6 +346,13 @@ describe.skipIf(skipReason !== undefined)('install-surface doctor three-state e2
       if (presetChannelArmed) {
         const provider = new FakeSubagentProvider('fake-spawn', { agentPresetCapability: true })
         ;(app.ctx.subagents as unknown as FakeSubagentService).registerProvider(provider)
+        // D16 regression — the retired `**Label**` grammar refuses at the
+        // native start (terminal), so the provider never sees a start for it.
+        await startActivationViaNativeChannel(app, activationSpec(LEGACY_BODY_LABEL_PROMPT)).then(
+          () => { throw new Error('expected the retired body-label start to refuse') },
+          () => {},
+        )
+        expect(provider.starts).toHaveLength(0)
         await startActivationViaNativeChannel(app, activationSpec(ASSIGNMENT_PROMPT))
         expect(provider.starts[0]!.request.agentPreset).toBe(ROLE_PRESET)
         console.log(`install-doctor-e2e: cell1 dsh-side — role preset '${ROLE_PRESET}' selected via the native channel (no crash)`)
