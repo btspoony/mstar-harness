@@ -37,9 +37,9 @@
 import { createHash } from 'node:crypto'
 import { dirname } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
-import { assignmentHeaderRegion, parseAssignmentFields, readAssignmentSource } from '@mstar-harness/engine'
+import { assignmentFrontmatterEntries, assignmentHeaderRegion, parseAssignmentFieldsFromFrontmatter, readAssignmentSource } from '@mstar-harness/engine'
 import { appendDshLedgerRow, appendDshWorkflowEvent, readDshLedgerWindow } from '@mstar-harness/engine'
-import type { AssignmentSourceResult, DshSelectedGeneration } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, DshSelectedGeneration, FrontmatterEntry } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import type { AgentFlowContinuationEventView, AgentFlowEventView, AgentFlowSummaryRow, AgentFlowView } from '../types.ts'
 
@@ -48,7 +48,7 @@ export type { AgentFlowContinuationEventView }
 import { asRecord } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { DEFAULT_DISPATCH_TOOLS, TEAM_DISPATCH_TOOLS } from './dispatch.ts'
-import { isNaValue, planIdOf } from './dispatch-assignment.ts'
+import { isNaValue, planIdOfEntries } from './dispatch-assignment.ts'
 import { sessionIdOf } from './dispatch-core.ts'
 import {
   isTeamDispatchToolName,
@@ -937,6 +937,16 @@ export function recordDispatch(input: {
    * record resolves the prompt itself, the pre-fix behavior.
    */
   assignmentSource?: AssignmentSourceResult
+  /**
+   * The decision's ONE front matter parse (compass D14) — the SAME entries
+   * the gate composition consumed. `null` is a FAILED parse and stays FINAL:
+   * the rejected block is never read again (its structured diagnostic remains
+   * with the gate's schema layer). Omitted (direct callers) → the record
+   * parses the resolved document once here.
+   */
+  entries?: Map<string, FrontmatterEntry> | null
+  /** The plan id the decision derived from those entries; absent stays absent. */
+  planId?: string | undefined
   violations: readonly unknown[]
   hard: boolean
   pairing?: AgentFlowPairing
@@ -984,9 +994,14 @@ export function recordDispatch(input: {
     // fields are simply absent, never fabricated).
     const assignmentSource = input.assignmentSource ?? readAssignmentSource(input.prompt, { harnessDir: input.harnessDir })
     const assignmentText = assignmentSource.ok ? assignmentSource.text : input.prompt
-    const header = assignmentHeaderRegion(assignmentText)
-    const fields = parseAssignmentFields(assignmentText)
-    const planId = planIdOf(header)
+    // ONE parse serves the decision, the handoff and the ledger (QC3-04): the
+    // gate's entries when handed in — a failed parse (`null`) and a derived
+    // absent plan id are FINAL, never a reason to read the text again — else
+    // one local parse for direct callers. taskIdOf scans the body slice only
+    // (no front matter parse).
+    const entries = input.entries !== undefined ? input.entries : assignmentFrontmatterEntries(assignmentText)
+    const fields = parseAssignmentFieldsFromFrontmatter(entries)
+    const planId = input.planId ?? planIdOfEntries(entries)
     const taskId = taskIdOf(assignmentText)
     const taskCategory = fields.taskCategory
     // ONE canonical role for every row this dispatch produces: the row itself

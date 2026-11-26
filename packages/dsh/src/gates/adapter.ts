@@ -351,6 +351,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
             exec,
             prompt: text,
             assignmentSource,
+            // The dispatch's ONE parse and its derived plan id (QC3-04): the
+            // ledger reads the decision's map — entries `null` (malformed
+            // YAML) stays final and the gate's schema layer keeps carrying
+            // the structured diagnostic.
+            entries,
+            planId,
             violations,
             hard: hard ?? resolveDispatchHard(harnessDir, this.config, text, entries),
             pairing: this.pairing,
