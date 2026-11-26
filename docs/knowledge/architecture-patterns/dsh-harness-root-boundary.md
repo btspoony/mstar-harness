@@ -6,7 +6,11 @@ problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
 plan_id: "<plan-id>, <plan-id>, <plan-id>"
-tags: [harness-dir, workspace-root, probe, resolve-harness-dir]
+tags:
+  - harness-dir
+  - workspace-root
+  - probe
+  - resolve-harness-dir
 ---
 
 # resolveHarnessDir workspace-root boundary (roadmap §7c)

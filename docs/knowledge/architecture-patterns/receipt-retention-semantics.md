@@ -1,3 +1,11 @@
+---
+module: execution receipts lifecycle (execution_operations retention)
+date: 2026-11-09
+problem_type: architecture_pattern
+category: architecture-patterns
+severity: medium
+---
+
 # Execution receipts lifecycle: retention anchors, per-verb replay expiry, and the epoch fallacy
 
 **Kind**: Knowledge (design semantics) · **Status**: implemented — retention anchors merged as PR #467 (#448); payload slimming (#466) landed · **Feeds**: anyone changing receipt retention, payload shape or restore inventory

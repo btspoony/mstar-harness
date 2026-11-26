@@ -10,7 +10,13 @@ applies_when:
   - splitting a prompt-harness (skills, role prompts) into deterministic rules vs judgment
   - adding machine-checkable gates to prose-only workflow docs without breaking standalone use
   - wiring host hooks (before-write / before-dispatch) that must degrade gracefully
-tags: [programmatic-split, skill-ssot, engine, advisory-pointer, drift-control, enforcement-ladder]
+tags:
+  - programmatic-split
+  - skill-ssot
+  - engine
+  - advisory-pointer
+  - drift-control
+  - enforcement-ladder
 ---
 
 # Engine-izing prompt workflows: the programmatic split

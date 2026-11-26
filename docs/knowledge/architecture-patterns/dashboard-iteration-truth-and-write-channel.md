@@ -1,3 +1,11 @@
+---
+module: dashboard read model + dsh panel write surface
+date: 2026-11-09
+problem_type: architecture_pattern
+category: architecture-patterns
+severity: high
+---
+
 # Dashboard read truth and the milestone write channel
 
 Status: active · Scope: dashboard read model + dsh panel write surface · Derived from iteration

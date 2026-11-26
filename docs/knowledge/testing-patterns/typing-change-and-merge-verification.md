@@ -1,3 +1,11 @@
+---
+module: typing-change and integration-merge verification
+date: 2026-11-09
+problem_type: testing_pattern
+category: testing-patterns
+severity: high
+---
+
 # Verifying typing changes and integration merges
 
 Two related traps, both observed in one iteration. Neither is caught by the checks people naturally reach for.

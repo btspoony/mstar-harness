@@ -11,7 +11,13 @@ symptoms:
   - "unsetting the flag in the active iteration's compass did not roll back hard mode while an older completed compass still declared hard"
 root_cause: "flag scanning was region-unaware (whole-text regex read the Assignment flag from anywhere in the prompt) and lifecycle-unaware (compass scanning considered every iteration directory, including status: completed, with first-hard-wins)"
 resolution_type: code_fix
-tags: [enforcement, flag-scope, compass, header-region, rollback, hard-gate]
+tags:
+  - enforcement
+  - flag-scope
+  - compass
+  - header-region
+  - rollback
+  - hard-gate
 ---
 
 # Scoping enforcement flags: header-region parsing + active-compass scanning

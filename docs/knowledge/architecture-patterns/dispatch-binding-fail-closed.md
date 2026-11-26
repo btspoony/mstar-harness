@@ -1,5 +1,5 @@
 ---
-module: dispatch (engine + host adapters: opencode, dsh)
+module: "dispatch (engine + host adapters: opencode, dsh)"
 date: 2026-08-21
 last_updated: 2026-11-09
 problem_type: architecture_pattern
@@ -9,7 +9,12 @@ applies_when:
   - "a gate's input is host-provided and may be omitted (role binding, subagent type, tool context)"
   - "adding a host adapter that must propagate the calling agent identity to the engine dispatch gate"
   - "auditing a gate for silent fail-open on missing introspection data"
-tags: [anti-recursion, dispatch-gate, fail-closed, host-binding, security]
+tags:
+  - anti-recursion
+  - dispatch-gate
+  - fail-closed
+  - host-binding
+  - security
 ---
 
 # Dispatch binding must fail closed, never skip

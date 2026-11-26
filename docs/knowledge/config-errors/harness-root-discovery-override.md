@@ -12,7 +12,13 @@ symptoms:
   - "a linked feature worktree carrying a stray status.json resolved and created a second SDD tree under the feature checkout"
 root_cause: "harness-root discovery only probed the conventional names ({HARNESS_DIR}/.agents) and returned the first existing candidate; no explicit override existed for non-default harness roots, and the status.json probe ran before any linked-worktree guard"
 resolution_type: code_fix
-tags: [harness-root, path-resolution, sdd-workspace, worktree, fail-closed, override]
+tags:
+  - harness-root
+  - path-resolution
+  - sdd-workspace
+  - worktree
+  - fail-closed
+  - override
 ---
 
 # Harness-root discovery override

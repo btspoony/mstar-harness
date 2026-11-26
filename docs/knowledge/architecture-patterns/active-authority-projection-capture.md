@@ -1,3 +1,11 @@
+---
+module: dashboard execution projection (active authority capture)
+date: 2026-11-09
+problem_type: architecture_pattern
+category: architecture-patterns
+severity: high
+---
+
 # Active-authority projection capture
 
 Hard-won rules from building a dashboard projection that reads an ACTIVE execution authority (DB-backed) instead of pre-activation files. Each was learned from a real failure; recorded so the next implementation does not re-derive them.
