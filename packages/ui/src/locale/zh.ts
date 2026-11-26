@@ -433,13 +433,13 @@ export const zh: Copy = {
 
   projects: {
     listHeading: "目录项目",
-    listMeta: "选择一个项目以打开它的路线图、问题与迭代",
+    listMeta: "选择一个项目以打开它的里程碑、问题与迭代",
     lifecycleNote: "生命周期是目录的生命周期，不是执行状态。",
     noLifecycle: "无生命周期",
     pageTitle: "项目",
     totalMeta: (n: number): string => `${n} 个项目`,
     openIssuesMeta: (n: number): string => `${n} 个未关闭问题`,
-    headNote: "项目拥有自己的路线图、问题与迭代",
+    headNote: "项目拥有自己的里程碑、问题与迭代",
     tableCaption: "项目",
     columns: { title: "标题", id: "编号", lifecycle: "生命周期", openIssues: "未关闭", description: "描述" },
     openIssues: (count) => `${count} 项未关闭`,
@@ -447,17 +447,14 @@ export const zh: Copy = {
   },
 
   projectDetail: {
-  roadmapState: "路线图存在",
-  revisionLabel: "版本",
   openIssuesUnit: "项未关闭",
     breadcrumb: { label: "位置导航", trail: "项目" },
     tabLabel: "项目功能",
-    features: { roadmap: "路线图", issues: "问题", iterations: "迭代" },
-    roadmap: {
+    features: { issues: "问题", iterations: "迭代" },
+    milestones: {
       milestonesHeading: "里程碑板",
     milestonesUnit: "个里程碑",
     unassignedUnit: "个未归属问题",
-      milestoneProgress: (done, total) => `${done}/${total}`,
       milestoneOpen: (open) => `${open} 项未关闭`,
       effort: (sessions) => `${sessions} 个会话`,
       unestimated: "未估算",
@@ -481,7 +478,6 @@ export const zh: Copy = {
         removeConfirm: "移除该里程碑？",
         refusalLead: "存储拒绝了此次变更：",
       },
-      absentNextStep: (features) => `本项目仍可使用：${features}。`,
     },
     scope: {
       label: (projectId) => `项目：${projectId}`,

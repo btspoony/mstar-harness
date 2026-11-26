@@ -103,12 +103,11 @@ function screens(copy: Copy) {
   };
   const projectDetail: ProjectDetailCopy = {
     ...copy.projectDetail,
-    // The panel heading is the feature's own name.
+    // The panel heading is the milestone body's own name.
     absence: {
-      absent: { ...copy.state.absent, heading: copy.projectDetail.features.roadmap },
-      empty: { ...copy.state.empty, heading: copy.projectDetail.features.roadmap },
-      unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.features.roadmap },
-      "not-applicable": { ...copy.state["not-applicable"], heading: copy.projectDetail.features.roadmap },
+      empty: { ...copy.state.empty, heading: copy.projectDetail.milestones.milestonesHeading },
+      unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.milestones.milestonesHeading },
+      "not-applicable": { ...copy.state["not-applicable"], heading: copy.projectDetail.milestones.milestonesHeading },
     },
   };
   return { overview, focus, issues, issueDetail, workflows, workflowDetail, iterations, iterationDetail, projects, projectDetail };

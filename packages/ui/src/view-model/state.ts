@@ -53,7 +53,7 @@ export type ResolveOptions<T> = {
   /**
    * Whether the payload lives in the execution projection.
    *
-   * Default `false`: the store-backed views (issues, projects, roadmap) answer
+   * Default `false`: the store-backed views (issues, projects) answer
    * successful envelopes with `generation: null`, and vetoing those made a working
    * read render as `unavailable` everywhere. The views whose rows come *from* the
    * projection set this, and keep the veto.
@@ -138,7 +138,7 @@ export function resolveSubjectMember<T>(
 
 /**
  * Resolve a plain envelope read (the `ReadEnvelope` views: issues, workflows,
- * iterations, projects, roadmap) into the same arms.
+ * iterations, projects) into the same arms.
  *
  * This exists so a screen does not need two resolvers: a view that answers with
  * a DTO directly is expressed as a `read` member with its projection-derived
@@ -159,7 +159,7 @@ export function resolveRead<T>(
     return { kind: "unavailable", reason: "the read envelope carries no projection" };
   }
   // Only a read whose rows *live in* the projection may be vetoed by a missing
-  // generation. The store-backed views (issues, projects, roadmap) answer successful
+  // generation. The store-backed views (issues, projects) answer successful
   // envelopes with `generation: null` — treating that as a failure made a working
   // read render as unavailable everywhere.
   if (requiresProjection && read.projection.generation === null) {

@@ -465,13 +465,13 @@ export const en = {
 
   projects: {
     listHeading: "Catalog projects",
-    listMeta: "Select a project to open its roadmap, issues and iterations",
+    listMeta: "Select a project to open its milestones, issues and iterations",
     lifecycleNote: "Lifecycle is the catalog lifecycle, never the execution state.",
     noLifecycle: "no lifecycle",
     pageTitle: "Projects",
     totalMeta: (n: number): string => `${n} ${n === 1 ? "project" : "projects"}`,
     openIssuesMeta: (n: number): string => `${n} open ${n === 1 ? "issue" : "issues"}`,
-    headNote: "a project owns its roadmap, issues and iterations",
+    headNote: "a project owns its milestones, issues and iterations",
     tableCaption: "Projects",
     columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
     openIssues: (count: number) => `${count} open`,
@@ -479,18 +479,15 @@ export const en = {
   },
 
   projectDetail: {
-  roadmapState: "roadmap present",
-  revisionLabel: "Revision",
   openIssuesUnit: "open issues",
     breadcrumb: { label: "Breadcrumb", trail: "Projects" },
     tabLabel: "Project features",
-    /** The fixed three features, in their fixed order (IA §4). */
-    features: { roadmap: "Roadmap", issues: "Issues", iterations: "Iterations" },
-    roadmap: {
+    /** The fixed list features, in their fixed order (IA §4). */
+    features: { issues: "Issues", iterations: "Iterations" },
+    milestones: {
       milestonesHeading: "Milestone board",
     milestonesUnit: "milestones",
     unassignedUnit: "unassigned issues",
-      milestoneProgress: (done: number, total: number) => `${done}/${total}`,
       milestoneOpen: (open: number) => `${open} open`,
       effort: (sessions: number) => `${sessions} sessions`,
       unestimated: "unestimated",
@@ -514,7 +511,6 @@ export const en = {
         removeConfirm: "Remove this milestone?",
         refusalLead: "The store refused the change:",
       },
-      absentNextStep: (features: string) => `This project still has: ${features}.`,
     },
     scope: {
       label: (projectId: string) => `project: ${projectId}`,

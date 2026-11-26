@@ -4,28 +4,29 @@
  *
  * The load-bearing assertions:
  *
- *  - the feature set is the fixed three, in order, and `Roadmap` is the default;
- *  - a project with no roadmap row renders the `absent` arm, not an empty board —
- *    and a project that *has* a roadmap with no milestones renders `empty`, which
- *    the two tests keep from collapsing into one string;
+ *  - the milestone rollup is the screen's default body, read from the
+ *    project-scoped `overview` read's `milestones` member;
+ *  - the list feature set is the fixed two, in order, and `Issues` is the default;
+ *  - an empty milestone set renders the `empty` arm with the create form still
+ *    offered — there is no `absent` arm and no tab, route or label named roadmap;
  *  - the scoped lists carry a chip naming the project, and clearing it is a model
  *    operation (the screen does not own the scope);
  *  - no envelope counter reaches either page.
  */
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ProjectListDTO, RoadmapDTO } from "@mstar-harness/engine";
+import type { MilestoneRead, OverviewMember, ProjectListDTO } from "@mstar-harness/engine";
 
 import {
   DEFAULT_PROJECT_FEATURE,
   PROJECT_FEATURES,
+  milestonesArm,
+  milestonesModel,
   projectIdentity,
   projectListModel,
-  roadmapBody,
-  roadmapFeatureArm,
 } from "../view-model/projects.ts";
 import type { Resolved } from "../view-model/state.ts";
-import type { RoadmapModel } from "../view-model/projects.ts";
+import type { MilestonesModel, ProjectIdentity } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
@@ -64,55 +65,47 @@ const catalogEntry = (over: Record<string, unknown> = {}) =>
     registeredAt: "2026-08-09T02:00:00.000Z",
     updatedAt: "2026-10-23T09:42:00.000Z",
     ...over,
-  }) as NonNullable<RoadmapDTO["catalog"]>;
+  }) as ProjectListDTO["items"][number]["project"];
 
-const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
+const identityRow = (over: Record<string, unknown> = {}) => {
+  const model = projectListModel({
+    data: { items: [{ project: catalogEntry(over), openIssues: 4 }], total: 1 },
+    projection,
+  });
+  if (model.rows.kind !== "populated") throw new Error("the list fixture must populate");
+  return model.rows.value[0]!;
+};
+
+const milestoneRead = (over: Partial<MilestoneRead> = {}): MilestoneRead => ({
   projectId: "engine",
-  catalog: catalogEntry(),
-  authority: { state: "present", revision: 7, contentHash: "sha256:abcd1234" },
-  content: {
-    contentMarkdown: "## Direction\n\nOne product, two hosts.",
-    frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active" as const, created_at: "2026-08-09" },
-    direction: "One product, two hosts.",
-    goals: [
-      { ordinal: 1, parentOrdinal: null, checked: true, title: "One design system", body: "" },
-      { ordinal: 2, parentOrdinal: 1, checked: false, title: "One token contract", body: "" },
-      { ordinal: 3, parentOrdinal: null, checked: false, title: "Two hosts", body: "" },
-    ],
-    milestones: ["Release the shared layer"],
-    sections: [],
-  },
-  milestones: {
-    projectId: "engine",
-    milestones: [
-      {
-        milestoneId: "9f2c4a10",
-        projectId: "engine",
-        name: "Release the shared layer",
-        effortSessions: 12,
-        status: "active",
-        ordinal: 0,
-        revision: 2,
-        createdAt: "2026-10-01T00:00:00.000Z",
-        updatedAt: "2026-10-02T00:00:00.000Z",
-        totalIssues: 10,
-        openIssues: 4,
-        resolvedIssues: 6,
-        otherRetiredIssues: 0,
-      },
-    ],
-    issues: [
-      { id: "I-000870", title: "Tone disagrees", acceptance: "", disposition: "open", revision: 1, milestoneId: "9f2c4a10" },
-      { id: "I-000871", title: "Unassigned one", acceptance: "", disposition: "open", revision: 1, milestoneId: "" },
-    ],
-    unassignedIssues: 3,
-  },
+  milestones: [
+    {
+      milestoneId: "9f2c4a10",
+      projectId: "engine",
+      name: "Release the shared layer",
+      effortSessions: 12,
+      status: "active",
+      ordinal: 0,
+      revision: 2,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-02T00:00:00.000Z",
+      totalIssues: 10,
+      openIssues: 4,
+      resolvedIssues: 6,
+      otherRetiredIssues: 0,
+    },
+  ],
+  issues: [
+    { id: "I-000870", title: "Tone disagrees", acceptance: "", disposition: "open", revision: 1, milestoneId: "9f2c4a10" },
+    { id: "I-000871", title: "Unassigned one", acceptance: "", disposition: "open", revision: 1, milestoneId: "" },
+  ],
+  unassignedIssues: 3,
   ...over,
 });
 
 const milestoneRow = (
-  over: Partial<RoadmapDTO["milestones"]["milestones"][number]> = {},
-): RoadmapDTO["milestones"]["milestones"][number] => ({
+  over: Partial<MilestoneRead["milestones"][number]> = {},
+): MilestoneRead["milestones"][number] => ({
   milestoneId: "9f2c4a10",
   projectId: "engine",
   name: "Release the shared layer",
@@ -128,6 +121,9 @@ const milestoneRow = (
   otherRetiredIssues: 0,
   ...over,
 });
+
+/** The arm the screen renders for one rollup read. */
+const armOf = (read: MilestoneRead): Resolved<MilestonesModel> => milestonesArm({ state: "read", data: read });
 
 // why: a slot assertion must be met inside this milestone's own block, not anywhere on the page.
 const boardBlockOf = (html: string, milestoneId: string): string => {
@@ -147,8 +143,12 @@ const projectsCopy: ProjectsCopy = {
   pageTitle: "Projects",
   totalMeta: (n) => `${n} ${n === 1 ? "project" : "projects"}`,
   openIssuesMeta: (n) => `${n} open ${n === 1 ? "issue" : "issues"}`,
-  headNote: "a project owns its roadmap, issues and iterations",
+  headNote: "a project owns its milestones, issues and iterations",
   tableCaption: "Projects",
+  listHeading: "Catalog projects",
+  listMeta: "Select a project to open its milestones, issues and iterations",
+  lifecycleNote: "Lifecycle is the catalog lifecycle, never the execution state.",
+  noLifecycle: "no lifecycle",
   columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
   openIssues: (count) => `${count} open`,
   noDescription: "—",
@@ -166,17 +166,14 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
   );
 
 const detailCopy: ProjectDetailCopy = {
-  roadmapState: "roadmap present",
-  revisionLabel: "Revision",
   openIssuesUnit: "open issues",
   breadcrumb: { label: "Breadcrumb", trail: "Projects" },
   tabLabel: "Features",
-  features: { roadmap: "Roadmap", issues: "Issues", iterations: "Iterations" },
-  roadmap: {
+  features: { issues: "Issues", iterations: "Iterations" },
+  milestones: {
     milestonesHeading: "Milestones",
     milestonesUnit: "milestones",
     unassignedUnit: "unassigned issues",
-    milestoneProgress: (done, total) => `${done}/${total}`,
     milestoneOpen: (open) => `${open} open`,
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
     effort: (sessions) => `${sessions} sessions`,
@@ -200,22 +197,20 @@ const detailCopy: ProjectDetailCopy = {
     },
     timelineUnassigned: "unassigned",
     timelineUnassignedIssues: (count) => `${count} issues`,
-    absentNextStep: (features) => `Available: ${features}`,
   },
   scope: { label: (id) => `project: ${id}`, clear: "Clear the project scope" },
   absence: {
-    absent: { labelWord: "absent", heading: "Roadmap", body: "this project declares no roadmap", pointer: "x" },
-    empty: { labelWord: "empty", heading: "Milestones", body: "the roadmap has no milestones", hint: "add one" },
-    unavailable: { labelWord: "unavailable", heading: "Roadmap", body: "the read failed" },
-    "not-applicable": { labelWord: "n/a", heading: "Roadmap", body: "no project resolves" },
+    empty: { labelWord: "empty", heading: "Milestones", body: "no milestones yet", hint: "add one" },
+    unavailable: { labelWord: "unavailable", heading: "Milestones", body: "the read failed" },
+    "not-applicable": { labelWord: "n/a", heading: "Milestones", body: "no project resolves" },
   },
 };
 
 const renderDetail = (
   input: {
-    roadmap?: Resolved<RoadmapModel>;
-    feature?: "roadmap" | "issues" | "iterations";
-    identity?: ReturnType<typeof projectIdentity>;
+    milestones?: Resolved<MilestonesModel>;
+    feature?: "issues" | "iterations";
+    identity?: ProjectIdentity;
     writes?: ProjectDetailProps["writes"];
     assignableIssues?: ProjectDetailProps["assignableIssues"];
     drafts?: ProjectDetailProps["drafts"];
@@ -224,10 +219,10 @@ const renderDetail = (
 ): string =>
   renderToStaticMarkup(
     <ProjectDetailScreen
-      identity={input.identity ?? projectIdentity(catalogEntry())}
+      identity={input.identity ?? projectIdentity(identityRow())}
       feature={input.feature ?? DEFAULT_PROJECT_FEATURE}
       onFeatureChange={() => {}}
-      roadmap={input.roadmap ?? roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }))}
+      milestones={input.milestones ?? armOf(milestoneRead())}
       issues={<div data-ms-scoped-list="issues" />}
       iterations={<div data-ms-scoped-list="iterations" />}
       copy={detailCopy}
@@ -272,87 +267,73 @@ describe("Projects list — the facts of §8.2", () => {
   });
 });
 
-describe("ProjectDetail — the fixed feature set", () => {
+describe("ProjectDetail — the milestone body and the fixed feature set", () => {
   const html = renderDetail({});
 
-  test("the three features render in the fixed order", () => {
-    const positions = ["Roadmap", "Issues", "Iterations"].map((label) => html.indexOf(label));
+  test("the two list features render in the fixed order", () => {
+    const positions = ["Issues", "Iterations"].map((label) => html.indexOf(label));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
-    expect(html.match(/role="tab"/g)?.length).toBe(3);
+    expect(html.match(/role="tab"/g)?.length).toBe(2);
   });
 
-  test("Roadmap is the default for every project, by constant not by content", () => {
-    expect(DEFAULT_PROJECT_FEATURE).toBe("roadmap");
-    expect(PROJECT_FEATURES).toEqual(["roadmap", "issues", "iterations"]);
-    // The default renders the roadmap body even though Issues has more content.
-    expect(html).toContain('data-ms-feature="roadmap"');
+  test("Issues is the default for every project, by constant not by content", () => {
+    expect(DEFAULT_PROJECT_FEATURE).toBe("issues");
+    expect(PROJECT_FEATURES).toEqual(["issues", "iterations"]);
+    expect(html).toContain('data-ms-feature="issues"');
     expect(html).toContain('aria-selected="true"');
   });
 
-  test("it never auto-selects a feature that has content", () => {
-    const withEmptyRoadmap = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ authority: { state: "absent" }, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
-    });
-    // The roadmap is absent and Issues would have content — the tab must not move.
-    expect(withEmptyRoadmap).toContain('data-ms-absence="absent"');
-    expect(withEmptyRoadmap).not.toContain('data-ms-scoped-list="issues"');
+  test("NEGATIVE: no tab, route or label named roadmap survives", () => {
+    expect(html).not.toContain("Roadmap");
+    expect(html).not.toContain("roadmap");
   });
 
-  test("the identity head carries id, lifecycle and the harness-relative path", () => {
-    expect(html).toContain("projects:engine");
+  test("the milestone rollup is the default body, on every feature", () => {
+    expect(html).toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-milestone-timeline=""');
+    // The body is not a tab: selecting the other feature keeps it mounted.
+    expect(renderDetail({ feature: "iterations" })).toContain('data-ms-milestones=""');
+  });
+
+  test("it never auto-selects a feature that has content", () => {
+    const empty = renderDetail({ milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })) });
+    // The milestone set is empty and Issues would have content — the tab must not move.
+    expect(empty).toContain('data-ms-absence="empty"');
+    expect(empty).toContain('data-ms-feature="issues"');
+  });
+
+  test("the identity head carries id, lifecycle and the list's own title", () => {
     expect(html).toContain("Engine");
+    expect(html).toContain("active");
     expect(html).toContain('aria-current="page"');
   });
 
-  test("NEGATIVE: no counter from the read envelope and no document block", () => {
-    // The counters belong to the read envelope, not the record; the authority row
-    // (with its content hash) is one of the document blocks Task 3 removed.
+  test("NEGATIVE: no counter from the read envelope", () => {
     for (const removed of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "sha256:abcd1234"]) {
       expect(html).not.toContain(removed);
     }
   });
 });
 
-describe("ProjectDetail — the header direction and the removed document blocks (plan Task 3)", () => {
+describe("ProjectDetail — the header description", () => {
   const html = renderDetail({});
 
-  test("the roadmap's direction sits in the header, above the identity meta", () => {
+  test("the project's description sits in the header, above the identity meta", () => {
     expect(html).toContain('data-ms-direction=""');
-    // Above the identity meta line: the direction precedes the head's meta.
-    expect(html.indexOf("One product, two hosts.")).toBeLessThan(html.indexOf("Revision"));
+    expect(html).toContain("Store, projection and gates");
+    // Above the identity meta line: the description precedes the head's meta.
+    expect(html.indexOf("Store, projection and gates")).toBeLessThan(html.indexOf("detail-meta"));
     expect(html).not.toContain("<details");
   });
 
-  test("no roadmap direction falls back to the catalog description; neither renders nothing", () => {
-    const fallback = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: { ...roadmap().content!, direction: null } }),
-          projection,
-        }),
-      ),
-    });
-    expect(fallback).toContain('data-ms-direction=""');
-    expect(fallback).toContain("Store, projection and gates");
-  });
-
-  test("NEGATIVE: the catalog-identity, roadmap-authority, stored-markdown and stored-facts blocks are gone", () => {
-    for (const gone of ["Catalog identity", "Roadmap authority", "Stored facts", "data-ms-roadmap-markdown", "Content hash"]) {
-      expect(html).not.toContain(gone);
-    }
-    // The roadmap-presence chip and location line stay.
-    expect(html).toContain("roadmap present");
-    expect(html).toContain("projects:engine");
+  test("no description renders nothing, not a dash", () => {
+    const bare = renderDetail({ identity: projectIdentity(identityRow({ description: null })) });
+    expect(bare).not.toContain('data-ms-direction=""');
   });
 });
 
-describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
+describe("ProjectDetail — the milestone timeline", () => {
   const html = renderDetail({});
 
   test("one node per milestone plus the trailing unassigned node", () => {
@@ -376,48 +357,42 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
     // disagree: by id ascending a, b, c; by id descending c, b, a; by effort
     // ascending b(3), c(4), a(5); by effort descending a(5), c(4), b(3).
     const ordered = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            milestones: {
-              projectId: "engine",
-              milestones: [
-                milestoneRow({
-                  milestoneId: "b-position",
-                  name: "Third position",
-                  effortSessions: 3,
-                  status: "active",
-                  ordinal: 1,
-                  totalIssues: 0,
-                  resolvedIssues: 0,
-                  openIssues: 0,
-                }),
-                milestoneRow({
-                  milestoneId: "a-position",
-                  name: "Second position",
-                  effortSessions: 5,
-                  status: "planned",
-                  ordinal: 1,
-                  totalIssues: 0,
-                  resolvedIssues: 0,
-                  openIssues: 0,
-                }),
-                milestoneRow({
-                  milestoneId: "c-position",
-                  name: "First position",
-                  effortSessions: 4,
-                  status: "delivered",
-                  ordinal: 0,
-                  totalIssues: 2,
-                  resolvedIssues: 2,
-                  openIssues: 0,
-                }),
-              ],
-              issues: [],
-              unassignedIssues: 1,
-            },
-          }),
-          projection,
+      milestones: armOf(
+        milestoneRead({
+          milestones: [
+            milestoneRow({
+              milestoneId: "b-position",
+              name: "Third position",
+              effortSessions: 3,
+              status: "active",
+              ordinal: 1,
+              totalIssues: 0,
+              resolvedIssues: 0,
+              openIssues: 0,
+            }),
+            milestoneRow({
+              milestoneId: "a-position",
+              name: "Second position",
+              effortSessions: 5,
+              status: "planned",
+              ordinal: 1,
+              totalIssues: 0,
+              resolvedIssues: 0,
+              openIssues: 0,
+            }),
+            milestoneRow({
+              milestoneId: "c-position",
+              name: "First position",
+              effortSessions: 4,
+              status: "delivered",
+              ordinal: 0,
+              totalIssues: 2,
+              resolvedIssues: 2,
+              openIssues: 0,
+            }),
+          ],
+          issues: [],
+          unassignedIssues: 1,
         }),
       ),
     });
@@ -440,17 +415,11 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
 
   test("an unestimated milestone says so in its own node", () => {
     const page = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            milestones: {
-              projectId: "engine",
-              milestones: [milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, status: null, totalIssues: 0 })],
-              issues: [],
-              unassignedIssues: 0,
-            },
-          }),
-          projection,
+      milestones: armOf(
+        milestoneRead({
+          milestones: [milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, status: null, totalIssues: 0 })],
+          issues: [],
+          unassignedIssues: 0,
         }),
       ),
     });
@@ -460,15 +429,10 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
   });
 });
 
-describe("ProjectDetail — the Roadmap feature", () => {
+describe("ProjectDetail — the milestone board", () => {
   const html = renderDetail({});
 
-  test("the direction is header text, not a disclosure", () => {
-    expect(html).toContain("One product, two hosts.");
-    expect(html).not.toContain("<details");
-  });
-
-  test("the milestone board carries status, effort sessions, the four tallies and its issues", () => {
+  test("the board carries status, effort sessions, the four tallies and its issues", () => {
     // why: every slot is asserted inside this milestone's own block — the timeline node
     // prints the same effort line, so a page-wide search would pass with the board slot gone.
     const block = boardBlockOf(html, "9f2c4a10");
@@ -503,25 +467,18 @@ describe("ProjectDetail — the Roadmap feature", () => {
 
   test("an unestimated milestone says so on the board row, and the estimate never leaks to another row", () => {
     const page = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            milestones: {
-              projectId: "engine",
-              milestones: [
-                milestoneRow({ milestoneId: "estimated", name: "Estimated one", effortSessions: 4, totalIssues: 0, resolvedIssues: 0, openIssues: 0 }),
-                milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, totalIssues: 0, resolvedIssues: 0, openIssues: 0 }),
-              ],
-              issues: [],
-              unassignedIssues: 0,
-            },
-          }),
-          projection,
+      milestones: armOf(
+        milestoneRead({
+          milestones: [
+            milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, status: null, totalIssues: 0 }),
+            milestoneRow({ milestoneId: "estimated", name: "Estimated", effortSessions: 4, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+          ],
+          issues: [],
+          unassignedIssues: 0,
         }),
       ),
     });
     expect(boardBlockOf(page, "never")).toContain("unestimated");
-    expect(boardBlockOf(page, "never")).not.toContain("sessions");
     expect(boardBlockOf(page, "estimated")).toContain("4 sessions");
     expect(boardBlockOf(page, "estimated")).not.toContain("unestimated");
   });
@@ -530,121 +487,49 @@ describe("ProjectDetail — the Roadmap feature", () => {
     expect(html).toContain('data-ms-unassigned="3"');
     expect(html).toContain("3 unassigned");
   });
-
 });
 
-describe("ProjectDetail — no roadmap row is absent, an empty milestone set is empty", () => {
-  test("a project with no roadmap authority row and no milestone work renders the absent arm", () => {
+describe("ProjectDetail — the milestone body's arms", () => {
+  test("an empty milestone set is the empty arm — no board, no zero-width bar", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ authority: { state: "absent" }, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })),
     });
-    expect(html).toContain('data-ms-absence="absent"');
-    // Structure: no empty board, no zero-width bar.
-    expect(html).not.toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-absence="empty"');
     expect(html).not.toContain('data-ms-milestones=""');
     expect(html).not.toContain("progressbar");
-    // The continuation is offered: the two features that do have content.
-    expect(html).toContain("Issues · Iterations");
-    // Greptile 5: with no roadmap direction available, the header states the
-    // CATALOG description — an absent roadmap does not erase what the project is.
+    // The header still states the catalog description.
     expect(html).toContain('data-ms-direction=""');
     expect(html).toContain("Store, projection and gates");
   });
 
-  test("a null roadmap read is absent too — never unreadable", () => {
-    // The contract's answer: a failed read answers `unavailable`, so a null
-    // payload can only mean the project declares no roadmap.
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: null, projection })) });
-    expect(html).toContain('data-ms-absence="absent"');
-    expect(html).not.toContain('data-ms-absence="unavailable"');
-  });
-
-  test("a roadmap that exists with no milestones and no goals is empty, not absent", () => {
+  test("unassigned issues alone populate the body", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            content: null,
-            milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-          }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 4 })),
     });
-    expect(html).toContain('data-ms-absence="empty"');
-    expect(html).toContain("the roadmap has no milestones");
-    expect(html).not.toContain('data-ms-absence="absent"');
-  });
-
-  test("a roadmap with only a direction keeps rendering it (E)", () => {
-    // Before the fix this answered `empty` because goals and milestones were both
-    // absent — hiding content the reader can act on behind "nothing here".
-    const onlyDirection = roadmap({
-      content: {
-        contentMarkdown: "",
-        frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
-        direction: "One product, two hosts.",
-        goals: [],
-        milestones: [],
-        sections: [],
-      },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: onlyDirection, projection })) });
-    expect(html).toContain('data-ms-feature="roadmap"');
-    expect(html).toContain("One product, two hosts.");
     expect(html).not.toContain('data-ms-absence="empty"');
+    expect(html).toContain('data-ms-unassigned="4"');
   });
 
-  test("a roadmap whose only content was the stored document is now the empty arm (Task 3)", () => {
-    // The stored markdown panel is gone; with nothing rendered the page says empty.
-    const onlyMarkdown = roadmap({
-      content: {
-        contentMarkdown: "## Notes\n\nStored direction lives here.",
-        frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
-        direction: null,
-        goals: [],
-        milestones: [],
-        sections: [],
-      },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: onlyMarkdown, projection })) });
-    expect(html).not.toContain('data-ms-roadmap-markdown=""');
-    expect(html).toContain('data-ms-absence="empty"');
-  });
-
-  test("a truly empty roadmap is still the empty arm (E)", () => {
-    const nothing = roadmap({
-      content: null,
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: nothing, projection })) });
-    expect(html).toContain('data-ms-absence="empty"');
-  });
-
-  test("a failed read is unavailable, carrying the store's message", () => {
-    // A real failure: the payload is missing, not merely unprojected.
+  test("a not-applicable member renders its own arm with the store's reason", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: undefined as never, projection: { ...projection, generation: null } })),
+      milestones: milestonesArm({ state: "not-applicable", reason: "no project resolves for this read" }),
+    });
+    expect(html).toContain('data-ms-absence="not-applicable"');
+    expect(html).toContain("no project resolves for this read");
+  });
+
+  test("an unavailable member renders its own arm, carrying the store's message", () => {
+    const html = renderDetail({
+      milestones: milestonesArm({ state: "unavailable", reason: "the milestone read could not be completed" }),
     });
     expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("could not be completed");
+    expect(html).toContain("the milestone read could not be completed");
   });
 
-  test("a roadmap with no published generation still renders its content", () => {
-    // The roadmap is store-backed: `generation: null` on a successful read is not a
-    // failure, and treating it as one emptied the Roadmap feature.
-    const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap(), projection: { ...projection, generation: null } })),
-    });
-    expect(html).not.toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("One product, two hosts");
+  test("a pending read renders no arm", () => {
+    const html = renderDetail({ milestones: { kind: "loading" } });
+    expect(html).not.toContain('data-ms-absence=');
+    expect(html).not.toContain('data-ms-milestones=""');
   });
 });
 
@@ -768,9 +653,9 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
 });
 
 describe("ProjectDetail — the edit form's draft and patch contract", () => {
-  const stored = (): RoadmapModel["milestones"][number] => {
-    const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
-    if (arm.kind !== "populated") throw new Error("the roadmap fixture must read as populated");
+  const stored = (): MilestonesModel["milestones"][number] => {
+    const arm = armOf(milestoneRead());
+    if (arm.kind !== "populated") throw new Error("the milestone fixture must read as populated");
     return arm.value.milestones[0]!;
   };
 
@@ -881,21 +766,15 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
 
   test("the rendered timeline places the gap-created milestone last", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            milestones: {
-              projectId: "engine",
-              milestones: [
-                milestoneRow({ milestoneId: "first-kept", ordinal: 0, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
-                milestoneRow({ milestoneId: "second-kept", ordinal: 2, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
-                milestoneRow({ milestoneId: "created-after", ordinal: 3, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
-              ],
-              issues: [],
-              unassignedIssues: 0,
-            },
-          }),
-          projection,
+      milestones: armOf(
+        milestoneRead({
+          milestones: [
+            milestoneRow({ milestoneId: "first-kept", ordinal: 0, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+            milestoneRow({ milestoneId: "second-kept", ordinal: 2, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+            milestoneRow({ milestoneId: "created-after", ordinal: 3, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+          ],
+          issues: [],
+          unassignedIssues: 0,
         }),
       ),
     });
@@ -917,7 +796,7 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 });
 
-describe("ProjectDetail — the write controls reach every roadmap state (Greptile 2)", () => {
+describe("ProjectDetail — the write controls reach every answered arm", () => {
   const writes: NonNullable<ProjectDetailProps["writes"]> = {
     busy: false,
     refusal: null,
@@ -929,12 +808,7 @@ describe("ProjectDetail — the write controls reach every roadmap state (Grepti
 
   test("an EMPTY milestone set still renders the create form, so the first one is creatable", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })),
       writes,
     });
     // The empty arm is what a project with no milestones reads as — and the create
@@ -943,140 +817,23 @@ describe("ProjectDetail — the write controls reach every roadmap state (Grepti
     expect(html).toContain('data-ms-milestone-create=""');
   });
 
-  test("an ABSENT roadmap row still renders the create form", () => {
-    const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            authority: { state: "absent" },
-            milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-          }),
-          projection,
-        }),
-      ),
-      writes,
-    });
-    expect(html).toContain('data-ms-absence="absent"');
+  test("a populated board renders the create form beside it", () => {
+    const html = renderDetail({ writes });
+    expect(html).toContain('data-ms-milestones-arm="populated"');
     expect(html).toContain('data-ms-milestone-create=""');
-    expect(html).toContain('data-ms-roadmap-arm="absent"');
   });
 
   test("no write surface, no create form, whatever the arm", () => {
     const empty = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })),
     });
     expect(empty).not.toContain("data-ms-milestone-create");
     expect(renderDetail({})).not.toContain("data-ms-milestone-create");
   });
 });
 
-describe("ProjectDetail — the catalog description survives the absent/empty arms (Greptile 5)", () => {
-  test("an empty roadmap shows the description the roadmap does not supply", () => {
-    const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
-    });
-    expect(html).toContain('data-ms-direction=""');
-    expect(html).toContain("Store, projection and gates");
-  });
-
-  test("a populated roadmap's own direction still wins over the description", () => {
-    const html = renderDetail({});
-    expect(html).toContain("One product, two hosts.");
-    expect(html).not.toContain("Store, projection and gates");
-  });
-});
-
-describe("ProjectDetail — a project with no roadmap row keeps its milestones (Greptile)", () => {
-  const writes: NonNullable<ProjectDetailProps["writes"]> = {
-    busy: false,
-    refusal: null,
-    create: () => {},
-    update: () => {},
-    assign: () => {},
-    remove: () => {},
-  };
-
-  test("carried milestones lift the absent roadmap into the populated board", () => {
-    // The milestone read is independent of the stored document, so a project with no
-    // roadmap ROW can still own milestones — including one created from this page.
-    // Answering the bare `absent` arm hid them, which made the saved milestone
-    // disappear and left it uneditable.
-    const carried = roadmap({
-      authority: { state: "absent" },
-      // No roadmap ROW means no stored document either: milestones only.
-      content: null,
-      milestones: {
-        projectId: "engine",
-        milestones: [
-          {
-            milestoneId: "a1b2c3d4",
-            projectId: "engine",
-            name: "Created without a roadmap",
-            effortSessions: null,
-            status: "planned",
-            ordinal: 0,
-            revision: 1,
-            createdAt: "2026-10-01T00:00:00.000Z",
-            updatedAt: "2026-10-01T00:00:00.000Z",
-            totalIssues: 0,
-            openIssues: 0,
-            resolvedIssues: 0,
-            otherRetiredIssues: 0,
-          },
-        ],
-        issues: [],
-        unassignedIssues: 0,
-      },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: carried, projection })), writes });
-    // The board and the timeline both show it; the absence arm is gone.
-    expect(html).not.toContain('data-ms-absence="absent"');
-    expect(html).toContain('data-ms-milestones=""');
-    expect(html).toContain("Created without a roadmap");
-    expect(html).toContain("unestimated");
-    expect(html).toContain('data-ms-timeline-node="a1b2c3d4"');
-    expect(html).toContain('data-ms-milestone="a1b2c3d4"');
-    // And it stays writable: the create form and its edit control are there.
-    expect(html).toContain('data-ms-milestone-create=""');
-    expect(html).toContain('data-ms-milestone-edit=""');
-    // No roadmap direction exists, so the header keeps the catalog description.
-    expect(html).toContain('data-ms-direction=""');
-    expect(html).toContain("Store, projection and gates");
-  });
-
-  test("carried UNASSIGNED issues alone also lift the arm (they are milestone work too)", () => {
-    const carried = roadmap({
-      authority: { state: "absent" },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 4 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: carried, projection })) });
-    expect(html).not.toContain('data-ms-absence="absent"');
-    expect(html).toContain('data-ms-unassigned="4"');
-  });
-
-  test("no carried milestone work keeps the absent EmptyState", () => {
-    const bare = roadmap({
-      authority: { state: "absent" },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: bare, projection })) });
-    expect(html).toContain('data-ms-absence="absent"');
-    expect(html).not.toContain('data-ms-milestones=""');
-  });
-});
-
 describe("ProjectDetail — the host-owned draft store", () => {
-  // why: the forms live under the roadmap read, so a refresh unmounts them — the draft must
+  // why: the forms live under the milestone read, so a refresh unmounts them — the draft must
   // be the host's, keyed per target, or the operator's typed text dies with the subtree.
   test("the store keeps one draft per target, and clear drops only that target", () => {
     const store = createMilestoneDraftStore();
@@ -1148,10 +905,34 @@ describe("ProjectDetail — the host-owned draft store", () => {
     expect(milestonePatch(milestone, seeded)).toEqual({ name: "Renamed", effortSessions: 9, status: "delivered" });
   });
 
-  function stored(): RoadmapModel["milestones"][number] {
-    const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
-    if (arm.kind !== "populated") throw new Error("the roadmap fixture must read as populated");
+  function stored(): MilestonesModel["milestones"][number] {
+    const arm = armOf(milestoneRead());
+    if (arm.kind !== "populated") throw new Error("the milestone fixture must read as populated");
     return arm.value.milestones[0]!;
   }
 });
 
+describe("milestonesArm — the one absence authority for the milestone body", () => {
+  test("a read member with work is populated; without work it is empty", () => {
+    expect(armOf(milestoneRead()).kind).toBe("populated");
+    expect(armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })).kind).toBe("empty");
+  });
+
+  test("the member's own not-applicable and unavailable states pass through", () => {
+    const notApplicable: OverviewMember<MilestoneRead> = { state: "not-applicable", reason: "no project resolves" };
+    const unavailable: OverviewMember<MilestoneRead> = { state: "unavailable", reason: "store refused" };
+    expect(milestonesArm(notApplicable)).toEqual({ kind: "not-applicable", reason: "no project resolves" });
+    expect(milestonesArm(unavailable)).toEqual({ kind: "unavailable", reason: "store refused" });
+  });
+
+  test("the model carries the rollup's own tallies and the per-milestone issue list", () => {
+    const model = milestonesModel(milestoneRead());
+    expect(model.unassignedIssues).toBe(3);
+    expect(model.milestones[0]).toMatchObject({
+      milestoneId: "9f2c4a10",
+      counts: { open: 4, resolved: 6, retired: 0, total: 10 },
+      progress: { done: 6, total: 10 },
+    });
+    expect(model.milestones[0]!.issues.map((issue) => issue.id)).toEqual(["I-000870"]);
+  });
+});

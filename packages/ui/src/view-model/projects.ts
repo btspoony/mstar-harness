@@ -2,21 +2,19 @@
  * Projects list + detail transforms.
  *
  * IA §8.2: the list carries id/title, description, lifecycle and the open-issue
- * count; the detail's identity block carries title, description, lifecycle and
- * the `{HARNESS_DIR}`-relative path. The path stays because it *is* the record's
- * identity — one cell, and what a developer types to reach the project. The
- * catalog revision and the registered/updated dates are **not** returned (IA
- * §8.1: churn metadata).
+ * count; the detail's identity block carries the same facts from the same list
+ * read, so the head cannot disagree with the row the reader opened.
  *
- * The three features of a project (Roadmap / Issues / Iterations) are fixed by
- * IA §4. This module only orders them and names the arm each one starts in; the
- * rows come from the issue and iteration transforms.
+ * The project screen's default body is the milestone rollup (the `overview`
+ * view's project-scoped `milestones` member); the two list features (Issues /
+ * Iterations) are fixed by IA §4. This module only orders them and names the
+ * arm each one starts in; the rows come from the issue and iteration
+ * transforms.
  */
-import type { ProjectListDTO, RoadmapContent, RoadmapDTO } from "@mstar-harness/engine";
+import type { MilestoneRead, OverviewMember, ProjectListDTO } from "@mstar-harness/engine";
 
 import type { Resolved } from "./state.ts";
-import { resolveRead, resolveRecord } from "./state.ts";
-import { formatDate } from "./format.ts";
+import { resolveMember, resolveRead } from "./state.ts";
 import { lifecycleTone, type Tone } from "./status.ts";
 import { countText } from "./format.ts";
 
@@ -63,20 +61,8 @@ export function projectListModel(read: {
   };
 }
 
-/**
- * One row of a {@link RoadmapModel}'s goal list: a goal's title and whether it is
- * checked, plus its depth so a sub-goal reads as one without a second list.
- */
-export type RoadmapGoal = {
-  ordinal: number;
-  /** 0 for a top-level goal; 1 for a goal under one. */
-  depth: number;
-  checked: boolean;
-  title: string;
-};
-
-/** One milestone of the roadmap board. */
-export type RoadmapMilestone = {
+/** One milestone of the project screen's board. */
+export type Milestone = {
   milestoneId: string;
   name: string;
   status: string | null;
@@ -91,43 +77,20 @@ export type RoadmapMilestone = {
 };
 
 /**
- * The Roadmap feature's body.
- *
- * `direction` and `goals` come from the stored Markdown; the milestone board comes
- * from the milestone read, which is authoritative and independent of the file
- * (`RoadmapDTO` §4: a project with milestones and no content answers
- * `content: null` and still carries them). A project with neither is the
- * `absent` arm and never reaches this model. The document blocks (catalog
- * identity, roadmap authority, stored markdown, stored facts) were removed from
- * the page by the dashboard alignment change, Task 3, so the model no longer
- * carries them.
+ * The project screen's milestone body: the board plus the unassigned count.
+ * Everything here comes from the milestone rollup (`MilestoneRead`), which is
+ * the one authority for milestone work.
  */
-export type RoadmapModel = {
-  direction: string | null;
-  goals: readonly RoadmapGoal[];
-  milestones: readonly RoadmapMilestone[];
+export type MilestonesModel = {
+  milestones: readonly Milestone[];
   /** Issues with no milestone: a count, and the reason they are not on the board. */
   unassignedIssues: number;
 };
 
-/**
- * Build the roadmap body.
- *
- * `depth` is derived from `parentOrdinal` because the board renders a flat list
- * with an indent: a nested list would make a sub-goal's check state read as its
- * parent's, and the stored document is flat with parent references.
- */
-export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): RoadmapModel {
-  const parents = new Set((content?.goals ?? []).map((goal) => goal.ordinal));
+/** Build the milestone body from the rollup. */
+export function milestonesModel(read: MilestoneRead): MilestonesModel {
   return {
-    direction: content?.direction ?? null,
-    goals: (content?.goals ?? []).map((goal) => ({
-      ordinal: goal.ordinal,
-      depth: goal.parentOrdinal !== null && parents.has(goal.parentOrdinal) ? 1 : 0,
-      checked: goal.checked,
-      title: goal.title,
-    })),
-    milestones: read.milestones.milestones.map((milestone) => ({
+    milestones: read.milestones.map((milestone) => ({
       milestoneId: milestone.milestoneId,
       name: milestone.name,
       status: milestone.status,
@@ -141,112 +104,69 @@ export function roadmapModel(read: RoadmapDTO, content: RoadmapContent | null): 
         retired: milestone.otherRetiredIssues,
         total: milestone.totalIssues,
       },
-      issues: read.milestones.issues
+      issues: read.issues
         .filter((issue) => issue.milestoneId === milestone.milestoneId)
         .map((issue) => ({ id: issue.id, title: issue.title, disposition: issue.disposition, revision: issue.revision })),
     })),
-    unassignedIssues: read.milestones.unassignedIssues,
+    unassignedIssues: read.unassignedIssues,
   };
 }
 
-/** A project's identity block — the whole of what IA §8.2 allows here. */
+/**
+ * The arm the milestone body renders, from the `overview` read's project-scoped
+ * `milestones` member.
+ *
+ * A read that answered with no milestones and no unassigned issues is `empty` —
+ * the concept is declared and the set happens to be empty, and the create form
+ * is still offered. `not-applicable` means no project resolved for the read;
+ * `unavailable` carries the store's own reason. There is no `absent` arm: with
+ * the roadmap document gone, no project "declares no milestones".
+ */
+export function milestonesArm(member: OverviewMember<MilestoneRead>): Resolved<MilestonesModel> {
+  const arm = resolveMember(member, {
+    whenNull: "empty",
+    isEmpty: (read) => read.milestones.length === 0 && read.unassignedIssues === 0,
+  });
+  return arm.kind === "populated" ? { kind: "populated", value: milestonesModel(arm.value) } : arm;
+}
+
+/** A project's identity block — the facts the project list read answers. */
 export type ProjectIdentity = {
   projectId: string;
   title: string;
   description: string | null;
   lifecycle: string;
   lifecycleTone: Tone;
-  /** `{HARNESS_DIR}`-relative location, e.g. `projects/engine`. */
-  path: string;
-  /** The catalog revision, printed in the head's meta line. */
-  revision: string;
-  /**
-   * The catalog row's two dates, for the identity panel's last two rows. `null` when the
-   * record is unknown: an empty string would assert a blank date on every consumer.
-   */
-  registeredAt: string | null;
-  updatedAt: string | null;
 };
 
-/** The identity block from the roadmap's catalog identity. */
-export function projectIdentity(catalog: RoadmapDTO["catalog"]): ProjectIdentity {
+/** The identity block from the project list's row — the same read the list renders. */
+export function projectIdentity(row: ProjectRow): ProjectIdentity {
   return {
-    projectId: catalog.id,
-    title: catalog.title,
-    description: catalog.description,
-    lifecycle: catalog.lifecycle,
-    lifecycleTone: lifecycleTone(catalog.lifecycle),
-    path: `${catalog.rootKind}:${catalog.relativePath}`,
-    revision: String(catalog.revision),
-    registeredAt: formatDate(catalog.registeredAt),
-    updatedAt: formatDate(catalog.updatedAt),
+    projectId: row.projectId,
+    title: row.title,
+    description: row.description,
+    lifecycle: row.lifecycle,
+    lifecycleTone: row.lifecycleTone,
   };
 }
 
 /**
- * A project's features, in the fixed order of IA §4. The project detail defaults
- * to `roadmap`; the tab set is not configurable, because a project that dropped a
- * feature would silently answer a different question.
+ * The identity block when the list carries no row for the project. The route
+ * still names the project, so the head says where the reader is; it claims
+ * nothing else, because it knows nothing else.
  */
-export const PROJECT_FEATURES = ["roadmap", "issues", "iterations"] as const;
+export function projectIdentityFor(projectId: string): ProjectIdentity {
+  return { projectId, title: projectId, description: null, lifecycle: "unknown", lifecycleTone: "neutral" };
+}
+
+/**
+ * A project's list features, in the fixed order of IA §4. The tab set is not
+ * configurable, because a project that dropped a feature would silently answer
+ * a different question. The milestone rollup is the screen's default body, not
+ * a tab.
+ */
+export const PROJECT_FEATURES = ["issues", "iterations"] as const;
 export type ProjectFeature = (typeof PROJECT_FEATURES)[number];
 
 /** The feature a project detail opens on. */
-export const DEFAULT_PROJECT_FEATURE: ProjectFeature = "roadmap";
-
-/**
- * The arm a feature's body starts in, given the roadmap read.
- *
- * Two different zeroes, and IA §4 says they must never collapse:
- *
- *  - a project with **no roadmap authority row** (`_default` is the real case) is
- *    `absent` — no direction, no goals, no milestone set, and no empty board or
- *    zero-width bar to imply otherwise;
- *  - a roadmap that exists with an empty milestone set is `empty` — the concept is
- *    declared and the set happens to be empty.
- *
- * `null` here means absent, not unreadable: a failed read answers `unavailable`
- * through `projection`/the transport, so a `null` payload cannot be a failure.
- */
-export function roadmapFeatureArm(read: {
-  data: RoadmapDTO | null;
-  projection: { generation: number | null };
-}): Resolved<RoadmapDTO> {
-  const arm = resolveRecord(read, { unavailableReason: "the roadmap read could not be completed" });
-  if (arm.kind !== "populated") return arm;
-  // Domain judgement on top of the resolved arm: the project has a catalog row
-  // but no roadmap authority row, so the DOCUMENT is undeclared.
-  //
-  // Except when the read still CARRIES milestones or unassigned issues: those come
-  // from the milestone read, which is independent of the stored document
-  // (`RoadmapDTO`: a project with milestones and no content answers `content: null`
-  // and still carries them). Answering `absent` there hid every milestone behind
-  // "this project declares no roadmap" — including one the operator had just
-  // created, which then could not be edited, assigned or removed.
-  if (arm.value.authority.state === "absent") {
-    const carried = roadmapModel(arm.value, null);
-    const ownsMilestoneWork = carried.milestones.length > 0 || carried.unassignedIssues > 0;
-    return ownsMilestoneWork ? arm : { kind: "absent" };
-  }
-  return arm;
-}
-
-/**
- * The Roadmap feature's arm, resolving one level further than the read.
- *
- * `empty` is reserved for a roadmap with **nothing at all to show** — no
- * milestones, no goals, no direction and no unassigned issues. An earlier version
- * tested only the first two, which hid an existing direction and a stored
- * document behind "the roadmap has no milestones": content the reader can act on,
- * declared empty. Anything that exists is rendered.
- */
-export function roadmapBody(raw: Resolved<RoadmapDTO>): Resolved<RoadmapModel> {
-  if (raw.kind !== "populated") return raw;
-  const model = roadmapModel(raw.value, raw.value.content);
-  const hasContent =
-    model.milestones.length > 0 ||
-    model.goals.length > 0 ||
-    model.direction !== null ||
-    model.unassignedIssues > 0;
-  return hasContent ? { kind: "populated", value: model } : { kind: "empty" };
-}
+export const DEFAULT_PROJECT_FEATURE: ProjectFeature = "issues";

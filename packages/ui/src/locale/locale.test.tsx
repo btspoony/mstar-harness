@@ -62,7 +62,7 @@ describe("the two dictionaries declare the same key set", () => {
       ["issueDetail.occurrenceCount", () => en.issueDetail.occurrenceCount(2)],
       ["workflows.truncated", () => en.workflows.truncated(1, 50)],
       ["iterations.attribution", () => en.iterations.attribution("absent")],
-      ["projectDetail.roadmap.unassigned", () => en.projectDetail.roadmap.unassigned(3)],
+      ["projectDetail.milestones.unassigned", () => en.projectDetail.milestones.unassigned(3)],
       ["projectDetail.scope.label", () => en.projectDetail.scope.label("engine")],
     ];
     for (const [name, probe] of probes) expect(`${name}: ${probe()}`.length).toBeGreaterThan(name.length + 3);
@@ -118,8 +118,8 @@ describe("enum values, ids, paths and timestamps stay literal", () => {
     // `resolved` ARE the words a reader sees. Everywhere else a label that equals the
     // enum is the bug this test exists for.
     const COUNTER_LABELS = new Set([
-      "projectDetail.roadmap.countLabels.open",
-      "projectDetail.roadmap.countLabels.resolved",
+      "projectDetail.milestones.countLabels.open",
+      "projectDetail.milestones.countLabels.resolved",
       // The prototype's overview plan table heads its completion column with the status
       // word itself: `Done`, not `Completed`.
       "overview.planColumns.done",
@@ -196,6 +196,8 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "pin",
     "external",
     "provider-link",
+    // The roadmap domain is retired: no key may name it again.
+    "roadmap",
   ];
 
   /**
@@ -233,8 +235,6 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "workflowDetail.leaseColumns.holder",
     "workflowDetail.leaseColumns.worktree",
     "workflowDetail.leaseColumns.expires",
-    // The head prints `Revision 12`, as the prototype does.
-    "projectDetail.revisionLabel",
     // The prototype's workflow detail lists the catalog's own revision and its two
     // dates; the IA note that removed "revision" meant the store counter, not this row.
     "workflowDetail.fields.revision",
