@@ -34,7 +34,7 @@ First action after Build, before product-code edits:
 1. Reload the harness entry: `mstar-harness-core` → `mstar-host` host reference → this bridge.
 2. If the plan is a Morning Star plan, resume as `project-manager` for coordination and dispatch only.
 3. Read the authored SSOT plan and state through `mstar status validate` / `mstar plan show`; use them over host UI.
-4. For each implement/code todo, require a PM Assignment whose front matter declares `execute_as`, `delegation`, exactly one branch form (`working_branch` or `branch_policy`) and the SSOT `plan_path` (key set → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)).
+4. For each implement/code todo, require a PM Assignment whose front matter declares `execute_as`, `delegation`, the SSOT `plan_path`, and one branch form (`working_branch` or `branch_policy`). The branch declaration is required because the dispatch is writable — only a read-only `scout` / `explore` orientation may omit it — and is refused when both forms appear. Branch-form contract and its control-domain variant → **`mstar-branch-worktree`** § Assignment 要求（PM）; key set → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical).
 5. If the Assignment or SSOT state is missing, report **Blocked** and repair the harness state before implementation.
 
 Allowed in the parent Build session: plan/status maintenance, routing decisions, Assignment writing, and host task dispatch.
