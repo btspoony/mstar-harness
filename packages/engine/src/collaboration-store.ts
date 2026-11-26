@@ -2771,6 +2771,17 @@ export function setRemoteCacheReplacementGapForTest(callback: (() => void | Prom
 }
 
 /**
+ * note: The v7 crash seam: runs INSIDE the upgrade ladder's single transaction, after the roadmap
+ * removal DDL and before its ledger row, so a regression can capture the hot journal of a genuinely
+ * interrupted rebuild through the production path instead of hand-rolling a transaction. It is
+ * synchronous because the ladder is; throwing from it leaves the ladder's own rollback in charge.
+ */
+let collaborationRoadmapRemovalGapForTest: ((db: StoreDb) => void) | undefined;
+export function setCollaborationRoadmapRemovalGapForTest(callback: ((db: StoreDb) => void) | undefined): void {
+  collaborationRoadmapRemovalGapForTest = callback;
+}
+
+/**
  * note: The publication seam: a regression fails after the predecessor is preserved and the
  * successor is fully staged, immediately before the one atomic rename that publishes it.
  */
@@ -3379,6 +3390,9 @@ export function applyCollaborationLadder(
   if (appliedMax < COLLABORATION_ROADMAP_REMOVAL_SCHEMA.version) {
     assertMilestoneEffortSchema(db, dbPath);
     db.exec(COLLABORATION_ROADMAP_REMOVAL_SCHEMA.sql);
+    // note: The crash seam sits exactly on this step's own boundary: the rebuild is applied and its
+    // ledger row is not, inside the ladder's one transaction.
+    collaborationRoadmapRemovalGapForTest?.(db);
     db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
       COLLABORATION_ROADMAP_REMOVAL_SCHEMA.version,
       COLLABORATION_ROADMAP_REMOVAL_SCHEMA.name,

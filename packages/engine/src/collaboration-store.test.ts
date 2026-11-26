@@ -49,6 +49,7 @@ import {
   readCollaborationBinding,
   openRemoteCacheRecovery,
   readRemoteCacheAuthority,
+  setCollaborationRoadmapRemovalGapForTest,
   setLocalPredecessorPublicationGapForTest,
   setRemoteCacheReplacementCommitGapForTest,
   setRemoteCacheReplacementGapForTest,
@@ -2061,7 +2062,7 @@ describe("collaboration remote schema ladder", () => {
     expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
   });
 
-  test("a snapshot of an in-flight v7 rebuild reopens as the intact v6 lane and replays to completion", async () => {
+  test("an upgrade interrupted inside its own transaction leaves the predecessor visible and recovers on replay", async () => {
     const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-rollback.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
@@ -2076,53 +2077,65 @@ describe("collaboration remote schema ladder", () => {
     const v6Tables = tableNames(location.dbPath);
     const v6Ledger = ledgerRows(location.dbPath);
 
-    // note: A SECOND connection opens the real v7 rebuild and stops INSIDE it: the transaction is
-    // open, the DDL has run, and neither a commit nor a ledger row exists. The lane below holds a
-    // live journal, exactly the state a crash leaves behind.
+    // note: The capture goes through the PRODUCTION upgrade path, not a hand-rolled transaction: the
+    // seam runs inside the ladder's own `BEGIN IMMEDIATE`, after the v7 rebuild and before its ledger
+    // row. The callback throws, so the ladder's real rollback branch is the one that executes.
     const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
     mkdirSync(snapshotDir, { recursive: true });
     const snapshot = join(snapshotDir, "collaboration.db");
-    const inFlight = new DatabaseSync(location.dbPath);
-    try {
-      inFlight.exec("pragma foreign_keys=ON");
-      inFlight.exec("begin immediate");
-      inFlight.exec(COLLABORATION_MIGRATIONS[6]!.sql);
-      // invariant: The rebuild really ran: inside this open transaction the table is gone and the
-      // former roadmap row already reads back as `other`.
-      expect(
-        (inFlight.prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'project_roadmaps'").get() as { n: number }).n,
-      ).toBe(0);
-      expect(
-        inFlight.prepare("select document_kind from catalog_entities where id = 'doc-r'").get(),
-      ).toEqual({ document_kind: "other" });
-      // note: The crash snapshot: the database file as the in-flight writer left it, with its journal.
+    let journalBytes = 0;
+    let journalHasDroppedTable = false;
+    let outsideTables: string[] = [];
+    setCollaborationRoadmapRemovalGapForTest((inFlightDb) => {
+      // note: Evict the rebuild's dirty pages to the file so the journal beside them is real work,
+      // not an empty allocation.
+      inFlightDb.exec("pragma cache_size=1");
+      inFlightDb.exec("create table crash_spill(x text)");
+      const insert = inFlightDb.prepare("insert into crash_spill values (?)");
+      for (let index = 0; index < 40; index++) insert.run("x".repeat(4096));
+      expect(existsSync(`${location.dbPath}-journal`)).toBe(true);
+      journalBytes = statSync(`${location.dbPath}-journal`).size;
       copyFileSync(location.dbPath, snapshot);
-      for (const sidecar of ["-journal", "-wal", "-shm"]) {
-        if (existsSync(`${location.dbPath}${sidecar}`)) copyFileSync(`${location.dbPath}${sidecar}`, `${snapshot}${sidecar}`);
-      }
+      copyFileSync(`${location.dbPath}-journal`, `${snapshot}-journal`);
+      // invariant: The PRODUCTION boundary holds while the seam runs: a second connection opened on the
+      // lane right now still sees the committed v6 schema, because the rebuild is inside the ladder's
+      // one transaction and nothing of it is published.
+      outsideTables = tableNames(location.dbPath);
+      journalHasDroppedTable = readFileSync(`${location.dbPath}-journal`).includes(
+        Buffer.from("CREATE TABLE project_roadmaps"),
+      );
+      throw new Error("crash-seam");
+    });
+    try {
+      await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toThrow(/crash-seam/);
     } finally {
-      // note: The unsent transaction is abandoned, not committed: the lane keeps its v6 bytes.
-      inFlight.exec("rollback");
-      inFlight.close();
+      setCollaborationRoadmapRemovalGapForTest(undefined);
     }
-    chmodSync(snapshot, 0o600);
-    // invariant: Reopening the snapshot recovers the predecessor: SQLite rolls the hot journal back,
-    // so the v6 table, ledger and row are all intact and the uncommitted reclassification is gone.
-    expect(tableNames(snapshot)).toEqual(v6Tables);
-    expect(ledgerRows(snapshot)).toEqual(v6Ledger);
 
-    // note: Replaying the same verb over those recovered bytes completes the upgrade.
-    copyFileSync(snapshot, location.dbPath);
-    chmodSync(location.dbPath, 0o600);
+    // invariant: The rebuild was genuinely in flight: its journal is non-empty and carries the ORIGINAL
+    // page of the table it dropped (a rollback journal stores pre-images, so an unrelated or absent
+    // journal could not hold that DDL text).
+    expect(journalBytes).toBeGreaterThan(0);
+    expect(statSync(`${snapshot}-journal`).size).toBe(journalBytes);
+    expect(readFileSync(`${snapshot}-journal`).includes(Buffer.from("CREATE TABLE project_roadmaps"))).toBe(true);
+    expect(journalHasDroppedTable).toBe(true);
+    // invariant: Uncommitted work was never visible outside the transaction.
+    expect(outsideTables).toEqual(v6Tables);
+    // invariant: The production path rolled back: the lane holds its v6 ledger again.
+    expect(ledgerRows(location.dbPath)).toEqual(v6Ledger);
+
+    // note: Replaying the same verb after that interruption completes the upgrade.
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
     expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
     const db = new DatabaseSync(location.dbPath);
     try {
-      expect(db.prepare("select document_kind, revision from catalog_entities where id = 'doc-r'").get()).toEqual({
+      // invariant: The reclassified row keeps its revision and its registration instant.
+      expect(db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get()).toEqual({
         document_kind: "other",
         revision: 7,
+        registered_at: "2026-09-02T00:00:00.000Z",
       });
     } finally {
       db.close();

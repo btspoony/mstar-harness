@@ -478,8 +478,8 @@ describe("collaboration cutover", () => {
     const seeded = await openStore(source.context, "write");
     try {
       seeded.db.exec(`
-insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, registered_at, updated_at)
-values ('document', 'doc-roadmap', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
+insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, revision, registered_at, updated_at)
+values ('document', 'doc-roadmap', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', 5, '2026-09-02T00:00:00.000Z', '2026-11-21T00:00:00.000Z');
 insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at)
 values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
 `);
@@ -493,10 +493,15 @@ values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
     // invariant: The retired kind becomes `other` on the combined-to-lane path with its identity,
     // revision and registration intact - the lane's CHECK no longer admits the value.
     const staged = await stagedRows(location);
+    // invariant: Only the retired KIND changes: identity, revision and the registration instant are
+    // the source row's own values, so the registration is preserved rather than re-created.
     expect(staged.rows.catalog_entities!.find((row) => row.id === "doc-roadmap")).toMatchObject({
       document_kind: "other",
       kind: "document",
       relative_path: "p-one/roadmap.md",
+      revision: 5,
+      registered_at: "2026-09-02T00:00:00.000Z",
+      updated_at: "2026-11-21T00:00:00.000Z",
     });
     expect(staged.foreignKeyViolations).toEqual([]);
 
