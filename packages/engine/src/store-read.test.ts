@@ -1828,6 +1828,56 @@ describe("remote read boundary", () => {
     expect(remoteObserveDocumentSchema.safeParse(withDocument("spec")).success).toBe(true);
   });
 
+  test("a cache admitted before the retirement serves its retired document kind as other, never as roadmap", async () => {
+    const { context, check } = await boundScope("remote-cache-retired-kind");
+    // note: A v6-era cache holds this row already: the admission that wrote it accepted the kind, so the
+    // fixture writes the stored snapshot directly instead of going through the (now refusing) ingest.
+    const stored = JSON.parse(
+      JSON.stringify(completeSnapshot(check)),
+    ) as { project: { catalogEntities: Array<Record<string, unknown>> } };
+    stored.project.catalogEntities.push({
+      kind: "document",
+      id: "doc-legacy-catalog",
+      title: "Legacy catalog document",
+      description: null,
+      documentKind: "roadmap",
+      lifecycle: "active",
+      revision: 4,
+    });
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      lane.prepare("update remote_observations set snapshot_json = ? where project_key = ?").run(
+        JSON.stringify(stored),
+        REMOTE_IDS.projectId,
+      );
+    } finally {
+      lane.close();
+    }
+
+    // invariant: The read normalizes the retired value with its identity intact - id, revision and
+    // lifecycle survive - so no surface serves a kind the catalog no longer admits.
+    const view = await openRemoteReadView(context, [REMOTE_IDS.projectId]);
+    const entities = view.projects.get(REMOTE_IDS.projectId)?.snapshot?.project.catalogEntities ?? [];
+    expect(entities.find((entity) => entity.id === "doc-legacy-catalog")).toMatchObject({
+      documentKind: "other",
+      kind: "document",
+      revision: 4,
+      lifecycle: "active",
+    });
+    // invariant: The normalization is the READ's, not a rewrite of admitted evidence: the stored bytes
+    // still hold what the predecessor admitted.
+    const stored2 = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      const raw = stored2.prepare("select project_key, snapshot_json from remote_observations").all() as Array<{
+        project_key?: string;
+        snapshot_json?: string;
+      }>;
+      expect(raw.some((row) => (row.snapshot_json ?? "").includes('"documentKind":"roadmap"'))).toBe(true);
+    } finally {
+      stored2.close();
+    }
+  });
+
   test("a project.roadmap member is refused by path, and its absence is the only accepted shape", async () => {
     const { context, commit, check } = await boundScope("remote-roadmap-removal");
     const document = JSON.parse(

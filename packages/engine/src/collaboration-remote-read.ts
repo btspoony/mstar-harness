@@ -356,8 +356,25 @@ function snapshotOf(raw: string | null, projectId: string): RemoteSnapshot | nul
       `The stored observation for project ${projectId} is not a complete project snapshot; this cache cannot serve it. Nothing was read.`,
     );
   }
-  // note: The shape was validated on ingest; the cast only restores the type of that validated document.
-  return parsed as RemoteSnapshot;
+  // invariant: A cache admitted BEFORE the retirement can still hold `documentKind: "roadmap"`. The read
+  // normalizes it to `other` at the same identity - id, revision and registration are untouched - so no
+  // surface serves the retired value, and the read is not refused over history the store cannot rewrite
+  // (a remote cache is derived observation state, re-bootstrapped rather than migrated in place).
+  return normalizeRetiredDocumentKind(parsed as RemoteSnapshot);
+}
+
+/**
+ * invariant: The one place a retired catalog kind is removed from admitted evidence on READ. It mutates a
+ * freshly parsed document only, never the stored bytes, and returns the same object when there is nothing
+ * to normalize.
+ */
+function normalizeRetiredDocumentKind(snapshot: RemoteSnapshot): RemoteSnapshot {
+  const project = snapshot.project as unknown as { catalogEntities?: Array<Record<string, unknown>> } | undefined;
+  if (project === undefined || !Array.isArray(project.catalogEntities)) return snapshot;
+  for (const entity of project.catalogEntities) {
+    if (entity.documentKind === "roadmap") entity.documentKind = "other";
+  }
+  return snapshot;
 }
 
 // ---------------------------------------------------------------------------

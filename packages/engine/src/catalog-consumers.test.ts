@@ -481,6 +481,17 @@ describe("catalog consumers \u2014 scaffold and execution routing boundaries", (
     expect(report.ok).toBe(false);
     expect(report.gaps.map((gap) => [gap.kind, gap.id, gap.code])).toEqual([["project", "alpha", "catalog.discovery.missing-project"]]);
 
+    // invariant: A NON-project entry at the directory spelling itself - `projects/beta` registered as a
+    // document - is not a project registration either, so the directory still reports its missing row.
+    mkdirSync(join(harness, "projects", "beta"), { recursive: true });
+    await registerCatalogEntity(
+      context,
+      { kind: "document", id: "doc-beta", title: "Beta notes", rootKind: "projects", relativePath: "beta", documentKind: "other" },
+      op("beta-document"),
+    );
+    const beta = await readCatalogCompleteness(context, ["projects"]);
+    expect(beta.gaps.map((gap) => [gap.kind, gap.id])).toEqual([["project", "alpha"], ["project", "beta"]]);
+
     // invariant: The marker alias is the LITERAL file name, so a look-alike document keeps its own identity
     // and covers nothing.
     expect(projectLocationIdentity("alpha/roadmapXmd")).toBe("alpha/roadmapXmd");

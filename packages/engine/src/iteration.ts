@@ -961,6 +961,12 @@ export async function readCatalogCompleteness(
   }
   const discovered = discoverCatalogLocations(context, [...covered]);
   const registered = new Set<string>();
+  /**
+   * note: The project directory identities backed by an ACTUAL project row. A document registered under
+   * the `projects` root - at the directory spelling or at a retained body's path - is not a project
+   * registration, so it can neither cover a discovered directory nor hide a missing project row.
+   */
+  const registeredProjects = new Set<string>();
   let storeRevision = 0;
   let catalogRevision = 0;
   try {
@@ -979,10 +985,10 @@ export async function readCatalogCompleteness(
         if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
         registered.add(`${row.root_kind}\u0000${row.relative_path}`);
         // invariant: A PROJECT row registered at the retired `roadmap.md` marker names the same project as
-        // its directory, so the directory it names reads as registered. The alias is project-row only: a
-        // document retained under the `projects` root is not a project registration for its directory.
+        // its directory, so the directory it names reads as registered. Only a project row can say this:
+        // the set below is what the project gap check consults, and nothing else writes to it.
         if (row.kind === "project" && row.root_kind === "projects") {
-          registered.add(`${row.root_kind}\u0000${projectLocationIdentity(row.relative_path)}`);
+          registeredProjects.add(projectLocationIdentity(row.relative_path));
         }
       }
     } finally {
@@ -997,9 +1003,13 @@ export async function readCatalogCompleteness(
 
   const gaps: CatalogCompletenessGap[] = [];
   for (const location of discovered) {
-    // note: A discovered project location is the directory entry itself; the alias registered above is
-    // what lets a row at the retired marker path cover it.
-    if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) continue;
+    // note: A discovered project location is covered only by a project row naming it - directly, or
+    // through the retired marker alias. A document at the same path is not that row.
+    if (location.rootKind === "projects") {
+      if (registeredProjects.has(location.relativePath)) continue;
+    } else if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) {
+      continue;
+    }
     const code = GAP_CODE[location.kind];
     gaps.push({
       rootKind: location.rootKind,
