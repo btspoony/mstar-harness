@@ -123,6 +123,7 @@
 import { isAbsolute, resolve } from 'node:path'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Context } from '@deepseek-ai/cordis'
+import type { ToolExecution } from '@deepseek-ai/dsh-tools'
 import { parseAssignmentFields, readAssignmentSource, resolveHarnessDir } from '@mstar-harness/engine'
 import type { AssignmentSourceResult } from '@mstar-harness/engine'
 import {
@@ -698,7 +699,8 @@ function declarationScope(unfenced: string): string {
  * 5. a prompt shaped like an Assignment that carries its fields as retired
  *    `**Execute as**:` body labels → the D16 legacy-format refusal (the
  *    dispatch gate's `dispatch.assignment.legacy-format` cause, named here
- *    because the role gate reaches the prompt first); `off` passes.
+ *    because the role gate reaches the prompt first); TERMINAL, like the
+ *    shared dispatch violation — no `roleGate` mode softens it.
  * 6. exactly one distinct repair candidate (front matter key, body-label
  *    field, or declared token, all declaration-scope-scoped) → repair the
  *    prompt, then PROVE the repair: the rewritten text is parsed with the
@@ -740,13 +742,11 @@ export function evaluateRoleGate(input: RoleGateInput): RoleGateDecision {
   // (5) D16 — a prompt shaped like an Assignment whose fields live in the
   // retired body-label grammar is refused on EVERY gate; the role gate is
   // the first gate the subagent-start channel reaches, so it names the same
-  // cause the dispatch gate would. `off` stays the documented rollback.
+  // cause the dispatch gate would. TERMINAL like the shared dispatch
+  // violation: the retired document declares no front matter, so no
+  // `roleGate` mode may soften a start the dispatch tools already veto.
   if (legacyAssignmentShape(text)) {
-    if (input.mode !== 'off') {
-      const message = legacyDeclarationMessage(input.cwd, input.mode)
-      return input.mode === 'warn' ? { kind: 'warn', message } : { kind: 'refuse', message }
-    }
-    return { kind: 'pass', reason: 'off' }
+    return { kind: 'refuse', message: legacyDeclarationMessage(input.cwd) }
   }
   // The CANDIDATE scan and the REWRITE read the fence-masked text: a quoted
   // example is never a declaration, and the scan and the rewrite cannot
@@ -1150,21 +1150,21 @@ function startLocation(cwd: string | undefined): string {
 }
 
 /**
- * The `hard` refusal / `warn` advisory text for a prompt shaped like an
- * Assignment whose fields live in the RETIRED body-label grammar (D16 —
- * `dispatch.assignment.legacy-format` on the dispatch gates; the role gate
- * names the same cause). The refusal names BOTH recoveries — the front
- * matter rewrite and the `Assignment file:` pointer.
+ * The refusal text for a prompt shaped like an Assignment whose fields live in
+ * the RETIRED body-label grammar (D16 — `dispatch.assignment.legacy-format` on
+ * the dispatch gates; the role gate names the same cause). The refusal names
+ * BOTH recoveries — the front matter rewrite and the `Assignment file:`
+ * pointer — and, like the shared dispatch violation, carries no mode escape:
+ * the retired document declares no front matter, so the refusal is terminal.
  *
  * @param cwd - the child's effective start directory, when known.
- * @param mode - the configured mode (`hard` refusal or `warn` advisory).
  */
-function legacyDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'hard'): string {
+function legacyDeclarationMessage(cwd: string | undefined): string {
   const cause =
     'carries its Assignment fields as `**Label**` body lines — the retired format (dispatch.assignment.legacy-format); front matter is the only field contract'
   const fix =
     'Fix: rewrite the assignment as a front-matter document (a `---`-fenced YAML block declaring the snake_case keys, e.g. execute_as / working_branch), or pass it as an `Assignment file: <abs>` pointer under an accepted assignment home.'
-  return `${startLocation(cwd)} ${cause}. ${fix} ${modeRecovery(mode)}`
+  return `${startLocation(cwd)} ${cause}. ${fix} The refusal is terminal: no roleGate mode softens it.`
 }
 
 /**
@@ -1193,29 +1193,31 @@ function unusableDeclarationMessage(cwd: string | undefined, mode: 'warn' | 'har
  * between the two seams would otherwise start the child on a version the
  * gate never approved or recorded.
  *
- * Bound to the ONE tool call that produced it (`ToolExecution.callId`): the
- * delegation body runs inside that call's scope (`runWithDispatchCall`), so
- * overlapping calls from the same parent cannot overwrite each other's
- * snapshot and a start only ever consumes its own call's document. An
- * unconsumed snapshot is dropped when its call settles, so a call that
- * starts nothing (denied downstream, or a team carrier) can never supply a
- * later start's document — that start resolves the source itself.
+ * Bound to the ONE execution object the runtime hands BOTH seams
+ * (`ToolExecution` in `tools/pre-execute`, the same reference as
+ * `tools/execute`), never to `callId`: that id is caller input, so two
+ * invocations may spell it alike. The map is weak, so a call whose preflight
+ * never reaches execution (a downstream denial, a guard veto, a
+ * cancellation, a team carrier) leaves nothing that could supply a later
+ * start's document — that start resolves the source itself. The body runs
+ * inside its own execution's scope (`runWithDispatchCall`), so overlapping
+ * calls from the same parent cannot overwrite each other's snapshot.
  */
-const resolvedCarriers = new Map<string, AssignmentSourceResult>()
+const resolvedCarriers = new WeakMap<ToolExecution, AssignmentSourceResult>()
 
-/** The tool call whose body is currently executing (empty outside a call). */
-const activeCall = new AsyncLocalStorage<string>()
+/** The execution whose body is currently running (empty outside a call). */
+const activeCall = new AsyncLocalStorage<ToolExecution>()
 
 /**
  * Hand one resolved file carrier to the native start seam for the admitted
  * call. Only a resolved POINTER is handed over: an inline document is
  * already the text the child receives.
- * @param callId - the delegation tool call's id (`ToolExecution.callId`).
+ * @param exec - the delegation tool call (the identity both seams share).
  * @param source - the gate's ONE resolution of that call's carrier.
  */
-export function handOffResolvedCarrier(callId: string, source: AssignmentSourceResult): void {
+export function handOffResolvedCarrier(exec: ToolExecution, source: AssignmentSourceResult): void {
   if (!source.ok || source.path === undefined) return
-  resolvedCarriers.set(callId, source)
+  resolvedCarriers.set(exec, source)
 }
 
 /**
@@ -1223,27 +1225,27 @@ export function handOffResolvedCarrier(callId: string, source: AssignmentSourceR
  * body performs reads that call's handoff (and nothing else's). Calls without
  * a handoff skip the scope entirely — the wrapper charges nothing to the
  * ordinary call.
- * @param callId - the dispatching tool call's id.
+ * @param exec - the dispatching tool call.
  * @param body - the call's around-dispatch chain, ending in the tool body.
  */
-export function runWithDispatchCall<T>(callId: string, body: () => Promise<T>): Promise<T> {
-  if (!resolvedCarriers.has(callId)) return body()
-  return activeCall.run(callId, async () => {
+export function runWithDispatchCall<T>(exec: ToolExecution, body: () => Promise<T>): Promise<T> {
+  if (!resolvedCarriers.has(exec)) return body()
+  return activeCall.run(exec, async () => {
     try {
       return await body()
     } finally {
       // An unconsumed handoff must not outlive its call.
-      resolvedCarriers.delete(callId)
+      resolvedCarriers.delete(exec)
     }
   })
 }
 
 /** Consume this call's handed-off carrier (single use), if any. */
 function takeResolvedCarrier(): AssignmentSourceResult | undefined {
-  const callId = activeCall.getStore()
-  if (callId === undefined) return undefined
-  const source = resolvedCarriers.get(callId)
-  resolvedCarriers.delete(callId)
+  const exec = activeCall.getStore()
+  if (exec === undefined) return undefined
+  const source = resolvedCarriers.get(exec)
+  resolvedCarriers.delete(exec)
   return source
 }
 

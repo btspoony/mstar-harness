@@ -2024,6 +2024,17 @@ task_budget: S
     expect(parallel).toBeDefined();
     expect(parallel?.terminal).toBe(true);
 
+    // An EMPTY list is the same shape: it declares no checkout either, so its
+    // contents cannot make the scalar requirement satisfiable.
+    const emptyList = validateAssignmentFields(assignment({
+      write_domain: "control",
+      worktree_path: [],
+      working_branch: "feature/ctl",
+      control_write_paths: [".mstar/status.json"],
+    }));
+    const empty = emptyList.violations.find((v) => v.code === "assignment.field.control-write-parallel-tracks");
+    expect(empty?.terminal).toBe(true);
+
     // The serial control norm stays untouched.
     const scalar = validateAssignmentFields(assignment({
       write_domain: "control",

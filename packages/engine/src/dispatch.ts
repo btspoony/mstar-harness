@@ -677,10 +677,10 @@ export function validateAssignmentFields(assignmentText: string, opts: ValidateA
     // control root, and every relative target would go unverified. Refuse the
     // list instead of counting it as presence — `terminal`, because the
     // checkout equality and target ownership cannot be proven from this
-    // document at all (soft enforcement must not admit the write).
-    const parallelWorktrees = fields.worktreePaths?.some((path) => path.trim() !== "") === true;
-    const parallelBranches = fields.workingBranches?.some((branch) => branch.trim() !== "") === true;
-    if (parallelWorktrees || parallelBranches) {
+    // document at all (soft enforcement must not admit the write). List
+    // PRESENCE is the shape: an empty list declares no checkout either, so its
+    // contents cannot decide the question.
+    if (fields.worktreePaths !== undefined || fields.workingBranches !== undefined) {
       violations.push({
         ...violation("high", "assignment.field.control-write-parallel-tracks",
           "a control-domain Assignment writes ONE checkout \u2014 a parallel working_branch / worktree_path list leaves the control checkout and every relative write target unverifiable",

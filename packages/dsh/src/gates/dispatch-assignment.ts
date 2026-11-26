@@ -18,7 +18,7 @@
  * re-exports nothing from a sibling and imports no sibling dispatch module.
  */
 import { basename } from 'node:path'
-import { extractFrontmatterAndBody, legacyAssignmentShape, parseDocumentFrontmatterEntries, parseEnforcementFlag } from '@mstar-harness/engine'
+import { extractFrontmatterAndBody, legacyAssignmentShape, parseDocumentFrontmatterEntries, parseEnforcementFlag, parseEnforcementFlagFromFrontmatter } from '@mstar-harness/engine'
 import type { AssignmentFields, FrontmatterEntry } from '@mstar-harness/engine'
 import { resolveSeamHard } from './_shared.ts'
 import type { Config } from './_shared.ts'
@@ -63,11 +63,24 @@ export function isAssignmentShaped(assignmentText: string): boolean {
  * (fenced front matter only — a body-quoted example never hardens), else the
  * repo `.mstarc` `[config] enforcement`, else the iteration compass
  * frontmatter, else warn-only.
+ * @param entries - the caller's own parse of `assignmentText`
+ *   ({@link assignmentFrontmatterEntries}); supplied so the enforcement policy
+ *   and the rest of the same decision read ONE parse. `null` (unparseable
+ *   block) is a reuse too: no flag is declared, and the schema layer reports
+ *   the refusal. Omitted → this call parses the text itself.
  */
-export function resolveDispatchHard(harnessDir: string | null, config: Config, assignmentText: string): boolean {
+export function resolveDispatchHard(
+  harnessDir: string | null,
+  config: Config,
+  assignmentText: string,
+  entries?: Map<string, FrontmatterEntry> | null,
+): boolean {
   if (config.enforcement === 'hard') return true
   if (config.enforcement === 'soft') return false
-  if (parseEnforcementFlag(assignmentText).hard) return true
+  const assignmentHard = entries === undefined
+    ? parseEnforcementFlag(assignmentText).hard
+    : parseEnforcementFlagFromFrontmatter(entries).hard
+  if (assignmentHard) return true
   return resolveSeamHard(harnessDir, config)
 }
 

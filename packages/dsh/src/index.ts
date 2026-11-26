@@ -847,8 +847,10 @@ export function apply(ctx: Context, config: Config): void {
   // tool call: the delegation body runs inside that call's scope, so the
   // native start seam consumes this call's document and an unused handoff is
   // dropped when the call settles (a later direct start resolves afresh).
-  // Calls without a handoff skip the scope entirely (zero cost).
-  ctx.on('tools/execute', (exec, next) => runWithDispatchCall(exec.callId, next), { prepend: true })
+  // Keyed on the execution object itself (the identity both seams share), not
+  // on its caller-supplied `callId`. Calls without a handoff skip the scope
+  // entirely (zero cost).
+  ctx.on('tools/execute', (exec, next) => runWithDispatchCall(exec, next), { prepend: true })
 
   // Role → agent preset channel: an `internal/get`
   // waterfall listener wraps `ctx.subagents` reads so a role-matched

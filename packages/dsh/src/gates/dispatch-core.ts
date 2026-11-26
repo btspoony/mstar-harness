@@ -20,7 +20,7 @@ import {
 } from '@mstar-harness/engine'
 import type { AssignmentSourceResult, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING } from './_shared.ts'
+import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING, sessionCwdOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isRootLikeAgent } from './steering.ts'
 import type { SessionHint } from './workflow-selection.ts'
@@ -189,10 +189,14 @@ export async function dispatchGateCore(
       // the Assignment contract, so empty or unrelated file content is ONE
       // invalid Assignment — never a silent non-Assignment pass.
       fileCarrier: source.path !== undefined,
+      // Git anchor: the DISPATCHING session's own checkout, never the process
+      // cwd — a host process serving another repository must not inspect it.
+      // The exec-less host hook carries no session and keeps `cwd` unset.
+      cwd: sessionCwdOf(callerAgent),
       // Source-relative `worktree_path` base: the pointed FILE's own
-      // directory (CLI parity). Git control discovery stays on the checkout —
-      // `cwd` is left unset on purpose, so an assignment home outside the
-      // repository never moves which checkout the gate inspects.
+      // directory (CLI parity), independent of the Git anchor above, so an
+      // assignment home outside the repository never moves which checkout the
+      // gate inspects.
       assignmentDir: source.path === undefined ? undefined : dirname(source.path),
     }).violations,
   )

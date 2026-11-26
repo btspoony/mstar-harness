@@ -23,7 +23,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { assignmentHeaderRegion } from '@mstar-harness/engine'
+import { assignmentFrontmatterEntries, assignmentHeaderRegion } from '@mstar-harness/engine'
 import { foldedFamilyToolName, getCommandDefinitions, isCoordinatorSeatCommand } from '@mstar-harness/commands'
 import { useCleanControlRoot, bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 
@@ -32,7 +32,7 @@ import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
-import { planIdOf } from '../src/gates/dispatch-assignment.ts'
+import { planIdOf, resolveDispatchHard } from '../src/gates/dispatch-assignment.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { dispatchCallerOf } from '../src/gates/dispatch-core.ts'
 import { preExecuteListener } from '../src/gates/dispatch-listener.ts'
@@ -1046,7 +1046,11 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
   async function seedTwoActives(app: BootResult): Promise<string> {
     const root = app.root
     execFileSync('git', ['init', '-q', '-b', 'main', root])
-    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'])
+    // Both checkouts live INSIDE the fixture root; ignoring them keeps the
+    // main worktree clean (a dispatch gates the checkout its session runs in).
+    writeFileSync(join(root, '.gitignore'), '.mstar/\nintegration-checkout/\nfeature-checkout/\n')
+    execFileSync('git', ['-C', root, 'add', '.gitignore'])
+    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'init'])
     const integrationPath = join(root, 'integration-checkout')
     const featurePath = join(root, 'feature-checkout')
     execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
@@ -1736,6 +1740,58 @@ Update control state.
       process.chdir(priorCwd)
     }
   }, 60_000)
+
+  it('a pointed control write anchors Git discovery on the SESSION checkout, not the process cwd', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const branch = execFileSync('git', ['-C', app.root, 'branch', '--show-current'], { encoding: 'utf8' }).trim()
+    const doc = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — control write
+write_domain: control
+worktree_path: ../..
+working_branch: ${branch}
+control_write_paths:
+  - .mstar/status.json
+---
+
+## Assignment
+
+Update control state.
+`
+    const pointed = join(assignmentsDir, 'control-session.md')
+    writeFileSync(pointed, doc)
+    const advisories = captureAdvisories(app.ctx)
+    const pointer = `Assignment file: ${pointed}`
+
+    // The process runs in the suite's clean control fixture repo — a DIFFERENT
+    // checkout. An exec-less dispatch (no session) still anchors there, so the
+    // pointed worktree is not that control root.
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+    expect(violationCodes(advisories[advisories.length - 1])).toContain('dispatch.control-write.worktree-not-control')
+
+    // A session in app.root inspects ITS OWN checkout instead: the same
+    // document is clean against the control root it names, while the process
+    // cwd never enters the decision.
+    advisories.length = 0
+    const session = { session: { header: { cwd: app.root } } }
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer, session), defaultAllow)
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[advisories.length - 1])).not.toContain('dispatch.control-write.worktree-not-control')
+  }, 60_000)
+
+  it('the enforcement decision reads the caller parse instead of reparsing the document', () => {
+    // The TEXT declares no enforcement flag; the supplied parse does. A fresh
+    // parse of the text would answer soft, so only reuse reads hard — the
+    // default dsh path hands its one parse to this decision.
+    const silent = '---\nexecute_as: fullstack-dev\n---\n'
+    const entries = assignmentFrontmatterEntries('---\nexecute_as: fullstack-dev\nenforcement: hard\n---\n')
+    expect(resolveDispatchHard(null, {} as Config, silent, entries)).toBe(true)
+    expect(resolveDispatchHard(null, {} as Config, silent)).toBe(false)
+  })
 
   it('duplicate worktree_path keys refuse as document.frontmatter.invalid instead of entering isolation', async () => {
     const app = booted = await bootApp({ dispatchBinding: 'project-manager' })

@@ -1412,8 +1412,12 @@ export async function bootApp(options: BootOptions = {}): Promise<BootResult> {
     writeFileSync(mstarc, `[config]\n\n[collaboration]\nmode=local\nrepo_id=${fixtureRepoId(root)}\n`)
     // note: Identity is committable fixture state: a clean control root
     // (worktree.main.tracked-changes) requires it committed after gitInit.
+    // The repository ignores its control harness (`/.mstar/`), and a dispatch
+    // gates the checkout its session runs in — so the fixture ignores it too.
+    const gitignore = join(root, '.gitignore')
+    if (!existsSync(gitignore)) writeFileSync(gitignore, '.mstar/\n')
     gitInit(root)
-    execFileSync('git', ['add', '.mstarc'], { cwd: root, stdio: 'ignore' })
+    execFileSync('git', ['add', '.mstarc', '.gitignore'], { cwd: root, stdio: 'ignore' })
     execFileSync('git', ['-c', 'user.email=fixture@example.invalid', '-c', 'user.name=fixture', 'commit', '-q', '-m', 'declare fixture collaboration identity'], { cwd: root, stdio: 'ignore' })
   }
   // why: Canonical spelling: the resolver answers the Git-reported (realpath'd)

@@ -813,6 +813,41 @@ describe('dispatch-role gate — repair + refusal through the start seam', () =>
     const sent = provider.starts[0]!.request as RecordedRequest
     expect(promptTextOf(sent)).toBe(rewritten)
   })
+
+  it('(ae) a preflight denial leaves no snapshot for a later call that reuses the caller id', async () => {
+    const { app, provider, workspace } = await bootWithProvider({ dispatchBinding: 'project-manager' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const file = join(assignmentsDir, 'denied.md')
+    writeFileSync(file, CANONICAL_PROMPT)
+    const pointer = `Assignment file: ${file}`
+    const caller = parentAgent(workspace)
+
+    // A downstream listener denies AFTER this gate admitted the call: the
+    // preflight publishes its carrier, then the call never reaches
+    // `tools/execute` (no body, no settle).
+    let denyNext = true
+    app.ctx.on('tools/pre-execute', (_exec, next) => {
+      if (!denyNext) return next()
+      denyNext = false
+      return Promise.resolve<PreToolDecision>({ kind: 'deny', reason: 'downstream denial' })
+    })
+    const denied = subagentCall(pointer, caller, 'call-reused')
+    expect((await app.ctx.waterfall('tools/pre-execute', denied, allowNext)).kind).toBe('deny')
+
+    // The file is rewritten; the later invocation is a DIFFERENT execution that
+    // happens to spell the same caller id and carries its own inline document.
+    // The denied call's document must not surface as this call's carrier.
+    writeFileSync(file, CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING))
+    const inline = CANONICAL_PROMPT.replace(EXECUTE_AS, WRITING)
+    const later = subagentCall(inline, caller, 'call-reused')
+    expect((await app.ctx.waterfall('tools/pre-execute', later, allowNext)).kind).toBe('allow')
+    await runInCall(app, later, () => startActivationViaNativeChannel(app, specFor({ ...textPrompt(inline), cwd: workspace, parent: caller })))
+
+    expect(provider.starts).toHaveLength(1)
+    const sent = provider.starts[0]!.request as RecordedRequest
+    expect(promptTextOf(sent)).toBe(inline)
+  })
 })
 
 /** Pure decision inputs: a harness project that declares both fixture roles. */
@@ -968,18 +1003,18 @@ describe('dispatch-role gate — pure decision table (evaluateRoleGate)', () => 
   })
 
 
-  it('(p20) the retired body-label Assignment grammar is refused with the legacy-format cause (D16)', () => {
-    const hard = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT))
-    expect(hard.kind).toBe('refuse')
-    if (hard.kind === 'refuse') {
-      expect(hard.message).toContain('legacy-format')
-      expect(hard.message).toContain('execute_as')
-      expect(hard.message).toContain('roleGate')
+  it('(p20) the retired body-label Assignment grammar is refused with the legacy-format cause (D16) in every mode', () => {
+    // Terminal, exactly like the shared `dispatch.assignment.legacy-format`
+    // violation: the retired document declares no front matter, so a mode that
+    // only softens ordinary role-declaration verdicts cannot admit the start.
+    for (const mode of ['hard', 'warn', 'off'] as const) {
+      const decision = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, { mode }))
+      expect(decision.kind, mode).toBe('refuse')
+      if (decision.kind !== 'refuse') continue
+      expect(decision.message).toContain('legacy-format')
+      expect(decision.message).toContain('execute_as')
+      expect(decision.message).toContain('terminal')
     }
-    const warn = evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, { mode: 'warn' }))
-    expect(warn.kind).toBe('warn')
-    if (warn.kind === 'warn') expect(warn.message).toContain('legacy-format')
-    expect(evaluateRoleGate(gateInput(LEGACY_BODY_LABEL_PROMPT, { mode: 'off' }))).toEqual({ kind: 'pass', reason: 'off' })
   })
   it('(p12) the warn advisory does not tell a warn-mode operator to set warn', () => {
     const warn = evaluateRoleGate(gateInput('Implement.', { mode: 'warn' }))

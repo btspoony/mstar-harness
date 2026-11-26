@@ -12,7 +12,7 @@
  * No barrel: importers name this module by explicit relative path.
  */
 import { type Context } from '@deepseek-ai/cordis'
-import { applyEnforcement, parseAssignmentFields, readAssignmentSource } from '@mstar-harness/engine'
+import { applyEnforcement, assignmentFrontmatterEntries, parseAssignmentFieldsFromFrontmatter, readAssignmentSource } from '@mstar-harness/engine'
 import type { GateResult } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord, formatViolation } from './_shared.ts'
@@ -79,14 +79,20 @@ async function gateAssignmentText(
   // and never a ledger row for the unresolved input.
   const source = readAssignmentSource(prompt, { harnessDir })
   const text = source.ok ? source.text : prompt
+  // ONE parse per dispatch, made HERE so every stage of this decision reads the
+  // same entries: the enforcement policy, the adapter's plan id / worktree /
+  // lease / composition legs and the advisory role. A malformed block parses
+  // to `null` once; the schema layer performs the only other read, and only to
+  // report the line-numbered refusal.
+  const entries = assignmentFrontmatterEntries(text)
   // The adapter owns the shared dispatch-gate core; the exec context is
   // passed so the lease gate (session-id bound — see leaseGateViolations)
   // joins the SAME verdict as the field/branch/anti-recursion checks.
   // `hard` resolves ONCE per dispatch: the adapter's record block and this
   // gate decision share the single resolution instead of each re-reading
   // the compass.
-  const hard = resolveDispatchHard(harnessDir, config, text)
-  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source)
+  const hard = resolveDispatchHard(harnessDir, config, text, entries)
+  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source, entries)
   const verdict = applyEnforcement(result, { hard })
   // A terminal source refusal is a VETO, decided BEFORE enforcement, the
   // advisory role and the preset channel: the resolver proved there is no
@@ -104,14 +110,14 @@ async function gateAssignmentText(
     ctx.logger(DISPATCH_LOGGER).warn(
       `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    const role = parseAssignmentFields(text).executeAs ?? ''
+    const role = parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? ''
     ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
   // The admitted pointer's resolved document is handed to the native start
   // seam for THIS call (keyed by the tool call id, scoped by the
   // `tools/execute` wrapper), so the child executes the version the gate
   // decided on instead of reading the file a second time.
-  if (source.ok) handOffResolvedCarrier(exec.callId, source)
+  if (source.ok) handOffResolvedCarrier(exec, source)
   return undefined
 }
 

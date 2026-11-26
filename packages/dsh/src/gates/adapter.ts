@@ -27,6 +27,7 @@ import {
 import type {
   AssignmentSourceResult,
   AssignmentFields,
+  FrontmatterEntry,
   GateResult,
   HostAdapter,
   IntegrationMergeLease,
@@ -268,8 +269,15 @@ export class DshHostAdapter extends Service implements HostAdapter {
    * @param hintRead - the caller's already-derived hint read (the
    * `tools/pre-execute` listener derives it once and shares it with the
    * workflow branch); omitted → derived here from `exec.agent`.
+   * @param preResolved - the caller's ONE source resolution for this dispatch;
+   * omitted → resolved here.
+   * @param preEntries - the caller's ONE parse of that resolved document
+   * ({@link assignmentFrontmatterEntries}), reused by the plan-id hint, the
+   * worktree checks, the read-only-role read and the composition;
+   * `null` (unparseable block) is a reuse too — the schema layer reports the
+   * refusal. Omitted → parsed here.
    */
-  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult): Promise<GateResult> {
+  async dispatchGate(prompt: string, exec?: ToolExecution, hard?: boolean, hintRead?: SessionHintRead, preResolved?: AssignmentSourceResult, preEntries?: Map<string, FrontmatterEntry> | null): Promise<GateResult> {
     const harnessDir = this.resolver.forAgent(exec?.agent)
     const session = hintRead ?? this.sessionHintFor(exec?.agent)
     const hint = session.hint
@@ -293,11 +301,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // parallel-worktree case, not an unverifiable dispatch.
     const assignmentSource = preResolved ?? readAssignmentSource(prompt, { harnessDir })
     const text = assignmentSource.ok ? assignmentSource.text : prompt
-    // ONE parse per dispatch, made HERE because the plan id selects the
-    // lifecycle before the core runs: the same entries feed the plan id, the
-    // L1/L2 worktree checks, the read-only-role read and every composition
-    // leg downstream.
-    const entries = assignmentFrontmatterEntries(text)
+    // ONE parse per dispatch: the caller's (the listener parses before it
+    // resolves enforcement), else this method's — the plan id needs it before
+    // the core runs. The same entries then feed the plan id, the L1/L2
+    // worktree checks, the read-only-role read and every composition leg
+    // downstream.
+    const entries = preEntries === undefined ? assignmentFrontmatterEntries(text) : preEntries
     const planId = assignmentSource.ok ? planIdOfEntries(entries) : undefined
     const selectionHint = planId === undefined ? hint : { ...hint, planId }
     const activeSource = harnessDir !== null && assignmentSource.ok && isAssignmentShaped(text)
@@ -335,7 +344,7 @@ export class DshHostAdapter extends Service implements HostAdapter {
             prompt: text,
             assignmentSource,
             violations,
-            hard: hard ?? resolveDispatchHard(harnessDir, this.config, text),
+            hard: hard ?? resolveDispatchHard(harnessDir, this.config, text, entries),
             pairing: this.pairing,
             workflowId: source.workflowId,
             resolvedWorkflowDir: join(harnessDir, source.dir),
@@ -442,10 +451,12 @@ export class DshHostAdapter extends Service implements HostAdapter {
     // `hard` resolves ONCE off the RESOLVED document (a pointer's file
     // declares its own enforcement flag) and is shared by the record block
     // (via dispatchGate) and this enforcement decision — no duplicate compass
-    // read per dispatch.
+    // read per dispatch, and the same parse feeds both.
     const hookSource = readAssignmentSource(prompt, { harnessDir })
-    const hard = resolveDispatchHard(harnessDir, this.config, hookSource.ok ? hookSource.text : prompt)
-    const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource)
+    const hookText = hookSource.ok ? hookSource.text : prompt
+    const hookEntries = assignmentFrontmatterEntries(hookText)
+    const hard = resolveDispatchHard(harnessDir, this.config, hookText, hookEntries)
+    const gate = await this.dispatchGate(prompt, undefined, hard, undefined, hookSource, hookEntries)
     const applied = applyEnforcement(gate, { hard })
     // A terminal source refusal is a veto, not an advisory: no enforcement
     // setting can soften the absence of a verified document.
