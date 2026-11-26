@@ -2,6 +2,8 @@
 
 Status: implemented — `project_roadmaps` stores one exact document per project; projections are disposable and never authoritative.
 
+Superseded-by: 2026-11-26-retire-project-roadmap.md
+
 Date: 2026-10-02
 
 Scope: the roadmap domain in `packages/engine/src/roadmap-store.ts`, its store schema, the `mstar roadmap` command family, and every consumer that reads roadmap content.
