@@ -465,6 +465,50 @@ type AssignableRow = {
 const NO_SUBSCRIBE = (): (() => void) => () => {}
 
 /**
+ * The assign picker's page walk, as a pure reducer over the reads that answer it.
+ *
+ * Fail-closed: a refusal at ANY page — the first or a later one — ends the walk as
+ * `failed` with the store's reason, so the picker states the cause and offers the
+ * retry instead of spinning on `loading`. A short page (or the stated total) ends
+ * it as `complete`; anything else keeps walking from the accumulated offset.
+ */
+export type AssignableWalk =
+  | { readonly kind: 'walking'; readonly pages: readonly AssignableRow[] }
+  | { readonly kind: 'complete'; readonly pages: readonly AssignableRow[] }
+  | { readonly kind: 'failed'; readonly reason: string }
+
+/** A walk that has not asked for its first page yet. */
+export function initialAssignableWalk(): AssignableWalk {
+  return { kind: 'walking', pages: [] }
+}
+
+/** The offset the next page starts at: the rows already accepted. */
+export function assignableWalkOffset(walk: AssignableWalk): number {
+  return walk.kind === 'failed' ? 0 : walk.pages.length
+}
+
+/** Fold one page's answer into the walk. A refusal is terminal at any offset. */
+export function assignableWalkStep(
+  walk: AssignableWalk,
+  answer: { readonly kind: 'waiting' } | { readonly kind: 'loading' } | { readonly kind: 'no-harness' } | { readonly kind: 'unavailable'; readonly reason: string } | { readonly kind: 'ok'; readonly envelope: { readonly data: unknown } },
+): AssignableWalk {
+  if (walk.kind === 'complete' || walk.kind === 'failed') return walk
+  if (answer.kind === 'no-harness') return { kind: 'failed', reason: 'no harness root resolves for this workspace' }
+  if (answer.kind === 'unavailable') return { kind: 'failed', reason: answer.reason }
+  if (answer.kind !== 'ok') return walk
+  const page = answer.envelope.data as { items?: readonly AssignableRow[]; total?: number } | null
+  if (page === null || !Array.isArray(page.items)) {
+    return { kind: 'failed', reason: 'the assignable issues read did not answer a page' }
+  }
+  const offset = walk.pages.length
+  const items = page.items
+  const pages = offset === 0 || walk.pages.length === offset ? [...walk.pages, ...items] : walk.pages
+  // A short page (or the stated total) ends the walk; anything else asks for the next.
+  const done = items.length === 0 || offset + items.length >= (page.total ?? 0)
+  return done ? { kind: 'complete', pages } : { kind: 'walking', pages }
+}
+
+/**
  * The read target for an open detail. The engine has NO `project-detail` view:
  * a project's page is composed from the views that exist, so the project open
  * reads its `overview` scoped to the project (the milestone body's source).
@@ -908,38 +952,31 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   // The assign picker's OWN read: the project's OPEN issues, one page at a time
   // (`disposition=open`, offset-walked by re-keying the read between answers) so
   // the address-bar filters and the first page's 200 rows cannot hide an offer.
-  const [assignablePages, setAssignablePages] = React.useState<readonly AssignableRow[]>([])
-  const [assignablePage, setAssignablePage] = React.useState<{ kind: 'idle' } | { kind: 'failed'; reason: string } | { kind: 'more' }>({ kind: 'idle' })
-  const assignableOffset = assignablePages.length
+  const [walk, setWalk] = React.useState<AssignableWalk>(initialAssignableWalk)
+  const [walkNonce, setWalkNonce] = React.useState(0)
+  const assignableOffset = assignableWalkOffset(walk)
   const assignableView = useMstarDashboardView({
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
-    view: detail !== null && detail.view === 'project-detail' && assignablePage.kind !== 'failed' ? 'issues' : null,
+    view: detail !== null && detail.view === 'project-detail' && walk.kind !== 'failed' ? 'issues' : null,
     ...(detail !== null && detail.view === 'project-detail'
       ? { params: { project: detail.id, disposition: 'open', limit: '200', ...(assignableOffset === 0 ? {} : { offset: String(assignableOffset) }) } }
       : {}),
   })
   const assignableAnswer = assignableView.state
+  // A new project, an explicit retry, and the post-write reload all restart the
+  // WHOLE walk from page 0 (a re-read of only the current page would leave the
+  // earlier pages of another observation behind).
   React.useEffect(() => {
-    if (detail === null || detail.view !== 'project-detail') {
-      setAssignablePages([])
-      setAssignablePage({ kind: 'idle' })
-      return
-    }
-    if (assignableAnswer.kind !== 'ok') return
-    const page = assignableAnswer.envelope.data as { items?: AssignableRow[]; total?: number } | null
-    if (page === null || !Array.isArray(page.items)) {
-      setAssignablePage({ kind: 'failed', reason: 'the assignable issues read did not answer a page' })
-      return
-    }
-    setAssignablePages((current) => (current.length === assignableOffset ? [...current, ...page.items!] : current))
-    // A short page (or the stated total) ends the walk; anything else asks for the next.
-    setAssignablePage(page.items.length === 0 || assignableOffset + page.items.length >= (page.total ?? 0) ? { kind: 'idle' } : { kind: 'more' })
-  }, [assignableAnswer, detail, assignableOffset])
-  const retryAssignableViews = () => {
-    setAssignablePages([])
-    setAssignablePage({ kind: 'idle' })
+    setWalk(initialAssignableWalk())
+  }, [detail, walkNonce])
+  React.useEffect(() => {
+    if (detail === null || detail.view !== 'project-detail') return
+    setWalk((current) => assignableWalkStep(current, assignableView.state))
+  }, [assignableView.state, detail])
+  const restartAssignableWalk = () => {
+    setWalkNonce((nonce) => nonce + 1)
     assignableView.reload()
     projectIssuesView.reload()
   }
@@ -966,28 +1003,26 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     expectedStoreRevision,
     reload: () => {
       detailView.reload()
-      projectIssuesView.reload()
+      // The accepted write (or conflict re-read) moved the store: the picker's
+      // offer must be walked again from page 0, not resumed at the old offset.
+      restartAssignableWalk()
     },
     drafts: milestoneDrafts,
   })
-  // The picker's three arms, never two: a pending read (waiting, loading, or a
-  // settled null page still being walked) says loading; only a refused read is
-  // `failed`, carrying the store's reason and the retry that re-issues the walk.
+  // The picker's three arms, never two: a still-walking read (waiting, loading,
+  // or a page not yet answered) says loading; a refusal at ANY page is `failed`
+  // with the store's reason and the retry that restarts the walk.
   const assignableIssues: AssignableIssuesRead | undefined =
     detail === null || detail.view !== 'project-detail'
       ? undefined
-      : assignablePage.kind === 'failed'
-        ? { kind: 'failed', reason: assignablePage.reason }
-        : assignablePage.kind === 'more' || assignableAnswer.kind === 'waiting' || assignableAnswer.kind === 'loading'
-          ? { kind: 'loading' }
-          : assignableAnswer.kind === 'unavailable'
-            ? { kind: 'failed', reason: assignableAnswer.reason }
-            : assignableAnswer.kind === 'ok'
-              ? assignablePages
-                  .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
-                  .slice(0, ASSIGNABLE_ISSUE_LIMIT)
-                  .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
-              : { kind: 'failed', reason: 'no harness root resolves for this workspace' }
+      : walk.kind === 'failed'
+        ? { kind: 'failed', reason: walk.reason }
+        : walk.kind === 'complete'
+          ? walk.pages
+              .filter((issue) => issue.disposition === 'open' && issue.milestoneId === null)
+              .slice(0, ASSIGNABLE_ISSUE_LIMIT)
+              .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
+          : { kind: 'loading' }
 
   // (b) The workflow pick is the product's only write: once the commit lands,
   // every read that DEPENDS on the binding re-reads — the digest (selection),
@@ -1071,7 +1106,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       {...(destination === 'projects' ? { projectsList: destinationView.state } : {})}
       {...(milestoneWrites === undefined ? {} : { writes: milestoneWrites })}
       {...(assignableIssues === undefined ? {} : { assignableIssues })}
-      {...(detail !== null && detail.view === 'project-detail' ? { onRetryAssignable: retryAssignableViews } : {})}
+      {...(detail !== null && detail.view === 'project-detail' ? { onRetryAssignable: restartAssignableWalk } : {})}
       drafts={milestoneDrafts}
       destination={destination}
       locale={locale}

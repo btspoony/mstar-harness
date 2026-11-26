@@ -715,6 +715,142 @@ describe("the milestone write route", () => {
     expect((JSON.parse(retire.body) as { error: { code: string } }).error.code).toMatch(/milestone\./);
   });
 
+  test("retires an EMPTY milestone successfully, and the overview read no longer carries it", async () => {
+    const { dir, context } = await workspace("milestone-retire-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-retire-project", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-a");
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Empty sprint", effortSessions: null, ordinal: 0 },
+      operationId: "op-retire-create",
+      expectedStoreRevision: revision,
+    });
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+    const server = await start(dir);
+    try {
+      const before = await raw(new URL("/api/overview?project=proj-a", server.url).href);
+      expect(before.status).toBe(200);
+      const beforeMilestones = (JSON.parse(before.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
+        .data.milestones.data.milestones;
+      expect(beforeMilestones.map((row) => row.milestoneId)).toContain(milestone.milestoneId);
+
+      const retired = await post(dir, {
+        verb: "remove",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        operationId: "op-retire",
+        expectedStoreRevision: milestone.storeRevision,
+      });
+      expect(retired.status).toBe(200);
+      expect((JSON.parse(retired.body) as { data: { changed: boolean } }).data.changed).toBe(true);
+
+      // The re-read the page performs no longer carries it.
+      const after = await raw(new URL("/api/overview?project=proj-a", server.url).href);
+      const afterMilestones = (JSON.parse(after.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
+        .data.milestones.data.milestones;
+      expect(afterMilestones).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("the dashboard host's own read/write loop re-reads after a conflict and keeps the typed draft", async () => {
+    // Drives the SHIPPED host pair — `readProjectMilestones` + `writeMilestone` —
+    // exactly as `ProjectDetailDestination` does, over the real loopback server:
+    // the read that renders the forms supplies the revision, the write carries it,
+    // a conflict triggers the host's re-read, and the draft kept outside the read's
+    // subtree survives that re-read and lands on the retry.
+    const { createMilestoneDraftStore, milestoneDraftTargetKey, readProjectMilestones, writeMilestone } = await import(
+      "../web/projects-data.ts"
+    );
+    const { dir, context } = await workspace("milestone-host-loop-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-host-project", actor: "dashboard-test" },
+    );
+    const server = await start(dir);
+    try {
+      // The page's first action is a create; the milestone must exist for the forms.
+      const projectRevision = await observedRevision(context, "proj-a");
+      const created = await post(dir, {
+        verb: "create",
+        projectId: "proj-a",
+        input: { name: "Original", effortSessions: null, ordinal: 0 },
+        operationId: "op-host-create",
+        expectedStoreRevision: projectRevision,
+      });
+      const milestone = (JSON.parse(created.body) as { data: { milestoneId: string } }).data;
+
+      // The browser's `fetch`, against the real server and its token boundary.
+      const token = new URL(server.url).searchParams.get("token")!;
+      const origin = `http://127.0.0.1:${new URL(server.url).port}`;
+      const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
+        const raw = String(input);
+        const url = raw.startsWith("/") ? `${origin}${raw}${raw.includes("?") ? "&" : "?"}token=${token}` : raw;
+        return fetch(url, init);
+      }) as unknown as typeof fetch;
+
+      // The read that renders the forms: the observed revision rides its envelope.
+      const first = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(first.status).toBe("ready");
+      if (first.status !== "ready") return;
+
+      // Another writer moves the store between the read and the write.
+      await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved elsewhere" }, {
+        operationId: "op-host-other",
+        expectedStoreRevision: first.storeRevision as number,
+      });
+
+      // The operator's draft lives OUTSIDE the read's subtree — the host's store.
+      const drafts = createMilestoneDraftStore();
+      const target = milestoneDraftTargetKey("proj-a", milestone.milestoneId);
+      drafts.write(target, { name: "Typed in the editor", effort: "4" });
+
+      const stale = await writeMilestone(fetchImpl, {
+        verb: "update",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        patch: { name: "Typed in the editor" },
+        operationId: "op-host-stale",
+        expectedStoreRevision: first.storeRevision as number,
+      });
+      expect(stale).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
+
+      // The host's re-read (the conflict's own follow-up) answers the FRESH revision.
+      const second = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(second.status).toBe("ready");
+      if (second.status !== "ready") return;
+      expect(second.storeRevision).not.toBe(first.storeRevision);
+      // ...and the draft the operator typed survived that re-read untouched.
+      expect(drafts.read(target)).toMatchObject({ name: "Typed in the editor", effort: "4" });
+
+      // The retry at the fresh revision carries the draft's text and lands.
+      const retried = await writeMilestone(fetchImpl, {
+        verb: "update",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        patch: { name: drafts.read(target)!.name },
+        operationId: "op-host-retry",
+        expectedStoreRevision: second.storeRevision as number,
+      });
+      expect(retried.status).toBe("ok");
+      const settled = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(settled.status).toBe("ready");
+      if (settled.status !== "ready") return;
+      expect(settled.milestones.kind).toBe("populated");
+      if (settled.milestones.kind !== "populated") return;
+      expect(settled.milestones.value.milestones.map((row) => row.name)).toEqual(["Typed in the editor"]);
+    } finally {
+      await server.close();
+    }
+  });
+
   test("a conflict re-read re-arms the write and the operator's draft survives it", async () => {
     const { dir, context } = await workspace("milestone-conflict-draft-");
     await registerCatalogEntity(

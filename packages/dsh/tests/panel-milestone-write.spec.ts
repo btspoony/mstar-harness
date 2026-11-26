@@ -20,7 +20,7 @@ import {
   type MstarPanelSnapshotConnection,
 } from '../src/client/panel/panel-snapshot-client.ts'
 import type { ConnectionRpcResult } from '@deepseek-ai/dsh-client-connection/client'
-import { createMilestoneWrites, writeOperationIds } from '../src/client/panel/panel-shell.tsx'
+import { assignableWalkOffset, assignableWalkStep, createMilestoneWrites, initialAssignableWalk, writeOperationIds } from '../src/client/panel/panel-shell.tsx'
 import { registerCatalogEntity, withCollaborationWrite } from '@mstar-harness/engine'
 import {
   PANEL_SNAPSHOT_SERVICE,
@@ -1064,3 +1064,74 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
   })
 })
 
+
+describe('the assign walk — fail-closed at any page, restarted by a write', () => {
+  /** One page of the walk, as the engine's issue view answers it. */
+  const page = (offset: number, count: number, total: number) => ({
+    data: {
+      items: Array.from({ length: count }, (_, index) => ({
+        id: `I-${offset + index}`,
+        title: `Issue ${offset + index}`,
+        severity: 'low',
+        disposition: 'open',
+        milestoneId: null,
+        revision: 1,
+      })),
+      total,
+      projectCount: 1,
+      storeRevision: 3,
+    },
+  })
+
+  it('a failure on a LATER page ends the walk as failed, never as loading', () => {
+    const first = assignableWalkStep(initialAssignableWalk(), { kind: 'ok', envelope: page(0, 200, 400) })
+    expect(first).toMatchObject({ kind: 'walking' })
+    expect(assignableWalkOffset(first)).toBe(200)
+    // Page 2 is refused: the store's own reason becomes the picker's failure arm.
+    const failed = assignableWalkStep(first, { kind: 'unavailable', reason: '[store.not-active] the store is staged' })
+    expect(failed).toEqual({ kind: 'failed', reason: '[store.not-active] the store is staged' })
+    // A late retry does not reopen a failed walk; the host's restart does.
+    expect(assignableWalkStep(failed, { kind: 'ok', envelope: page(200, 200, 400) })).toEqual(failed)
+  })
+
+  it('a first-page refusal is the same failure arm; a short page completes the walk', () => {
+    expect(assignableWalkStep(initialAssignableWalk(), { kind: 'unavailable', reason: 'boom' })).toEqual({
+      kind: 'failed',
+      reason: 'boom',
+    })
+    const done = assignableWalkStep(initialAssignableWalk(), { kind: 'ok', envelope: page(0, 12, 12) })
+    expect(done).toMatchObject({ kind: 'complete' })
+    // A pending read is still a walk in progress.
+    expect(assignableWalkStep(initialAssignableWalk(), { kind: 'loading' })).toEqual({ kind: 'walking', pages: [] })
+  })
+
+  it('an accepted write re-issues the WHOLE walk, not only the page it was reading', async () => {
+    const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
+    await seedStore(app.harnessDir)
+    liveSession(app, 'ses_walk_restart', app.root)
+    const endpoint = endpointOf(app)
+    await seedProject(app.harnessDir)
+    const revisions: number[] = []
+    let restartAt: number | null = null
+    const channel = createMilestoneWrites({
+      client: new MstarPanelSnapshotClient(serviceConnection(endpoint)),
+      sessionId: 'ses_walk_restart',
+      cwd: app.root,
+      projectId: '_default',
+      expectedStoreRevision: await observedRevision(endpoint, 'ses_walk_restart', app.root),
+      // What the seat's reload does for the walk: restart from page 0.
+      reload: () => { restartAt = 0; revisions.push(revisions.length + 1) },
+      onState: () => {},
+      ids: writeOperationIds<{ expectedStoreRevision: number }>(),
+      draftsProject: '_default',
+    })
+    channel.create({ name: 'Walk restart', effortSessions: null, ordinal: 0 })
+    for (let i = 0; i < 100 && channel.busy; i++) await new Promise((resolve) => setTimeout(resolve, 0))
+    // The accepted write reloaded once, and that reload restarts the walk at offset 0.
+    expect(restartAt).toBe(0)
+    expect(revisions).toHaveLength(1)
+    // The restart is a NEW walk whose offset is zero again — the accumulated pages
+    // are not carried across the write's observation.
+    expect(assignableWalkOffset(initialAssignableWalk())).toBe(0)
+  })
+})

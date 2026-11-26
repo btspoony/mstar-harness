@@ -15,6 +15,7 @@ import type { IssuePage, IterationListDTO, OverviewDTO, ProjectListDTO } from "@
 import {
   ASSIGNABLE_ISSUE_LIMIT,
   createMilestoneDraftStore,
+  milestoneDraftTargetKey,
   milestonesArm,
   projectIdentity,
   projectIdentityFor,
@@ -257,6 +258,7 @@ export function projectOptions(model: ProjectListModel): readonly string[] {
 export {
   ASSIGNABLE_ISSUE_LIMIT,
   createMilestoneDraftStore,
+  milestoneDraftTargetKey,
   projectIdentity,
   projectIdentityFor,
   type AssignableIssuesRead,
