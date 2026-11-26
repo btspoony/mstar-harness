@@ -796,7 +796,7 @@ Do the thing, evidence-first.
   // Disposition — removed hostile workflow-id register fixture; ACTIVE workflow ids are owned and validated by database producers, not joined from status.json paths.
 })
 
-describe('dispatch gate — worktree hostile inputs + header-region scoping', () => {
+describe('dispatch gate — worktree hostile inputs + front-matter scoping', () => {
   it('track lines quoted in the task body declare nothing (front matter is the only field contract)', async () => {
     const root = tmpRoot('dsh-wt-l2-body-')
     const wts = worktreeFixture(root, ['feature/a', 'feature/b'])
