@@ -461,16 +461,11 @@ describe('the shell holds the open record and the project detail mounts', () => 
   })
 
   it('project detail mounts the milestone body and two tabs with Issues default', () => {
-    const overview = {
-      projectId: 'proj-1',
-      workflows: { state: 'not-applicable', reason: 'not read' },
-      residuals: { state: 'not-applicable', reason: 'not read' },
-      milestones: { state: 'read', data: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 } },
-      latestIteration: { state: 'not-applicable', reason: 'not read' },
-      issueFlow: { state: 'not-applicable', reason: 'not read' },
-    }
+    // The project-detail read answers the milestone grouping directly (the
+    // `milestones` view), not an aggregated overview.
+    const milestones = { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 }
     const markup = render(
-      { view: 'project-detail', id: 'proj-1', state: envelope(overview) },
+      { view: 'project-detail', id: 'proj-1', state: envelope(milestones) },
       { projectIterations: envelope({ items: [], total: 0, attribution: 'absent' }) },
     )
     expect(markup).toContain('data-ms-screen="project-detail"')
@@ -489,28 +484,23 @@ describe('the shell holds the open record and the project detail mounts', () => 
     // The adapter chain dropped `writes` once, so every project page rendered its
     // read-only shape even when the seat supplied a channel. This proves the
     // props arrive: with a channel the controls are there, without one they are not.
-    const overview = {
-      projectId: 'proj-1',
-      workflows: { state: 'not-applicable', reason: 'not read' },
-      residuals: { state: 'not-applicable', reason: 'not read' },
-      milestones: { state: 'read', data: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 } },
-      latestIteration: { state: 'not-applicable', reason: 'not read' },
-      issueFlow: { state: 'not-applicable', reason: 'not read' },
-    }
+    // The project-detail read answers the milestone grouping directly (the
+    // `milestones` view), not an aggregated overview.
+    const milestones = { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 }
     const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} }
     const withWrites = render(
-      { view: 'project-detail', id: 'proj-1', state: envelope(overview) },
+      { view: 'project-detail', id: 'proj-1', state: envelope(milestones) },
       { writes, assignableIssues: [] },
     )
     expect(withWrites).toContain('data-ms-milestone-create=""')
     // The refusal line is the channel's, and it appears only when the store refused.
     const refused = render(
-      { view: 'project-detail', id: 'proj-1', state: envelope(overview) },
+      { view: 'project-detail', id: 'proj-1', state: envelope(milestones) },
       { writes: { ...writes, refusal: '[milestone.not-empty] Milestone still holds issues.' }, assignableIssues: [] },
     )
     expect(refused).toContain('data-ms-write-refusal=""')
     expect(refused).toContain('[milestone.not-empty] Milestone still holds issues.')
-    const readOnly = render({ view: 'project-detail', id: 'proj-1', state: envelope(overview) })
+    const readOnly = render({ view: 'project-detail', id: 'proj-1', state: envelope(milestones) })
     expect(readOnly).not.toContain('data-ms-milestone-create')
   })
 })
@@ -518,27 +508,18 @@ describe('the shell holds the open record and the project detail mounts', () => 
 describe('the dsh assign picker — pending reads show loading, only a refusal is failed', () => {
   const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
   const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
+  // The project-detail read answers the milestone grouping directly.
   const OVERVIEW = {
     projectId: 'proj-1',
-    workflows: { state: 'not-applicable', reason: 'not read' },
-    residuals: { state: 'not-applicable', reason: 'not read' },
-    milestones: {
-      state: 'read',
-      data: {
-        projectId: 'proj-1',
-        milestones: [
-          {
-            milestoneId: 'm-1', projectId: 'proj-1', name: 'Release', effortSessions: null, status: 'planned', ordinal: 0,
-            revision: 1, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
-            totalIssues: 0, openIssues: 0, resolvedIssues: 0, otherRetiredIssues: 0,
-          },
-        ],
-        issues: [],
-        unassignedIssues: 0,
+    milestones: [
+      {
+        milestoneId: 'm-1', projectId: 'proj-1', name: 'Release', effortSessions: null, status: 'planned', ordinal: 0,
+        revision: 1, createdAt: '2026-10-01T00:00:00.000Z', updatedAt: '2026-10-01T00:00:00.000Z',
+        totalIssues: 0, openIssues: 0, resolvedIssues: 0, otherRetiredIssues: 0,
       },
-    },
-    latestIteration: { state: 'not-applicable', reason: 'not read' },
-    issueFlow: { state: 'not-applicable', reason: 'not read' },
+    ],
+    issues: [],
+    unassignedIssues: 0,
   }
   const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} }
   const render = (assignableIssues: unknown) =>

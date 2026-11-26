@@ -510,15 +510,17 @@ export function assignableWalkStep(
 
 /**
  * The read target for an open detail. The engine has NO `project-detail` view:
- * a project's page is composed from the views that exist, so the project open
- * reads its `overview` scoped to the project (the milestone body's source).
+ * a project's page is composed from the views that exist. The project open reads
+ * its `milestones` view scoped to the project — collaboration data only, so a
+ * checkout with no execution store still renders the milestone body (the
+ * `overview` it used before joins projected execution rows and needs one).
  * Every other detail is its own view.
  */
 export function detailReadTarget(
   view: DetailView,
   id: string,
 ): { view: string; params?: Record<string, string>; id?: string } {
-  return view === 'project-detail' ? { view: 'overview', params: { project: id } } : { view, id }
+  return view === 'project-detail' ? { view: 'milestones', params: { project: id } } : { view, id }
 }
 
 /**

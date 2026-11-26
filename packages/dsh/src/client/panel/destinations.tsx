@@ -253,7 +253,7 @@ import {
   type ProjectFeature,
   type ProjectIdentity,
 } from '@mstar-harness/ui'
-import type { IssueDetail as IssueDetailDTO, OverviewDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
+import type { IssueDetail as IssueDetailDTO, MilestoneRead, OverviewDTO, WorkflowDTO, IterationDTO } from '@mstar-harness/engine'
 
 /** The four detail views a destination can open. */
 export type DetailView = 'issue-detail' | 'workflow-detail' | 'iteration-detail' | 'project-detail'
@@ -414,10 +414,11 @@ export function projectIdentityOf(
  * `project-detail` — the only place the product expresses its hierarchy.
  *
  * The milestone rollup is the page's default body, read from the project-scoped
- * `overview` read's `milestones` member; the adapter owns the list-FEATURE
- * state: the fixed two tabs, with `Issues` the default (a constant, never
- * "first non-empty"). Each tab's body comes from its own project-scoped read:
- * `issues?project=<id>` and `iterations?project=<id>`.
+ * `milestones` view (collaboration data only, so it answers without an execution
+ * store); the adapter owns the list-FEATURE state: the fixed two tabs, with
+ * `Issues` the default (a constant, never "first non-empty"). Each tab's body
+ * comes from its own project-scoped read: `issues?project=<id>` and
+ * `iterations?project=<id>`.
  */
 export function ProjectDetailDestination(props: {
   id: string
@@ -447,11 +448,12 @@ export function ProjectDetailDestination(props: {
   if (props.state.kind !== 'ok') return <ReadState state={props.state} copy={copy} />
   const data = props.state.envelope.data
   // The shared arm owns the decision (a degraded member keeps its own state and
-  // reason), so both hosts answer a project the same way.
+  // reason), so both hosts answer a project the same way. The read answers the
+  // milestone grouping directly, so it is wrapped as the member it used to ride.
   const milestones =
     data === null
-      ? milestonesArm({ state: 'unavailable', reason: 'no overview payload' })
-      : milestonesArm((data as OverviewDTO).milestones)
+      ? milestonesArm({ state: 'unavailable', reason: 'no milestone payload' })
+      : milestonesArm({ state: 'read', data: data as MilestoneRead })
   const iterationsCopy = {
     ...copy.iterations,
     notStarted: copy.workflowDetail.fields.notStarted,
