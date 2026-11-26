@@ -796,9 +796,22 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
     // may have edited the name and status too. The draft is theirs, not the
     // engine's to throw away — only an accepted write closes the editor.
     const typed = { name: "Renamed", effort: "0", status: "active" };
-    expect(draftAfterWrite(typed, "[milestone.effort-range] Effort sessions must be a positive count.")).toEqual(typed);
-    expect(draftAfterWrite(typed, null)).toBeNull();
+    expect(draftAfterWrite(typed, { refusal: "[milestone.effort-range] Effort sessions must be a positive count." })).toEqual(typed);
+    expect(draftAfterWrite(typed, { refusal: null })).toBeNull();
   });
+
+  test("the host's keepDraft verdict WINS over the refusal string (a conflict keeps the draft)", () => {
+    // THE wiring assertion: a revision conflict carries a refusal message AND must
+    // keep the draft. Reading only `refusal` would clear it; the surface must read
+    // the host's `keepDraft`. Dropping that field from the host's writes state makes
+    // this case fall back to `refusal !== null` and FAIL.
+    const typed = { name: "Typed before the conflict", effort: "4" };
+    const conflict = { refusal: "[milestone.revision-conflict] the store moved", keepDraft: true };
+    expect(draftAfterWrite(typed, conflict)).toEqual(typed);
+    const accepted = { refusal: null, keepDraft: false };
+    expect(draftAfterWrite(typed, accepted)).toBeNull();
+  });
+
 });
 
 describe("ProjectDetail — the write controls reach every answered arm", () => {

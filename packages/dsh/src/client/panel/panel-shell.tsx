@@ -597,6 +597,8 @@ export function isRevisionConflictCode(code: string): boolean {
 export type MilestoneWriteChannel = {
   readonly busy: boolean
   readonly refusal: string | null
+  /** The conflict policy's verdict on the typed draft: accepted clears, conflict keeps. */
+  readonly keepDraft: boolean | undefined
   create(input: { name: string; effortSessions: number | null; ordinal: number }): void
   update(
     milestoneId: string,
@@ -656,7 +658,7 @@ export function createMilestoneWrites(seats: {
   expectedStoreRevision: number
   reload: () => void
   /** The channel's busy/refusal mirror — React state in the seat, recorded in a spec. */
-  onState: (state: { busy: boolean; refusal: string | null }) => void
+  onState: (state: { busy: boolean; refusal: string | null; keepDraft?: boolean }) => void
   /** The id policy; the seat owns one instance for its lifetime. */
   ids: ReturnType<typeof writeOperationIds<{ expectedStoreRevision: number }>>
   /** note: the identity the page was opened over — the draft key is scoped with it, never re-read later. */
@@ -670,6 +672,7 @@ export function createMilestoneWrites(seats: {
   // members with its React state, but a direct caller (a spec) reads these.
   let busy = false
   let refusal: string | null = null
+  let keepDraft: boolean | undefined
   const run = (
     signature: string,
     request: { expectedStoreRevision: number },
@@ -680,6 +683,7 @@ export function createMilestoneWrites(seats: {
     void (async () => {
       busy = true
       refusal = null
+      keepDraft = undefined
       onState({ busy: true, refusal: null })
       // The retained request wins: an ambiguous retry must hash the SAME revision
       // the engine may already have committed, or it answers store.operation-conflict.
@@ -691,7 +695,10 @@ export function createMilestoneWrites(seats: {
       if (!ambiguous) ids.settled()
       busy = false
       refusal = result.ok ? null : result.message
-      onState({ busy, refusal })
+      // The host's draft verdict: an accepted write clears the form; a revision
+      // conflict KEEPS the typed text even though its refusal message is present.
+      keepDraft = !result.ok
+      onState({ busy, refusal, keepDraft })
       // why: reloading on an ambiguous answer would refresh the read's revision and turn the retry
       // into a DIFFERENT request (exactly the duplicate write C1 forbids), and an input-validation
       // refusal wrote nothing, so there is nothing to refresh — reloading there unmounts the forms
@@ -713,6 +720,9 @@ export function createMilestoneWrites(seats: {
     },
     get refusal(): string | null {
       return refusal
+    },
+    get keepDraft(): boolean | undefined {
+      return keepDraft
     },
     create(input: { name: string; effortSessions: number | null; ordinal: number }): void {
       run(
@@ -794,7 +804,10 @@ function useMilestoneWrites(seats: {
   drafts?: MilestoneDraftStore
 }): MilestoneWriteChannel | undefined {
   const { client, sessionId, cwd, projectId, expectedStoreRevision, reload, drafts } = seats
-  const [state, setState] = React.useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null })
+  const [state, setState] = React.useState<{ busy: boolean; refusal: string | null; keepDraft?: boolean }>({
+    busy: false,
+    refusal: null,
+  })
   const ids = React.useRef(writeOperationIds<{ expectedStoreRevision: number }>())
   // Number.isInteger, not a null test: a schema-drifted envelope makes the member
   // `undefined`, and a channel armed with no revision would guarantee refusals.
@@ -821,7 +834,7 @@ function useMilestoneWrites(seats: {
   })
   // The factory's own busy flag is per-call-site state; the mirror the screen
   // reads is this component's state, so return the channel with the live mirror.
-  return { ...channel, busy: state.busy, refusal: state.refusal }
+  return { ...channel, busy: state.busy, refusal: state.refusal, keepDraft: state.keepDraft }
 }
 
 /**

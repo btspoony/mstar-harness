@@ -229,15 +229,19 @@ export function nextMilestoneOrdinal(milestones: readonly { ordinal: number }[])
 }
 
 /**
- * What a settled write does to the operator's draft: a REFUSED write keeps it —
- * the name/status/effort edits the operator typed are not the engine's to throw
- * away, and the refusal message arrives while the editor is still open to fix
- * the offending value. An accepted write clears it (null), as before. The write
- * surface's refusal prop is the verdict: null after a successful write, the
- * store's own message after a refused one.
+ * What a settled write does to the operator's draft.
+ *
+ * The surface's `keepDraft` is the verdict when the host states it: an accepted
+ * write clears the draft, a revision conflict keeps it (so the retry carries the
+ * typed text), and an input refusal keeps it too. A host that states nothing
+ * falls back to the refusal string — `null` means accepted — so an omitted field
+ * cannot silently change an existing host's behaviour.
  */
-export function draftAfterWrite<T>(draft: T, refusal: string | null): T | null {
-  return refusal === null ? null : draft;
+export function draftAfterWrite<T>(
+  draft: T,
+  write: { readonly refusal: string | null; readonly keepDraft?: boolean },
+): T | null {
+  return (write.keepDraft ?? write.refusal !== null) ? draft : null;
 }
 
 /**
@@ -254,6 +258,16 @@ export type MilestoneWriteSurface = {
   busy: boolean;
   /** The store's own refusal message, verbatim, or `null`. */
   refusal: string | null;
+  /**
+   * Whether the operator's typed draft survives the write that just settled.
+   *
+   * The HOST decides this (its conflict policy), not the refusal string: an
+   * accepted write clears the draft, while a revision conflict — whose refusal
+   * text is present too — keeps it, so the retry still carries the typed text.
+   * Omitted, the surface falls back to `refusal === null`, which is the
+   * pre-conflict behaviour for a host that cannot distinguish the two.
+   */
+  keepDraft?: boolean;
   create: (input: { name: string; effortSessions: number | null; ordinal: number }) => void;
   update: (milestoneId: string, patch: { name?: string; effortSessions?: number | null; status?: string }) => void;
   /** `milestoneId: null` is the unassign. */
@@ -446,13 +460,13 @@ function MilestoneActions(props: {
   const setDraft = setDraftState;
   const [removing, setRemoving] = useState(false);
   const [effortError, setEffortError] = useState(false);
-  // why: the surface's refusal verdict, not the submit itself, decides whether the draft closes,
-  // so a refused count never throws away the operator's other edits.
+  // why: the surface's keepDraft verdict (its host's conflict policy), not the submit itself,
+  // decides whether the draft closes — an accepted write clears it, a revision conflict keeps it.
   const [writeInFlight, setWriteInFlight] = useState(false);
   useEffect(() => {
     if (!writeInFlight || writes.busy) return;
     setWriteInFlight(false);
-    setDraft((current) => (current === null ? null : draftAfterWrite(current, writes.refusal)));
+    setDraft((current) => (current === null ? null : draftAfterWrite(current, writes)));
   });
   if (draft === null) {
     return (
@@ -708,13 +722,13 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
     if (name === "" && effort === "") props.drafts?.clear(targetKey);
     else props.drafts?.write(targetKey, { name, effort });
   }, [name, effort, props.drafts, targetKey]);
-  // why: same rule as the editor — the form clears only when the write is accepted, so a refusal
-  // keeps what the operator typed and the store's own message arrives beside the open form.
+  // why: same rule as the editor — the surface's keepDraft verdict clears the form only on an
+  // accepted write, so a conflict (whose refusal text is present) keeps the typed values.
   const [writeInFlight, setWriteInFlight] = useState(false);
   useEffect(() => {
     if (!writeInFlight || writes.busy) return;
     setWriteInFlight(false);
-    if (draftAfterWrite({ name, effort }, writes.refusal) !== null) return;
+    if (draftAfterWrite({ name, effort }, writes) !== null) return;
     setName("");
     setEffort("");
   });

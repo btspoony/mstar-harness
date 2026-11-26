@@ -761,7 +761,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
    * write's re-read and a revision-conflict retry.
    */
   const [drafts] = useState(createMilestoneDraftStore);
-  const [writesState, setWritesState] = useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null });
+  const [writesState, setWritesState] = useState<{ busy: boolean; refusal: string | null; keepDraft: boolean | undefined }>({ busy: false, refusal: null, keepDraft: undefined });
   /** One operation id per logical write, retained across a transport-ambiguous retry. */
   const [operationIds] = useState(milestoneWriteIds);
   const [reloadToken, setReloadToken] = useState(0);
@@ -850,6 +850,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       : {
           busy: writesState.busy,
           refusal: writesState.refusal,
+          keepDraft: writesState.keepDraft,
           create: (input) => runMilestoneWrite({ verb: "create", projectId, input }),
           update: (milestoneId, patch) => runMilestoneWrite({ verb: "update", projectId, milestoneId, patch }),
           assign: (issueId, issueRevision, milestoneId) =>
@@ -860,7 +861,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   function runMilestoneWrite(request: MilestoneMutationRequest): void {
     if (outcome.kind !== "ready" || outcome.storeRevision === null || writesState.busy) return;
     const revision = outcome.storeRevision;
-    setWritesState({ busy: true, refusal: null });
+    setWritesState({ busy: true, refusal: null, keepDraft: undefined });
     const retained = operationIds.for(JSON.stringify(request), { expectedStoreRevision: revision });
     void writeMilestone(fetch, {
       ...request,
@@ -872,7 +873,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
       // transport failure → retain the operation for a replay.
       const followUp = milestoneWriteFollowUp(request, result);
       if (!followUp.retainOperation) operationIds.settled();
-      setWritesState({ busy: false, refusal: followUp.refusal });
+      setWritesState({ busy: false, refusal: followUp.refusal, keepDraft: followUp.keepDraft });
       if (followUp.reloadOverview) setReloadToken((token) => token + 1);
       // An assignment moves an issue's milestone and revision, so the scoped list and
       // the picker both re-read — the assigned issue leaves the offer set, and an

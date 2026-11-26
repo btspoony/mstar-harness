@@ -472,6 +472,16 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     expect(ambiguous.keepDraft).toBe(true);
   });
 
+  test("the page FORWARDS the policy's keepDraft into the surface the screen reads", async () => {
+    // The wiring assertion (not just the function's return): the page must carry
+    // `followUp.keepDraft` into its writes state and hand that state's field to the
+    // screen. Delete either line — the accepted/conflict distinction the screen
+    // renders from — and this fails.
+    const source = await Bun.file(new URL("./main.tsx", import.meta.url)).text();
+    expect(source).toContain("keepDraft: followUp.keepDraft");
+    expect(source).toContain("keepDraft: writesState.keepDraft");
+  });
+
   test("only an assignment refreshes the scoped list/picker", () => {
     expect(milestoneWriteFollowUp({ verb: "assign" }, accepted).refreshIssues).toBe(true);
     for (const verb of ["create", "update", "remove"] as const) {
