@@ -80,6 +80,14 @@ function isReviewOrAuditRound(values: Record<string, unknown>): boolean {
   ).roundBounded;
 }
 
+/** The round-bounding Assignment text fields. Their values are prose, so a
+ * non-blank `|` block scalar is a usable declaration — `validateAssignmentFields`
+ * reads the decoded text of exactly these keys. Every other textual field
+ * refuses a block scalar, because its consumer reads a scalar on the key line.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
+const ROUND_TEXT_FIELDS: Record<string, true> = { task_budget: true, budget: true, return_shape: true };
+
 const ASSIGNMENT_SCHEMA: DocumentSchema = {
   kind: "assignment",
   required: [
@@ -331,9 +339,12 @@ export function validateDocumentFrontmatterExtraction(kind: DocumentKind, extrac
     // The plan reader consumes a scalar declaration only (`plan_id` and the
     // other consulted keys refuse a block scalar), so the schema refuses the
     // same shape here: a non-blank block scalar would otherwise pass the
-    // gate and be rejected one layer later by whoever reads the plan.
+    // gate and be rejected one layer later by whoever reads the plan. The
+    // round-bounding prose fields are the exception — dispatch reads their
+    // decoded text, so a non-blank block scalar is usable content there
+    // (a blank one falls through to the missing check below).
     // see docs/knowledge/conventions/plan-frontmatter-declarations.md
-    if (field.enum === undefined && requiredEntry.kind === "block-scalar") {
+    if (field.enum === undefined && requiredEntry.kind === "block-scalar" && !ROUND_TEXT_FIELDS[field.name]) {
       violations.push(violation("high", "document.frontmatter.invalid",
         `${source}:${requiredEntry.line}: invalid ${field.name} \u2014 accepted values: a scalar on the key line, not a block scalar`,
         `write ${field.name}: <value> on one line`));

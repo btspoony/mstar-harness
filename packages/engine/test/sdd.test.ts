@@ -754,6 +754,71 @@ describe("taskBrief — brief front matter (plan_id / task / files)", () => {
     }
   });
 
+  test("an indented fence is an indented code block, so it hides no later task", () => {
+    // Four or more columns of indent make it an INDENTED CODE BLOCK, not a
+    // fence: the marker neither opens nor closes one, and the block ends at
+    // the first less-indented line — there is no closing marker to find.
+    // Reading the opener as a fence left the tracker open for the rest of the
+    // document, so `### Task 2` was never seen and its brief refused although
+    // the heading is right there.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const body = [
+      "### Task 1: only",
+      "",
+      "    ```text",
+      "    - Create: `src/sample.ts`",
+      "",
+      "Body of task one.",
+      "",
+      "### Task 2: real",
+      "",
+      "**Files:**",
+      "- Create: `src/two.ts`",
+      "",
+      "Body of task two.",
+      "",
+    ].join("\n");
+    const { dir, plan } = writePlan(planFrontMatter("indented-fence-plan", body));
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const { header, body: briefBody } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("task")).toBe(2);
+      expect(header.get("files")).toEqual(["src/two.ts"]);
+      expect(briefBody).toContain("Body of task two.");
+      expect(briefBody).not.toContain("Body of task one.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an indented tilde fence is an indented code block too", () => {
+    // The same rule for `~~~`: the two characters are one fence grammar, so an
+    // indented opener is an indented code block in both spellings.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const body = [
+      "### Task 1: only",
+      "",
+      "    ~~~text",
+      "    ### Task 2: quoted heading",
+      "",
+      "Body of task one.",
+      "",
+      "### Task 2: real",
+      "",
+      "Body of task two.",
+      "",
+    ].join("\n");
+    const { dir, plan } = writePlan(planFrontMatter("indented-tilde-plan", body));
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      expect(splitBrief(readFileSync(file, "utf8")).body).toContain("Body of task two.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a task without Files entries writes no files key", () => {
     const { dir, plan } = writePlan();
     try {

@@ -251,8 +251,13 @@ describe("assignment files resolve through the ONE source resolver", () => {
       // The repeated key blocks the read; reporting plan_id/review_range/
       // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
       // diff_basis as missing would send the caller after the wrong defect.
+      // The message names the RESOLVED source (pointer target included) and
+      // its line, so the caller can open the defective document directly.
       expect(duplicate).toMatchObject({ code: "qc.alignment.field.duplicate" });
-      if (duplicate.status === "refused") expect(duplicate.message).toContain("duplicate");
+      if (duplicate.status === "refused") {
+        expect(duplicate.message).toContain("duplicate");
+        expect(duplicate.message).toContain(`${document}:3:`);
+      }
 
       // A genuinely absent field still reports as missing.
       // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
@@ -260,6 +265,104 @@ describe("assignment files resolve through the ONE source resolver", () => {
       writeFileSync(absent, `---\nplan_id: 20261125-demo\n---\n\n## Task\n\nReview.\n`);
       const missing = await runVerb("worktree.qc-alignment", root, { files: [absent] }, harness);
       expect(missing).toMatchObject({ code: "qc.alignment.field.missing" });
+      // The missing-field row also names the file it belongs to.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      if (missing.status === "refused") expect(missing.message).toContain(`${absent}: missing`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("worktree qc-alignment reports a malformed front matter as itself, naming the source and line", async () => {
+    const root = mkdtempSync(join(tmpdir(), "assign-align-bad-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "assignments"), { recursive: true });
+      // A line outside the accepted subset is the document's real defect: the
+      // three alignment keys are present, so reporting them missing would send
+      // the caller after the wrong problem.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+      const document = join(harness, "assignments", "bad.md");
+      writeFileSync(document, `---\nplan_id: 20261125-demo\nreview_range: ac6bda660..HEAD\ndiff_basis: git\nbad line here\n---\n\n## Task\n\nReview.\n`);
+
+      const malformed = await runVerb("worktree.qc-alignment", root, { files: [document] }, harness);
+      expect(malformed).toMatchObject({ code: "qc.alignment.field.malformed" });
+      if (malformed.status === "refused") {
+        expect(malformed.message).toContain(`${document}:5:`);
+        expect(malformed.message).toContain("not a key: line");
+      }
+
+      // A present-but-non-scalar key is invalid, not absent: dispatch refuses
+      // the same shape, so aligning on a block scalar's text would pass a pack
+      // the next gate rejects.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+      const blocked = join(harness, "assignments", "blocked.md");
+      writeFileSync(blocked, `---\nplan_id: |\n  the-plan\nreview_range: ac6bda660..HEAD\ndiff_basis: git\n---\n`);
+      const shape = await runVerb("worktree.qc-alignment", root, { files: [blocked] }, harness);
+      expect(shape).toMatchObject({ code: "qc.alignment.field.malformed" });
+      if (shape.status === "refused") expect(shape.message).toContain(`${blocked}:2: invalid plan_id`);
+
+      // A bare `key:` declares nothing, so it reads as missing — not invalid.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+      const bare = join(harness, "assignments", "bare.md");
+      writeFileSync(bare, `---\nplan_id:\nreview_range: ac6bda660..HEAD\ndiff_basis: git\n---\n`);
+      const bareResult = await runVerb("worktree.qc-alignment", root, { files: [bare] }, harness);
+      expect(bareResult).toMatchObject({ code: "qc.alignment.field.missing" });
+
+      // An opening fence that never closes is invalid, not absent.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+      const unterminated = join(harness, "assignments", "open.md");
+      writeFileSync(unterminated, `---\nplan_id: 20261125-demo\nreview_range: ac6bda660..HEAD\ndiff_basis: git\n\n## Task\n\nReview.\n`);
+      const open = await runVerb("worktree.qc-alignment", root, { files: [unterminated] }, harness);
+      expect(open).toMatchObject({ code: "qc.alignment.field.malformed" });
+      if (open.status === "refused") expect(open.message).toContain(`${unterminated}:1:`);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("worktree qc-alignment reads plan_id from the RAW lexeme, never the typed scalar", async () => {
+    const root = mkdtempSync(join(tmpdir(), "assign-align-num-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "assignments"), { recursive: true });
+      // `5.0` is the id spelling: the typed scalar would read `5`, and the
+      // typed `20261125` would lose nothing while `5.0` loses its decimal.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+      const document = join(harness, "assignments", "num.md");
+      writeFileSync(document, `---\nplan_id: 5.0\nreview_range: ac6bda660..HEAD\ndiff_basis: git\n---\n\n## Task\n\nReview.\n`);
+
+      const result = await runVerb("worktree.qc-alignment", root, { files: [document] }, harness);
+      expect(result.status).toBe("ok");
+      if (result.status !== "ok") return;
+      expect((result.data as { assignments: { planId: string }[] }).assignments[0]!.planId).toBe("5.0");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("worktree qc-alignment names every unreadable file, not just the first", async () => {
+    const root = mkdtempSync(join(tmpdir(), "assign-align-many-"));
+    try {
+      const harness = join(root, ".mstar");
+      mkdirSync(join(harness, "assignments"), { recursive: true });
+      const first = join(harness, "assignments", "dup-a.md");
+      const second = join(harness, "assignments", "dup-b.md");
+      writeFileSync(first, `---\nplan_id: a\nplan_id: b\nreview_range: r\ndiff_basis: d\n---\n`);
+      writeFileSync(second, `---\nplan_id: a\nplan_id: b\nreview_range: r\ndiff_basis: d\n---\n`);
+
+      const result = await runVerb("worktree.qc-alignment", root, { files: [first, second] }, harness);
+      expect(result.status).toBe("refused");
+      if (result.status !== "refused") return;
+      // Both defects survive the refusal: a tri pack's two broken documents
+      // are two fixes, and only the first would be found on a rerun.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      const failures = result.details?.failures;
+      expect(Array.isArray(failures)).toBe(true);
+      if (!Array.isArray(failures)) return;
+      expect(failures).toHaveLength(2);
+      expect(JSON.stringify(failures[0])).toContain(first);
+      expect(JSON.stringify(failures[1])).toContain(second);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

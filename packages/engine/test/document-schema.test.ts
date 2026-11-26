@@ -805,4 +805,20 @@ describe("validateDocumentFrontmatter — usable required content", () => {
     expect(v!.fix).toContain("remove");
     expect(v!.fix).toContain("rename");
   });
+
+  test("a non-blank block scalar is usable for the round-bounding prose fields", () => {
+    // `budget` / `return_shape` carry prose, and dispatch reads their decoded
+    // text, so a multiline declaration is valid — refusing it rejected exactly
+    // the assignments a real PM writes. A blank block scalar stays missing.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    const base = "execute_as: qc-specialist\ndelegation: forbidden\ntask_category: logic\nworking_branch: feature/x";
+    const multiline = `${base}\nbudget: |\n  two rounds\n  hard stop at the second\nreturn_shape: |-\n  verdict + findings shape\n  stop after the first clean round`;
+    const gate = validateDocumentFrontmatter("assignment", doc(multiline), "assignment");
+    expect(gate.violations).toEqual([]);
+    expect(gate.ok).toBe(true);
+
+    const blank = `${base}\nbudget: |\nreturn_shape: verdict`;
+    const blankGate = validateDocumentFrontmatter("assignment", doc(blank), "assignment");
+    expect(blankGate.violations.some((v) => v.code === "document.frontmatter.missing" && v.message.includes("budget"))).toBe(true);
+  });
 });

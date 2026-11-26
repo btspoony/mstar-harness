@@ -307,32 +307,92 @@ function collectTargets(dir: string, accept: (file: string) => boolean = (file) 
   visit(dir.endsWith(path.sep) ? dir : `${dir}${path.sep}`);
   return targets;
 }
+/** One refused front-matter read: the code the verb refuses with, a message
+ * naming the RESOLVED source (a pointer's target, not the pointer file) and
+ * its line, and the supported correction.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md */
+type FrontMatterFailure = { ok: false; code: string; message: string; fix: string };
+
 /** why: D16 — the QC alignment fields are Assignment front matter keys, so
  * this reads the fenced block ONLY; a `**Label**: value` body line is never a
  * declaration and never satisfies the alignment check. One parse for the
- * three keys. A parse refusal is NOT three missing fields: a repeated key is
- * returned as `duplicate` so the refusal names the line that blocks
- * validation, while genuinely absent keys still produce the missing rows.
+ * three keys. A refusal is NOT three missing fields: a duplicate key, a
+ * malformed line and an unterminated fence each come back as their own
+ * diagnostic naming `source` and the line, while genuinely absent keys still
+ * produce the missing rows.
  * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
-function frontMatterScalars(text: string): { planId: string; reviewRange: string; diffBasis: string; duplicate?: string } {
-  const empty = { planId: "", reviewRange: "", diffBasis: "" };
-  const { frontmatter } = extractFrontmatterAndBody(text);
+function frontMatterScalars(text: string, source: string): { ok: true; planId: string; reviewRange: string; diffBasis: string } | FrontMatterFailure {
+  const { frontmatter, fenced } = extractFrontmatterAndBody(text);
+  // An opening fence that never closes declares an INVALID surface, not an
+  // absent one — the same distinction the plan reader draws.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  if (!fenced && (text.startsWith("---\n") || text.startsWith("---\r\n"))) {
+    return {
+      ok: false,
+      code: "qc.alignment.field.malformed",
+      message: `${source}:1: front matter fence is never closed \u2014 the declaration is invalid, not absent`,
+      fix: 'close the front matter with a second "---" line',
+    };
+  }
+  const empty = { ok: true as const, planId: "", reviewRange: "", diffBasis: "" };
   if (frontmatter === "") return empty;
   let entries: ReturnType<typeof parseDocumentFrontmatterEntries>;
   try {
-    entries = parseDocumentFrontmatterEntries(frontmatter, "assignment");
+    entries = parseDocumentFrontmatterEntries(frontmatter, source);
   } catch (error) {
-    if (error instanceof DocumentFrontmatterError && error.message.includes("duplicate key")) {
-      return { ...empty, duplicate: error.message };
+    if (error instanceof DocumentFrontmatterError) {
+      const duplicate = error.message.includes("duplicate key");
+      return {
+        ok: false,
+        code: duplicate ? "qc.alignment.field.duplicate" : "qc.alignment.field.malformed",
+        message: duplicate
+          ? `duplicate front matter key blocks the QC alignment read: ${error.message}`
+          : `front matter does not parse: ${error.message}`,
+        fix: error.fix,
+      };
     }
-    return empty;
+    return {
+      ok: false,
+      code: "qc.alignment.field.malformed",
+      message: `${source}: front matter does not parse: ${(error as Error).message}`,
+      fix: "rewrite the reported line as a supported `key: value` front matter line",
+    };
   }
+  // A present-but-non-scalar key is an invalid DECLARATION, not an absent
+  // one: the plan reader refuses the same shapes, so aligning on a block
+  // scalar's text would pass a pack dispatch then refuses. A bare `key:` is
+  // the exception — its empty container is the parser's tentative shape and
+  // carries no declaration, so it reads as missing exactly as the absent key.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  for (const key of ["plan_id", "review_range", "diff_basis"] as const) {
+    const entry = entries.get(key);
+    if (entry === undefined || entry.kind === "scalar") continue;
+    const value = entry.value;
+    const emptyContainer = entry.rawText === "" && typeof value === "object" && value !== null &&
+      (Array.isArray(value) ? value.length === 0 : Object.keys(value).length === 0);
+    if (emptyContainer) continue;
+    return {
+      ok: false,
+      code: "qc.alignment.field.malformed",
+      message: `${source}:${entry.line}: invalid ${key} \u2014 accepted value: a single scalar on the key line, not a ${entry.kind}`,
+      fix: `rewrite the declaration as ${key}: <value> on one line`,
+    };
+  }
+  // The RAW lexeme is the declaration, exactly as the plan reader reads it: a
+  // numeric-looking plan id keeps its written spelling instead of the typed
+  // scalar, and one surrounding quote pair still strips. `null` / `~` / a bare
+  // key carry no declaration, so they read as absent.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
   const scalar = (key: string): string => {
-    const value = entries.get(key)?.value;
-    return typeof value === "string" ? value.trim() : typeof value === "number" ? String(value) : "";
+    const raw = entries.get(key)?.rawText ?? "";
+    if (raw === "" || raw === "null" || raw === "~") return "";
+    const text = raw.length >= 2 && (raw[0] === '"' || raw[0] === "'") && raw[raw.length - 1] === raw[0]
+      ? raw.slice(1, -1)
+      : raw;
+    return text.trim();
   };
-  return { planId: scalar("plan_id"), reviewRange: scalar("review_range"), diffBasis: scalar("diff_basis") };
+  return { ok: true, planId: scalar("plan_id"), reviewRange: scalar("review_range"), diffBasis: scalar("diff_basis") };
 }
 /**
  * why: every validation verb that reads a named assignment file goes through
@@ -692,8 +752,14 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // shared source resolver (a pointer-form assignment aligns on the
         // document it names).
         // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
-        const assignments: QcAlignmentAssignment[] = [];
-        let duplicate: string | undefined;
+        const rows: { file: string; assignment: QcAlignmentAssignment }[] = [];
+        // A refusal is per FILE and every file's refusal is reported: the verb
+        // checks a QC tri pack, so keeping only the first malformed document
+        // would hide the rest of the same round's defects. The source label is
+        // the RESOLVED path — an `Assignment file:` pointer's target, which is
+        // the document that actually failed to parse.
+        // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+        const failures: FrontMatterFailure[] = [];
         for (const named of files) {
           const file = absolute(context.cwd, named);
           if (!existsSync(file)) throw new Error(`assignment file not found: ${file}`);
@@ -705,26 +771,39 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
               source.code,
             );
           }
-          const scalars = frontMatterScalars(source.text);
-          duplicate ??= scalars.duplicate;
-          assignments.push({
-            planId: scalars.planId,
-            reviewRange: scalars.reviewRange,
-            diffBasis: scalars.diffBasis,
+          const resolved = source.path ?? file;
+          const scalars = frontMatterScalars(source.text, resolved);
+          if (!scalars.ok) {
+            failures.push(scalars);
+            continue;
+          }
+          rows.push({
+            file: resolved,
+            assignment: { planId: scalars.planId, reviewRange: scalars.reviewRange, diffBasis: scalars.diffBasis },
           });
         }
-        // A duplicate key blocks validation itself, so naming three absent
+        const assignments = rows.map(({ assignment }) => assignment);
+        // A malformed block blocks validation itself, so naming three absent
         // fields would send the caller after the wrong defect.
         // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
-        if (duplicate !== undefined) {
-          return refusal(id, "qc.alignment.field.duplicate", `duplicate front matter key blocks the QC alignment read: ${duplicate}`, { assignments }, "Remove the repeated key line from the Assignment front matter, then rerun mstar worktree qc-alignment <assignment-file>.");
+        if (failures.length) {
+          const [first] = failures;
+          return refusal(
+            id,
+            first!.code,
+            failures.length === 1
+              ? first!.message
+              : `${failures.length} assignment files declare unreadable front matter \u2014 ${first!.message}`,
+            { failures: failures.map(({ code, message }) => ({ code, message })), assignments },
+            first!.fix,
+          );
         }
         const fields: { key: keyof QcAlignmentAssignment; label: string }[] = [
           { key: "planId", label: "plan_id" }, { key: "reviewRange", label: "review_range" }, { key: "diffBasis", label: "diff_basis" },
         ];
-        for (const assignment of assignments) {
+        for (const { file, assignment } of rows) {
           const missing = fields.filter(({ key }) => assignment[key] === "");
-          if (missing.length) return refusal(id, "qc.alignment.field.missing", `missing "${missing[0]!.label}" front matter field`, { fields: missing.map(({ label }) => label), assignments }, "Add the missing keys to the Assignment front matter (a `---`-fenced block declaring plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file>.");
+          if (missing.length) return refusal(id, "qc.alignment.field.missing", `${file}: missing "${missing[0]!.label}" front matter field`, { fields: missing.map(({ label }) => label), file, assignments }, "Add the missing keys to the Assignment front matter (a `---`-fenced block declaring plan_id / review_range / diff_basis), then rerun mstar worktree qc-alignment <assignment-file>.");
         }
         const gate = assertQcAlignment(assignments);
         return gate.ok ? ok(id, { assignments, ...gateData(gate) }) : rejected(id, gate, "qc.alignment.mismatch");

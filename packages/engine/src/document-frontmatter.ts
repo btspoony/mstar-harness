@@ -109,16 +109,20 @@ const BARE_KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/;
 /**
  * The ONE fenced-code tracker over a document's lines. CommonMark fences: a
  * run of 3+ backticks or 3+ tildes opens, and only the SAME character with a
- * run at least as long (and nothing but whitespace after it) closes. Callers
- * that must ignore quoted examples (a body-label template, a `Modify:` entry,
- * a `## Task` heading inside a sample) walk their lines through this instead
- * of keeping a backtick-only copy.
+ * run at least as long (and nothing but whitespace after it) closes. The
+ * opening marker carries at most three columns of indent — `{0,3}` spaces,
+ * since a tab reaches the fourth column — because a marker indented four or
+ * more columns is an INDENTED CODE BLOCK, not a fence: it neither opens nor
+ * closes one, and a sample fenced that way would otherwise swallow every
+ * later heading. Callers that must ignore quoted examples (a body-label
+ * template, a `Modify:` entry, a `## Task` heading inside a sample) walk their
+ * lines through this instead of keeping a backtick-only copy.
  * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
  */
 export function fencedCodeTracker(): (line: string) => boolean {
   let open: string | undefined;
   return (line: string): boolean => {
-    const marker = /^[ \t]*(`{3,}|~{3,})(.*)$/.exec(line);
+    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (open === undefined) {
       if (marker === null) return false;
       open = marker[1]!;
