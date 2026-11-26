@@ -5,6 +5,7 @@ last_updated: 2026-11-19
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
+---
 
 
 # Binding a local store to an external issue system over MCP

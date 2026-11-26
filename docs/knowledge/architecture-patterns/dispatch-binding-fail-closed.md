@@ -1,5 +1,5 @@
 ---
-module: dispatch (engine + host adapters: opencode, dsh)
+module: "dispatch (engine + host adapters: opencode, dsh)"
 date: 2026-08-21
 last_updated: 2026-11-09
 problem_type: architecture_pattern

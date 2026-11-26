@@ -1,5 +1,5 @@
 ---
-module: engine issue/catalog store (store.db): migration, staged/active lifecycle, authority gating
+module: "engine issue/catalog store (store.db): migration, staged/active lifecycle", authority gating
 date: 2026-09-19
 problem_type: architecture_pattern
 category: architecture-patterns

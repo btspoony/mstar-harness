@@ -4,6 +4,7 @@ date: 2026-11-01
 problem_type: architecture_pattern
 category: architecture-patterns
 severity: high
+---
 
 
 # Host-derived authority beats caller-asserted authority

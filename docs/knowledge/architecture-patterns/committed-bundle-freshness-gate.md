@@ -1,5 +1,5 @@
 ---
-module: plugin packaging (hosts: zcode, cursor, codex, kimi)
+module: "plugin packaging (hosts: zcode, cursor, codex, kimi)"
 date: 2026-09-26
 last_updated: 2026-11-13
 problem_type: architecture_pattern
@@ -9,6 +9,7 @@ tags:
   - packaging
   - committed-artifact
   - config-only-targets
+---
 
 
 # Committed bundles for checkout-root plugins
