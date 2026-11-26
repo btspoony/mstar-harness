@@ -52,6 +52,8 @@ import {
 
 import "./shell.css";
 
+import type { IssuePage } from "@mstar-harness/engine";
+
 import { ABSENT_PROJECTION } from "./absent-projection";
 import { browserStore, resolveLocale, resolveTheme, storeLocale, storeTheme, type Theme } from "./prefs";
 import {
@@ -71,6 +73,7 @@ import {
   issuesCopy,
   issuesOutcome,
   issuesPath,
+  assignableOptions,
   readAssignableIssues,
   readIssueDetail,
   readIssues,
@@ -81,7 +84,6 @@ import {
 import { overviewCopy, overviewOutcome, readOverview, type OverviewOutcome } from "./overview-data";
 import type { IssueFlowSeries } from "@mstar-harness/ui";
 import {
-  ASSIGNABLE_ISSUE_LIMIT,
   createMilestoneDraftStore,
   projectDetailCopy,
   projectIdentity,
@@ -753,7 +755,6 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   const [writesState, setWritesState] = useState<{ busy: boolean; refusal: string | null }>({ busy: false, refusal: null });
   /** One operation id per logical write, retained across a transport-ambiguous retry. */
   const [operationIds] = useState(milestoneWriteIds);
-  const reloadKey = outcome.kind === "ready" ? outcome.storeRevision : 0;
   const [reloadToken, setReloadToken] = useState(0);
   /**
    * The scoped Issues list and the assignable read both follow an assignment:
@@ -820,14 +821,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
   // window can never shrink the offer; the unassigned subset is the picker's rule.
   const assignable = useAssignableIssues(projectId === "" ? null : projectId, issuesRefreshToken);
   const assignableIssues: AssignableIssue[] | undefined =
-    scopedIssues.kind === "ready"
-      ? scopedIssues.model.rows.kind === "populated"
-        ? scopedIssues.model.rows.value
-            .filter((issue) => issue.disposition === "open" && issue.milestoneId === null)
-            .slice(0, ASSIGNABLE_ISSUE_LIMIT)
-            .map((issue) => ({ id: issue.id, title: issue.title, severity: issue.severity, revision: issue.revision }))
-        : []
-      : undefined;
+    assignable.kind === "ready" ? assignableOptions(assignable.model) : undefined;
 
   /**
    * The milestone write channel: one write at a time, each carrying the store
@@ -838,7 +832,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
    * keeps its operation id and revision so a retry replays the engine's receipt.
    */
   const writes: MilestoneWriteSurface | undefined =
-    outcome.kind !== "ready"
+    outcome.kind !== "ready" || outcome.storeRevision === null
       ? undefined
       : {
           busy: writesState.busy,
@@ -851,7 +845,7 @@ function ProjectDetailDestination(props: { address: Address; feature: ProjectFea
         };
 
   function runMilestoneWrite(request: MilestoneMutationRequest): void {
-    if (outcome.kind !== "ready" || writesState.busy) return;
+    if (outcome.kind !== "ready" || outcome.storeRevision === null || writesState.busy) return;
     const revision = outcome.storeRevision;
     setWritesState({ busy: true, refusal: null });
     const retained = operationIds.for(JSON.stringify(request), { expectedStoreRevision: revision });

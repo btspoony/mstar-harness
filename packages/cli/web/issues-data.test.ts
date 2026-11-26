@@ -14,6 +14,7 @@ import type { IssueDetail, IssuePage, ReadEnvelope } from "@mstar-harness/engine
 import { IssueDetail as IssueDetailScreen, Issues, copyFor } from "@mstar-harness/ui";
 
 import {
+  assignableOptions,
   ISSUE_FILTER_OPTIONS,
   keepPreviousOnLoad,
   issueDetailCopy,
@@ -23,12 +24,13 @@ import {
   issuesCopy,
   issuesOutcome,
   issuesPath,
+  readAssignableIssues,
   readIssueDetail,
   readIssues,
   scopedFilters,
   startRead,
 } from "./issues-data";
-import { DEFAULT_ISSUE_FILTERS, DISPOSITIONS, ISSUE_KINDS, SEVERITIES } from "@mstar-harness/ui";
+import { ASSIGNABLE_ISSUE_LIMIT, DEFAULT_ISSUE_FILTERS, DISPOSITIONS, ISSUE_KINDS, SEVERITIES } from "@mstar-harness/ui";
 
 const projection = {
   observed: true,

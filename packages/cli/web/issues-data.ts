@@ -20,6 +20,7 @@
  * module only decides *which path* a query produces.
  */
 import type { IssueDetail, IssuePage, ReadEnvelope } from "@mstar-harness/engine";
+import { ASSIGNABLE_ISSUE_LIMIT } from "@mstar-harness/ui";
 
 import { UNREACHABLE, asEnvelope, readAllListPages, refusalMessage, requiredCollaborationRefusal } from "./read-envelope";
 import {
