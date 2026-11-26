@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
-import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { initializeCollaborationStore, openCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
 import {
   completeSnapshot,
@@ -140,10 +140,10 @@ describe("planboard grammar", () => {
       expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: 3 }]);
       expect(parsed.candidates).toEqual([]);
     }
-    // The one allowed suffix is a trailing separator, and nothing after it.
-    expect(parse(["review_after: 2026-12-10", "## Candidates", "- ? ok \u2014 I-000001;"]).findings).toEqual([]);
-    expect(codes(parse(["review_after: 2026-12-10", "## Candidates", "- ? bad \u2014 I-000001; and more"]).findings)).toEqual([
-      "malformed",
+    // invariant: No punctuation exception exists — the validated value is the
+    // emitted value, so a suffixed token is malformed rather than normalized.
+    expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? ok \u2014 I-000001;"]).findings)).toEqual([
+      { code: "malformed", line: 3 },
     ]);
   });
 
@@ -162,6 +162,7 @@ describe("planboard grammar", () => {
     const entries = Array.from({ length: 21 }, (_, index) => `- I-${String(index + 1).padStart(6, "0")} — order ${index}`);
     const parsed = parse(["review_after: 2026-12-10", "## Captured", ...entries]);
     expect(parsed.issues).toHaveLength(20);
+    // One section-level finding, not one per excess line.
     expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: 23 }]);
   });
 
@@ -352,6 +353,56 @@ describe("planboard findings against a store", () => {
       expect(codes(result.findings)).toEqual(["malformed"]);
       expect(result.reviewAfter).toBeNull();
     }
+  });
+
+  test("a stable reference resolves against the local store that holds it", async () => {
+    const context = await liveStore("local-ref");
+    const captured = await captureIssue(context, captureInput("local-ref-open"), mutation("capture-local-ref"));
+    const store = await openCollaborationStore(context, "read");
+    let issueRef: string;
+    try {
+      issueRef = (store.db.prepare("select issue_ref from issues where id = ?").get(captured.issueId) as { issue_ref: string }).issue_ref;
+    } finally {
+      store.close();
+    }
+    board(
+      context.harnessDir,
+      ["review_after: 2099-01-01", "## Captured", `- ${issueRef} \u2014 written in remote mode, read locally`].join("\n"),
+    );
+    // invariant: A completed local read that DID look at `issue_ref` reports the
+    // disposition, never `missing` — a board written under a remote selection must
+    // survive the selection returning to local.
+    expect((await checkPlanboard(context)).findings).toEqual([]);
+
+    // A reference the lane does not hold is a completed answer: missing.
+    board(
+      context.harnessDir,
+      ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.secondIssueRef} \u2014 not in this lane`].join("\n"),
+    );
+    expect(pairs((await checkPlanboard(context)).findings)).toEqual([{ code: "missing", line: 3 }]);
+  });
+
+  test("a lane-level refusal answers every issue line from one read", async () => {
+    const context = await liveStore("lane-once");
+    const first = await captureIssue(context, captureInput("lane-a"), mutation("capture-lane-a"));
+    const second = await captureIssue(context, captureInput("lane-b"), mutation("capture-lane-b"));
+    board(
+      context.harnessDir,
+      ["review_after: 2099-01-01", "## Captured", `- ${first.issueId} \u2014 first`, `- ${second.issueId} \u2014 second`].join("\n"),
+    );
+    // note: A staged lane is the reachable lane-level refusal on a local store.
+    const location = resolveCollaborationLocation(context);
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      db.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      db.close();
+    }
+    const result = await checkPlanboard(context);
+    expect(result.findings.map(({ code, line, storeCode }) => ({ code, line, storeCode }))).toEqual([
+      { code: "unverified", line: 3, storeCode: "collaboration.not-active" },
+      { code: "unverified", line: 4, storeCode: "collaboration.not-active" },
+    ]);
   });
 
   test("a remote board line reports stale, missing and open from the admitted snapshot", async () => {

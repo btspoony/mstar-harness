@@ -1,6 +1,6 @@
 import { checkPlanboard, PLANBOARD_FINDING_CODES, resolveProcessHarnessDir } from "@mstar-harness/engine";
 import { z } from "zod";
-import { commandEnvelopeSchema } from "../envelope.js";
+import { commandEnvelopeSchema, refusalEnvelope } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope } from "../types.js";
 
 const schema = z.object({ harness: z.string().optional() });
@@ -23,7 +23,22 @@ export function getPlanboardCommandDefinitions(): readonly CommandDefinition<Inp
       description:
         "Read {HARNESS_DIR}/planboard.md and report its pointers and their drift: malformed, stale, missing, overdue and unverified, each with its line. Writes nothing and exits 0 for every finding.",
       async execute(input, context): Promise<CommandEnvelope> {
-        const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot ?? context.cwd;
+        // invariant: The board belongs to the control harness. An unresolved root
+        // is refused instead of reading `./planboard.md` — a file in whatever
+        // directory the caller happened to run in is not this project's board.
+        const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
+        if (harnessDir === null || harnessDir === undefined) {
+          return refusalEnvelope({
+            command: "planboard.check",
+            status: "refused",
+            code: "planboard.harness-unresolved",
+            exitCode: 1,
+            message: `No control harness resolved from ${context.cwd}, so there is no board to read.`,
+            details: { cwd: context.cwd, harness: input.harness ?? null },
+            recovery:
+              "Run from inside the repository whose control checkout owns the harness, or name it: `mstar planboard check --harness <abs .mstar>`. Run `mstar path resolve` to print that path.",
+          });
+        }
         const result = await checkPlanboard({ harnessDir });
         return {
           version: 1,

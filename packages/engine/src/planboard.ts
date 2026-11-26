@@ -13,7 +13,9 @@
  */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { showIssue } from "./issue.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { openCollaborationStore, type CollaborationStoreHandle } from "./collaboration-store.js";
+import { SWITCHED_NOT_PRESENTED_SQL } from "./cross-authority-move.js";
 import type { StoreContext } from "./store-db.js";
 
 export const PLANBOARD_FILE = "planboard.md";
@@ -59,6 +61,8 @@ const POINTER = "mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-
 const ISSUE_LINE = new RegExp(`^- ((?:I-[0-9]{6})|(?:${POINTER})) \u2014 (.+)$`);
 const CANDIDATE_LINE = /^- \? (.+?) \u2014 (.+)$/;
 const ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`, "g");
+/** Does this line start with an issue pointer? Compiled once, not per line. */
+const HAS_ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`);
 const REVIEW_AFTER = /^review_after: ([0-9]{4}-[0-9]{2}-[0-9]{2})$/;
 /** An ADR record name, as the ADR tree spells it. */
 const ADR_NAME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]*(\.md)?$/;
@@ -90,17 +94,21 @@ function isCalendarDate(value: string): boolean {
 }
 
 /**
- * The evidence forms a candidate may name, exactly: one path token, one ADR
- * record name, one issue pointer, or one of those followed only by a trailing
- * separator. Anything with words around the token — `see I-000001 for context`
- * — is prose, and the board is not prose.
+ * The evidence one candidate may name, exactly: one path token, one ADR record
+ * name, or one issue pointer — and nothing else. Anything with words or extra
+ * punctuation around the token (`see I-000001 for context`, `I-000001;`) is
+ * prose, and the board is not prose.
+ *
+ * Returns the value that was validated, so the emitted pointer can never be a
+ * differently punctuated spelling of the evidence that passed.
  */
-function isEvidence(text: string): boolean {
-  // A trailing separator is allowed and nothing after it.
-  const value = text.trim().replace(/[;,]$/, "").trim();
-  if (value === "") return false;
-  if (DISPLAY_ISSUE_ID.test(value) || ISSUE_REF.test(value)) return true;
-  return ADR_NAME.test(value) || EVIDENCE_PATH.test(value);
+function evidenceOf(text: string): string | null {
+  const value = text.trim();
+  if (value === "") return null;
+  if (DISPLAY_ISSUE_ID.test(value) || ISSUE_REF.test(value) || ADR_NAME.test(value) || EVIDENCE_PATH.test(value)) {
+    return value;
+  }
+  return null;
 }
 
 /**
@@ -166,7 +174,7 @@ export function parsePlanboard(text: string): Parsed {
       continue;
     }
 
-    const isIssue = trimmed.startsWith("- ") && !trimmed.startsWith("- ? ") && new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`).test(trimmed);
+    const isIssue = trimmed.startsWith("- ") && !trimmed.startsWith("- ? ") && HAS_ISSUE_POINTER.test(trimmed);
     if (isIssue) {
       const ids = trimmed.match(ISSUE_POINTER) ?? [];
       if (section !== "captured") {
@@ -189,7 +197,11 @@ export function parsePlanboard(text: string): Parsed {
       }
       capturedEntries += 1;
       if (capturedEntries > PLANBOARD_SECTION_CAP) {
-        findings.push(malformed(line, `\`## Captured\` holds at most ${PLANBOARD_SECTION_CAP} entries`, { issueId: match[1]! }));
+        // invariant: The cap is reported once, and the excess is not walked into
+        // per-line findings that would scale with the file.
+        if (capturedEntries === PLANBOARD_SECTION_CAP + 1) {
+          findings.push(malformed(line, `\`## Captured\` holds at most ${PLANBOARD_SECTION_CAP} entries; the rest were not read`));
+        }
         continue;
       }
       issues.push({ line, id: match[1]!, reason });
@@ -213,16 +225,19 @@ export function parsePlanboard(text: string): Parsed {
         findings.push(malformed(line, "a candidate line is `- ? <candidate> \u2014 <evidence>` with non-empty candidate text"));
         continue;
       }
-      if (!isEvidence(match[2]!)) {
+      candidateEntries += 1;
+      if (candidateEntries > PLANBOARD_SECTION_CAP) {
+        if (candidateEntries === PLANBOARD_SECTION_CAP + 1) {
+          findings.push(malformed(line, `\`## Candidates\` holds at most ${PLANBOARD_SECTION_CAP} entries; the rest were not read`));
+        }
+        continue;
+      }
+      const evidence = evidenceOf(match[2]!);
+      if (evidence === null) {
         findings.push(malformed(line, "candidate evidence is a path, an ADR name or an issue id", { candidate: match[1]!.trim() }));
         continue;
       }
-      candidateEntries += 1;
-      if (candidateEntries > PLANBOARD_SECTION_CAP) {
-        findings.push(malformed(line, `\`## Candidates\` holds at most ${PLANBOARD_SECTION_CAP} entries`, { candidate: match[1]!.trim() }));
-        continue;
-      }
-      candidates.push({ line, candidate: match[1]!.trim(), evidence: match[2]!.trim() });
+      candidates.push({ line, candidate: match[1]!.trim(), evidence });
       continue;
     }
 
@@ -238,24 +253,123 @@ export function parsePlanboard(text: string): Parsed {
   return { reviewAfter, issues, candidates, findings };
 }
 
-/** One issue line's answer: its disposition, `missing`, or the store's refusal code. */
-async function answerFor(context: StoreContext | null, id: string): Promise<{ disposition: string } | { refusal: string }> {
-  if (context === null) return { refusal: "store.unreadable" };
+/**
+ * One issue line's answer: its disposition, `missing`, or a code.
+ *
+ * `refusal` is a per-line answer (the store answered, and this id resolved
+ * nowhere); `laneRefusal` means the whole lane could not be read, which no
+ * further line can improve on.
+ */
+type IssueAnswer =
+  | Readonly<{ kind: "disposition"; disposition: string }>
+  | Readonly<{ kind: "refusal"; code: string }>
+  | Readonly<{ kind: "laneRefusal"; code: string }>;
+
+/** A lane-level refusal: the store never answered, so no line is decided by it. */
+const LANE_REFUSAL_CODES = new Set([
+  "collaboration.not-initialized",
+  "collaboration.stale-binding",
+  "collaboration.unreadable",
+  "collaboration.cutover-required",
+  "collaboration.not-active",
+  "store.not-active",
+  "store.busy",
+  "store.corrupt",
+  "store.schema-unsupported",
+  "store.unreadable",
+  "remote.unavailable",
+]);
+
+function refusalOf(error: unknown): IssueAnswer {
+  const code = (error as { code?: unknown } | null)?.code;
+  const stable = typeof code === "string" ? code : "store.unreadable";
+  return LANE_REFUSAL_CODES.has(stable)
+    ? { kind: "laneRefusal", code: stable }
+    : { kind: "refusal", code: stable };
+}
+
+/**
+ * Answer every board id with ONE lane read.
+ *
+ * why: A per-line open re-enters the lane (and its busy timeout) once per entry,
+ * so a contended or unreadable lane would stall a plain report up to the
+ * section cap. One read answers the whole board; after a lane-level refusal the
+ * remaining lines are reported with the same code and nothing reopens.
+ *
+ * A remote selection answers from its admitted snapshot through `showIssue`,
+ * which resolves the stable reference the snapshot carries.
+ */
+async function answersFor(context: StoreContext, ids: readonly string[]): Promise<Map<string, IssueAnswer>> {
+  const answers = new Map<string, IssueAnswer>();
+  if (ids.length === 0) return answers;
+  let mode: string;
   try {
-    // invariant: `showIssue` is the one read that resolves an issue on either
-    // authority — a display id in local mode, the stable reference in remote
-    // mode. `getIssue` refuses display ids there, which would make every remote
-    // board line look unreadable.
-    const issue = await showIssue(context, id);
-    // note: A provider-only answer is no MStar subject, so the line names an
-    // issue this store does not hold.
-    if (!("disposition" in issue)) return { disposition: "absent" };
-    return { disposition: issue.disposition };
+    mode = resolveCollaborationLocation(context).mode;
   } catch (error) {
-    const code = (error as { code?: unknown } | null)?.code;
-    // `issue.not-found` is a completed answer: the store opened and holds no such row.
-    if (code === "issue.not-found") return { disposition: "absent" };
-    return { refusal: typeof code === "string" ? code : "store.unreadable" };
+    // note: A checkout whose identity cannot be resolved never reached the lane,
+    // so no line is decided by it.
+    const refusal = refusalOf(error);
+    for (const id of ids) answers.set(id, refusal);
+    return answers;
+  }
+  if (mode === "remote") {
+    const { showIssue } = await import("./issue.js");
+    for (const id of ids) {
+      try {
+        const issue = await showIssue(context, id);
+        answers.set(id, "disposition" in issue ? { kind: "disposition", disposition: issue.disposition } : { kind: "disposition", disposition: "absent" });
+      } catch (error) {
+        const code = (error as { code?: unknown } | null)?.code;
+        // A provider-only answer is no MStar subject: this store does not hold it.
+        answers.set(id, code === "issue.not-found" ? { kind: "disposition", disposition: "absent" } : refusalOf(error));
+      }
+    }
+    return answers;
+  }
+
+  let handle: CollaborationStoreHandle;
+  try {
+    handle = await openCollaborationStore(context, "read");
+  } catch (error) {
+    const refusal = refusalOf(error);
+    for (const id of ids) answers.set(id, refusal);
+    return answers;
+  }
+  try {
+    const db = handle.db;
+    // invariant: The lane owns issue read authority; a staged or foreign store
+    // never reaches this point (the same gate the ordinary issue verbs assert).
+    const meta = db.prepare("select authority_state from collaboration_meta where id = 1").get() as
+      | { authority_state?: unknown }
+      | undefined;
+    if (meta?.authority_state !== "active") {
+      const refusal: IssueAnswer = { kind: "laneRefusal", code: "store.not-active" };
+      for (const id of ids) answers.set(id, refusal);
+      return answers;
+    }
+    for (const id of ids) {
+      // why: The display id is the row's primary key; the stable portable
+      // reference is its own column. A board written in `remote` mode carries the
+      // reference, and a local lane that only matched `id` reported it missing.
+      const row = db
+        .prepare(
+          `select disposition from issues where (id = ? or issue_ref = ?) and ${SWITCHED_NOT_PRESENTED_SQL} limit 1`,
+        )
+        .get(id, id) as { disposition?: unknown } | undefined;
+      answers.set(
+        id,
+        typeof row?.disposition === "string"
+          ? { kind: "disposition", disposition: row.disposition }
+          : { kind: "disposition", disposition: "absent" },
+      );
+    }
+    return answers;
+  } catch (error) {
+    const refusal = refusalOf(error);
+    for (const id of ids) if (!answers.has(id)) answers.set(id, refusal);
+    return answers;
+  } finally {
+    handle.close();
   }
 }
 
@@ -282,9 +396,13 @@ export async function checkPlanboard(
   const parsed = parsePlanboard(text);
   const findings = [...parsed.findings];
 
+  const answers = await answersFor(
+    context,
+    parsed.issues.map((entry) => entry.id),
+  );
   for (const entry of parsed.issues) {
-    const answer = await answerFor(context, entry.id);
-    if ("disposition" in answer) {
+    const answer = answers.get(entry.id) ?? { kind: "laneRefusal", code: "store.unreadable" };
+    if (answer.kind === "disposition") {
       if (answer.disposition === "absent") {
         findings.push({
           code: "missing",
@@ -308,8 +426,8 @@ export async function checkPlanboard(
       code: "unverified",
       line: entry.line,
       issueId: entry.id,
-      storeCode: answer.refusal,
-      message: `the issue store did not answer for ${entry.id} (${answer.refusal})`,
+      storeCode: answer.code,
+      message: `the issue store did not answer for ${entry.id} (${answer.code})`,
     });
   }
 

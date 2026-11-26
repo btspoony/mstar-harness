@@ -49,7 +49,7 @@ function report(stdout: string): z.infer<typeof reportSchema> {
 }
 
 /** An invocation the adapter refused before execution: it carries no data. */
-const usageSchema = z.object({ status: z.string(), code: z.string(), exitCode: z.number() });
+const usageSchema = z.object({ status: z.string(), code: z.string(), exitCode: z.number(), message: z.string() });
 
 function captureInput(rootCauseKey: string): CaptureInput {
   return {
@@ -303,6 +303,25 @@ describe("mstar planboard check", () => {
       expect(reported.candidates).toEqual([]);
       expect(harnessState(harness)).toBe(before);
       expect(storeRevision(root)).toBe(revision);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("an unresolved harness root refuses instead of reading a stray planboard", async () => {
+    // why: Outside Git with no explicit harness, a plain `./planboard.md` is not
+    // this project's board. The verb must say so, not report a clean board.
+    const root = mkdtempSync(join(tmpdir(), "mstar-planboard-cli-noharness-"));
+    try {
+      writeFileSync(join(root, "planboard.md"), "review_after: 2099-01-01\n## Captured\n- I-000001 \u2014 stray\n");
+      const before = readFileSync(join(root, "planboard.md"), "utf8");
+      const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
+      expect(result.exitCode).toBe(1);
+      const refused = usageSchema.parse(JSON.parse(result.stdout));
+      expect(refused).toMatchObject({ status: "refused", code: "planboard.harness-unresolved", exitCode: 1 });
+      // The refusal states the recovery inline, as every family's envelope does.
+      expect(refused.message).toContain("--harness");
+      expect(readFileSync(join(root, "planboard.md"), "utf8")).toBe(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
