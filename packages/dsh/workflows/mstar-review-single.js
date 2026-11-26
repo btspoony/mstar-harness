@@ -55,18 +55,22 @@ const REPORT = {
 
 phase('task-review')
 
-const seat = await agent(`## Assignment
-
-Execute as: code-reviewer
-Delegation: forbidden
-Task category: review
-**Budget (review / QC seats)**: /1 round — one pass over the task diff
-**Return shape (review / QC seats)**: the canonical Mode A report (reportMarkdown) + taskQuality; stop when the task diff and its directly affected interfaces are covered
-
+const seat = await agent(`---
+execute_as: code-reviewer
+delegation: forbidden
+task_category: review
+budget: /1 round — one pass over the task diff
+return_shape: the canonical Mode A report (reportMarkdown) + taskQuality; stop when the task diff and its directly affected interfaces are covered
 plan_id: ${a.planId}
-Task: ${a.taskId}
-Review cwd: ${a.reviewCwd}
-Working branch: ${a.branch}
+task: ${a.taskId}
+review_cwd: ${a.reviewCwd}
+working_branch: ${a.branch}
+review_range: ${a.diffBase}..${a.diffHead}
+diff_basis: ${a.diffFile}
+---
+
+## Assignment
+
 Task brief: ${a.briefPath}
 Implementer report (input — never overwrite): ${a.implementerReport}
 Diff: ${a.diffFile}

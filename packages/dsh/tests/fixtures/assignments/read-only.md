@@ -1,8 +1,10 @@
-## Assignment
+---
+execute_as: scout
+delegation: n/a
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: scout
-**Delegation**: n/a
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 
 Survey the codebase, report only.

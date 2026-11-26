@@ -92,23 +92,31 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Fully valid writable Assignment (mirrors the opencode `completeAssignment`). */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-package-core
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
-/** Missing `Execute as` — the subagent field-gate's first advisory case. */
-const MISSING_EXECUTE_AS = `## Assignment
+/** Missing `Execute as` — the subagent field-gate's first advisory case. The
+ * remaining core KEYS stay in the front matter: the shape guard reads keys,
+ * so a fence without one would not even read as Assignment-shaped.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
@@ -385,7 +393,11 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('subagent')
-    expect(violationCodes(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(violationCodes(advisories[0])).toContain('assignment.field.execute-as')
+    // The retired Slice-2 alias survives on the same violation row.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.execute-as')?.aliases)
+      .toContain('assignment.presence.missing-execute-as')
   })
 
   it('(c) valid subagent Assignment → clean pass, silent (no workflow advisory)', async () => {
@@ -415,6 +427,52 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('bash', { command: 'echo hi' }), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+})
+
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+
+describe('workflow gate — the retired body-label grammar refuses at the subagent surface too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // whose fields live in the retired `**Label**` grammar must reach the
+    // legacy-format refusal on the subagent surface exactly as on every
+    // other gate, never pass as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    // why: The control-root cleanliness gate reads the process main worktree:
+    // run the dispatch from the fixture's clean harness repo, never the
+    // ambient checkout the suite runs in.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const prev = process.cwd()
+    process.chdir(app.root)
+    let decision
+    try {
+      decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+    } finally {
+      process.chdir(prev)
+    }
+
+    // Terminal: the retired format declares nothing a gate could verify, so
+    // the default (soft) mode vetoes it — no advisory is emitted.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
     expect(advisories).toHaveLength(0)
   })
 })

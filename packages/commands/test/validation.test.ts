@@ -76,7 +76,7 @@ describe("validation command family", () => {
   test("invalid Assignment returns its field violations with their engine codes", async () => {
     const cwd = tempRoot();
     const file = path.join(cwd, "assignment.md");
-    writeFileSync(file, "# Assignment\n\nNo required fields here.\n");
+    writeFileSync(file, "---\ntask_category: logic\n---\n\n# Assignment\n\nNo required fields here.\n");
     const result = await definition("dispatch.validate").execute({ assignmentFile: file }, context(cwd));
     const violations = violationsOf(result);
     expect(violations.length > 0).toBe(true);
@@ -207,12 +207,17 @@ describe("validation command family", () => {
     const cwd = tempRoot();
     const file = path.join(cwd, "assignment.md");
     writeFileSync(file, [
+      "---",
+      "execute_as: fullstack-dev",
+      "delegation: forbidden",
+      "task_category: logic",
+      "task_budget: one round",
+      "working_branch: main",
+      "---",
+      "",
       "## Assignment",
-      "**Execute as**: fullstack-dev",
-      "**Delegation**: forbidden",
-      "**Task category**: logic",
-      "**Task budget (implement / ops rounds)**: one round",
-      "**Working branch**: main",
+      "",
+      "Body prose.",
     ].join("\n"));
     const derived = await definition("dispatch.validate").execute({ assignmentFile: file }, context(cwd));
     expect(derived).toMatchObject({ status: "refused", code: "dispatch.default-branch.protected" });
@@ -316,10 +321,18 @@ describe("validation command family", () => {
     const cwd = tempRoot();
     const first = path.join(cwd, "qc.md");
     const second = path.join(cwd, "qa.md");
-    writeFileSync(first, "plan_id: plan-a\nReview range: base..head\nDiff basis: base\n");
-    writeFileSync(second, "plan_id: plan-a\nReview range: other..head\nDiff basis: base\n");
+    writeFileSync(first, "---\nplan_id: plan-a\nreview_range: base..head\ndiff_basis: base\n---\n");
+    writeFileSync(second, "---\nplan_id: plan-a\nreview_range: other..head\ndiff_basis: base\n---\n");
     const result = await definition("worktree.qc-alignment").execute({ files: [first, second] }, context(cwd));
     expect(result).toMatchObject({ status: "refused", code: "qc.alignment.mismatch", details: { violations: expect.any(Array) } });
+  });
+
+  test("QC alignment reads the front matter only — a body-label document declares no alignment field", async () => {
+    const cwd = tempRoot();
+    const file = path.join(cwd, "qc.md");
+    writeFileSync(file, "## Assignment\n**plan_id**: plan-a\n**Review range / Diff basis**: base..head\n");
+    const result = await definition("worktree.qc-alignment").execute({ files: [file] }, context(cwd));
+    expect(result).toMatchObject({ status: "refused", code: "qc.alignment.field.missing" });
   });
 
   test("invalid QC report preserves the report validator verdict", async () => {

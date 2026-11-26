@@ -1,14 +1,14 @@
 # Implementer subagent prompt template
 
-Use when PM dispatches an SDD implementer (`mstar-sdd`) — **first task** or **`SDD implementer session: fresh`**.
+Use when PM dispatches an SDD implementer (`mstar-sdd`) — **first task** or **`sdd_implementer_session: fresh`**.
 
 For **sticky** continuation (task 2+), use **`implementer-continuation-prompt.md`** instead.
 
 ```
 Dispatch:
-  Role: <Execute as role-id>          # omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5
+  Role: <execute_as role-id>          # omp agent / Cursor subagent_type / OpenCode subagent → mstar-host C5
   Name: <CamelCaseId>                 # omp/Cursor name
-  Assignment header: canonical fields (`mstar-roles/references/project-manager/dispatch-and-assignment.md`) — MUST include **`Task budget (implement / ops rounds)`**: <budget copied from the plan task> in the header region, before the first Task heading / horizontal rule / `#` heading of the body; a `Task budget` string only inside the body section cannot satisfy the engine header gate
+  Assignment front matter: canonical keys (`mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)) — MUST include **`task_budget`**: <budget copied from the plan task>; front matter is the only field contract, so a budget stated only in the body declares nothing
   Prompt body:
     <SUBAGENT-STOP> Skip PM orchestration skills. You are a leaf implementer.</SUBAGENT-STOP>
 
@@ -47,14 +47,14 @@ Dispatch:
 
     Use only the brief's owned files, relevant inputs and named checks. Do not restart global exploration, extend the task, or run local full suites without the user's explicit scoped permission. Reuse unaffected evidence. Stop once the assigned acceptance criteria are evidenced; report concrete missing context instead of over-analyzing settled work.
 
-    **Task budget / overrun**: the dispatch header's `Task budget` field buys one implementer round closing this task's Files and verification gates (value copied from the plan task; contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`). If the declared round cannot close its Files and verification gates, stop adding work and return `NEEDS_CONTEXT` or `BLOCKED` — persist on disk the completed steps, the remaining implementation and its pending checks, evidence paths, worktree/branch state, and the concrete boundary reached; an incomplete round never reports `DONE` / `DONE_WITH_CONCERNS` as a substitute for the remaining work. **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** Split/re-dispatch authority → `mstar-artifacts/references/plan-quality-bar.md` item 7.
+    **Task budget / overrun**: the dispatch front matter `task_budget` buys one implementer round closing this task's Files and verification gates (value copied from the plan task; contract → `mstar-roles/references/project-manager/dispatch-and-assignment.md`). If the declared round cannot close its Files and verification gates, stop adding work and return `NEEDS_CONTEXT` or `BLOCKED` — persist on disk the completed steps, the remaining implementation and its pending checks, evidence paths, worktree/branch state, and the concrete boundary reached; an incomplete round never reports `DONE` / `DONE_WITH_CONCERNS` as a substitute for the remaining work. **Budget pressure MUST NOT shorten or waive any assigned scoped verification.** Split/re-dispatch authority → `mstar-artifacts/references/plan-quality-bar.md` item 7.
 
     ## Your job
 
     1. Implement exactly what the brief specifies
     2. Before creating or keeping tests, apply the `mstar-coding-behavior` § Evidence keep/delete rule: keep product-behaviour assertions and fails-first regression defences, delete incidental / source-shape / wiring / environment-constant assertions, and report the non-product-assertion class and conclude "delete, or replace with a product-behaviour assertion".
     3. Run only the assigned affected unit tests; for non-executable docs/policy, use the scoped-check evidence per file-handoffs.md § Optional retained output, and cite any retained log path in the report
-    4. Commit on Working branch
+    4. Commit on the Assignment front matter `working_branch`
        Use the configured identity for this task's commit; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
     5. Self-review only the task diff and directly affected contracts
     6. Write report file; return short summary only

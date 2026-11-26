@@ -65,11 +65,11 @@ Leaf reviewers apply verdict per **`mstar-roles/references/qc-specialist/report-
 
 ### 席位预算与截断（PM）
 
-- **座次不放宽范围。** N=3 只增加视角：每个席位仍只审其 diff pack 与直接影响接口，预算也不因席位增加而变宽。PM 用 Assignment `Budget` 收紧；默认与数字 SSOT → **`mstar-harness-core`** § 定向执行与验证边界。
+- **座次不放宽范围。** N=3 只增加视角：每个席位仍只审其 diff pack 与直接影响接口，预算也不因席位增加而变宽。PM 用 Assignment `budget` 收紧；默认与数字 SSOT → **`mstar-harness-core`** § 定向执行与验证边界。
 - **截断报告保留 verdict。** 席位因触达预算而声明 `Truncated coverage:` 时，其 verdict 有效，PM **不得**因此升级为 `Unconfirmed`——`Unconfirmed` 仍是证据通道失败态（见上条传导规则）。
 - **未覆盖范围不改写门禁。** 席位 verdict 只涵盖其已审范围：当 Assignment 范围未被完整覆盖时，**gate decision 不得为 `Approve`**。PM 二选一——把未覆盖范围按 targeted re-review 重新派发（席位在预算内补完），或显式收窄 `Review range` 并把收窄依据记入 `qc-consolidated.md` 后再收敛。截断范围仍按「未提及 = 未审查」在 `qc-consolidated.md` 中如实标注 `unreviewed`，PM 不重审无关内容来补全它。
 
-> **Engine check:** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `Budget` + `Return shape` on review / audit rounds, plus the canonical **`Task budget (implement / ops rounds)`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; engine `validateQcReport`). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
+> **Engine check:** run `mstar qc validate-report <report.md>` on each seat report (and `mstar dispatch validate <assignment-file>` for the Assignment-side round-bounding gate — `budget` + `return_shape` on review / audit rounds, plus the canonical **`task_budget`** capacity field on non-review / non-audit rounds; field guidance → `mstar-roles/references/project-manager/dispatch-and-assignment.md`; the review caps above are unchanged; engine `validateQcReport`). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
 ## 证据规则（PM · consolidated 输入）
 

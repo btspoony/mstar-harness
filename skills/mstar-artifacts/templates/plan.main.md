@@ -1,3 +1,13 @@
+---
+plan_id: <plan id — equals the registered `--plan-id`>
+title: <Feature Name>
+execution: sdd
+working_branch: <branch that carries this plan's work>
+main_worktree_branch: <recorded residency of the primary checkout (main worktree) — PM observes and records before the lifecycle writes, then passes it unchanged in writable Assignments; never invented at check time, and never `branch.base` (that is a creation/merge anchor, not a residency fact)>
+delivery_kind: development
+status: Todo
+---
+
 # [Feature Name] Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `mstar-sdd` (recommended) or inline execution. Steps use checkbox (`- [ ]`) syntax.
@@ -7,10 +17,6 @@
 **Architecture:** [2–3 sentences]
 
 **Tech Stack:** [Key technologies]
-
-**Execution:** mstar-sdd | inline
-
-**Main worktree branch**: [recorded residency of the primary checkout (main worktree) — PM observes and records before the lifecycle writes, then passes it unchanged in writable Assignments; never invented at check time, and never `branch.base` (that is a creation/merge anchor, not a residency fact)]
 
 ## Global Constraints
 

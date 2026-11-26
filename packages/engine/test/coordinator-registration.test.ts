@@ -8,6 +8,7 @@ import { registerShippedCatalogExecution } from "../src/execution-registration.j
 import { readExecutionState, type ExecutionContext } from "../src/execution-store.js";
 import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const root = mkdtempSync(join(tmpdir(), "mstar-coordinator-registration-"));
 
@@ -24,7 +25,7 @@ async function fixture(name: string): Promise<{ harnessDir: string; context: Sto
   await ensureCollaborationAuthority(context);
   const planId = "fixture-plan";
   mkdirSync(join(harnessDir, "plans"), { recursive: true });
-  writeFileSync(join(harnessDir, "plans", `${planId}.md`), `# Fixture plan\n\n**plan_id:** ${planId}\n`);
+  writeFileSync(join(harnessDir, "plans", `${planId}.md`), planFrontMatter(planId, "# Fixture plan\n"));
   return {
     harnessDir,
     context,

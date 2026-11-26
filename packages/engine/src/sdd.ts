@@ -58,6 +58,9 @@ import {
   resolveFixedHarnessDir,
   resolveSddDir,
 } from "./path.js";
+import { planDeclaredHeaders, planDeclaredHeadersFromContent } from "./plan-path.js";
+import { extractFrontmatterAndBody, fencedCodeTracker, quoteFrontmatterScalar } from "./document-frontmatter.js";
+import { validateDocumentFrontmatter } from "./document-schema.js";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
 import { WORKFLOW_DELIVERY_KINDS } from "./workflow.js";
 import { readExecutionPlanAdmission, type ExecutionState } from "./execution-store.js";
@@ -315,7 +318,20 @@ export function sddWorkspace(planId: string, opts: SddWorkspaceOptions = {}): st
 
 /**
  * Extract the `## Task N` section of a plan into a file (default
- * `{SDD_DIR}/task-N-brief.md`). Line state machine: ``` fences toggle
+ * `{SDD_DIR}/task-N-brief.md`). The written brief opens with a front matter
+ * block carrying `plan_id` (the plan's own front matter of the SAME snapshot
+ * the slice came from — a plan that declares none, or only a blank one, is
+ * refused before any mkdir or write), `task` and — when the task declares file
+ * entries — `files` as a block list of its Create/Modify/Test/Delete/Rename
+ * entry paths (the first backtick-delimited path after the label; trailing
+ * prose is allowed and not part of the path), in order, duplicates removed.
+ * Entries inside fenced code are examples, not ownership, and the task scan
+ * reads the body only: a task-shaped line inside the front matter declares
+ * nothing. Every written value is quoted when the shared reader would decode
+ * it as another shape (`plan_id: "null"`, a `[`-leading path), and the
+ * assembled header must pass the `sdd-brief` schema before anything is
+ * written.
+ * Line state machine: ``` fences toggle
  * `infence`; headings inside fences are ignored; printing starts at the
  * heading for `taskN` and continues until the NEXT `## Task` heading (or
  * EOF for the last task) — a later Task heading resets the section. A
@@ -385,25 +401,72 @@ export function taskBrief(planFile: string, taskN: number, outFile?: string, opt
   }
 
  // awk records: every newline-terminated line plus a final unterminated
- // line; each printed record is emitted with a trailing newline.
-  const records = content.endsWith("\n") ? content.split("\n").slice(0, -1) : content.split("\n");
+ // line; each printed record is emitted with a trailing newline. The scan
+ // reads the BODY of the one snapshot read above: a task-shaped line inside
+ // the front matter declares nothing.
+ // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const { body } = extractFrontmatterAndBody(content);
+  const records = body.endsWith("\n") ? body.split("\n").slice(0, -1) : body.split("\n");
   const headingRe = /^#+[ \t]+Task[ \t]+[0-9]+/;
   const targetRe = new RegExp(`^#+[ \t]+Task[ \t]+${taskN}([^0-9]|$)`);
-  let infence = false;
   let intask = false;
   const printed: string[] = [];
+  // Both fence kinds hide a heading: a `~~~`-fenced `## Task 2` example
+  // inside Task 1 must not open a new task slice.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  const inFence = fencedCodeTracker();
   for (const line of records) {
-    if (/^```/.test(line)) infence = !infence;
-    if (!infence && headingRe.test(line)) intask = targetRe.test(line);
+    if (!inFence(line) && headingRe.test(line)) intask = targetRe.test(line);
     if (intask) printed.push(line);
   }
   if (printed.length === 0) {
     throw new SddScriptError(`task ${taskN} not found in ${planFile} (no heading matching Task ${taskN})`, 3);
   }
+// The brief's declaration header: `plan_id` from the SAME snapshot's front
+// matter (shared reader, never a body label, never a second file read), the
+// task number, and the task's own file entries in order without duplicates.
+// The entry scan walks the slice's own fence state, so a fenced example line
+// is not an entry; the match anchors on the first backtick-delimited path
+// after a recognized label and tolerates trailing prose.
+// see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  const planId = planDeclaredHeadersFromContent(content, planFile).get("plan_id");
+  if (planId === undefined || planId.trim() === "") {
+    throw new SddScriptError(
+      `plan ${planFile} declares no usable plan_id in its front matter \u2014 an sdd brief requires a non-blank plan_id; add "plan_id: <id>" to the plan's front matter`,
+      1,
+    );
+  }
+  const files = new Set<string>();
+  // Both fence kinds mask an entry: a `Modify:` line inside a `~~~` example
+  // is quoted text, not a file the task touches.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  const inEntryFence = fencedCodeTracker();
+  for (const line of printed) {
+    if (inEntryFence(line)) continue;
+    const entry = /^- (?:Create|Modify|Test|Delete|Rename): `([^`]+)`/.exec(line);
+    if (entry !== null) files.add(entry[1]!);
+  }
+  const brief = [
+    "---",
+    `plan_id: ${quoteFrontmatterScalar(planId)}`,
+    `task: ${taskN}`,
+    ...(files.size === 0 ? [] : ["files:", ...[...files].map((file) => `- ${quoteFrontmatterScalar(file)}`)]),
+    "---",
+  ].join("\n");
+  // The header is a document, so it must satisfy the schema its consumers
+  // apply — refuse before any mkdir/write rather than emit an unreadable one.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const gate = validateDocumentFrontmatter("sdd-brief", `${brief}\n`, out);
+  if (!gate.ok) {
+    throw new SddScriptError(
+      `plan ${planFile} cannot produce a schema-valid sdd brief header: ${gate.violations[0]?.message ?? "invalid declaration"} \u2014 correct the plan's plan_id / task / file entry paths and rerun mstar sdd task-brief`,
+      1,
+    );
+  }
   if (mkdirAfterGate !== null || (!bound && !outFile)) {
     mkdirSync(mkdirAfterGate ?? (opts.sddDir ?? process.env.SDD_DIR)!, { recursive: true });
   }
-  writeFileSync(out, `${printed.join("\n")}\n`);
+  writeFileSync(out, `${brief}\n${printed.join("\n")}\n`);
 
  // Bound mode emits absolute paths (A3: handoff producers carry absolute
  // destinations); unbound keeps the legacy literal return.
@@ -703,23 +766,6 @@ function throwUsage(message: string): never {
 }
 
 /**
- * Recorded main-worktree branch from the declared plan file (the plan
- * header `**Main worktree branch**: <branch>` written at lifecycle start —
- * SDD reads the plan it already declares). Missing record → `""`: the
- * caller falls back conservatively to the governing snapshot's explicit
- * `branch.base`, never to the branch observed at check time.
- */
-function recordedMainWorktreeBranch(planFile: string): string {
-  try {
-    const text = readFileSync(planFile, "utf8");
-    const match = text.match(/^\s*\*{0,2}Main worktree branch\*{0,2}\s*[:\uff1a][ \t]*(\S+)/m);
-    return match ? match[1]! : "";
-  } catch {
-    return "";
-  }
-}
-
-/**
  * The L1 lifecycle-branch ownership set read from the ACTIVE graph: ALL
  * registered ACTIVE lifecycles (never only the governing one), projected into
  * the same snapshot shape the pure collector consumes.
@@ -981,7 +1027,17 @@ export async function resolveSddExecutionContext(input: SddExecutionContext): Pr
       isPlainObject(state.branch) && typeof state.branch.base === "string" && state.branch.base.trim() !== ""
         ? state.branch.base
         : "";
-    const expectedMainBranch = recordedMainWorktreeBranch(input.planFile) || snapshotBase;
+    // Recorded plan front matter is the declaration surface (a body label
+    // declares nothing); a missing record falls back conservatively to the
+    // governing snapshot's explicit `branch.base`, never to the branch
+    // observed at check time. A DocumentFrontmatterError (malformed or
+    // duplicate declaration) or a PlanPathError (an invalid non-scalar
+    // declaration or an unterminated fence) propagates with its diagnostic —
+    // an invalid declaration is never read as an absent one, so a corrupted
+    // plan can never silently fall back to `branch.base`. Values are the raw
+    // written scalars, so a numeric-looking branch keeps its spelling.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    const expectedMainBranch = planDeclaredHeaders(input.planFile).get("main worktree branch") ?? snapshotBase;
     const l1 = l1PreDispatchCheck({
       workflowType: state.type === "iteration" ? "iteration" : "plan",
       integrationWorktreePath:

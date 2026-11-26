@@ -17,7 +17,7 @@ Other hosts follow their own `references/<host>.md` and do **not** use this file
 
 Every dispatch on Kimi **must** carry the played Morning Star role in the **Assignment** and in the **invoke prompt**:
 
-1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
+1. **`execute_as: <role-id>`** in the Assignment front matter (harness routing SSOT; key set and required fields → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)).
 2. **`Act as <role-id>`** (or equivalent) at the top of the invoke prompt.
 3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
 4. **`subagent_type`** — pick from the live built-in set per the host C5 table (not a Morning Star role id).
@@ -29,17 +29,21 @@ Paste-only Assignment **without** an invoke call is **not** dispatch.
 - **1 Assignment ⇒ 1 invoke**: one invoke call carrying the full Assignment body per assignee.
 - **Parallel batch N**: **N** invocations in **one** assistant message (mechanics → **`parallel-dispatch.md`**).
 - **No invoke call** → **Not dispatched** — paste-only / `dispatch incomplete`.
-- **Anti-recursion NEVER**: leaf executors are already `Execute as` — **no** recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
+- **Anti-recursion NEVER**: leaf executors are already `execute_as` — **no** recursive invoke of the same role; Assignment wins (`delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
 
 ## Assignment / prompt template
 
 ```markdown
-## Assignment
+---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: deep
+working_branch: feat/example
+plan_path: /path/to/control-root/.mstar/plans/20260717-example.md
+task_budget: one implementer round closing this task's Files list and verification gates
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Working branch**: feat/example
-**Plan Path**: .mstar/plans/20260717-example.md
+## Assignment
 
 **IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
 
@@ -47,5 +51,7 @@ Load: `mstar-harness-core` → `mstar-host` → `<host>.md` → `mstar-roles` �
 
 <task body>
 ```
+
+Front matter is the only field contract: the block opens the document, and `**Label**:` body lines declare nothing (`dispatch.assignment.legacy-format`). The full key set and required fields → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical).
 
 The active host reference shows the matching invoke shape (same turn) — e.g. Kimi `Agent` with `subagent_type: "coder"` plus this C5b body.

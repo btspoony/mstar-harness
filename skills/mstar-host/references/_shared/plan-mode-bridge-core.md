@@ -17,7 +17,7 @@ The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**
 3. **store.db execution authority + authored `{PLAN_DIR}` plan**
 4. Host session plan / todos / UI (session UX mirror) — the host bridge names its surfaces
 
-**NEVER** cite only a host plan path / session todo list / chat summary in Assignment **Plan Path**, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
+**NEVER** cite only a host plan path / session todo list / chat summary in the Assignment front matter `plan_path`, **Context Loaded**, or Completion Report when `{PLAN_DIR}/<plan-id>-<name>.md` should exist.
 
 ## Before the first plan (bootstrap init)
 
@@ -34,7 +34,7 @@ First action after Build, before product-code edits:
 1. Reload the harness entry: `mstar-harness-core` → `mstar-host` host reference → this bridge.
 2. If the plan is a Morning Star plan, resume as `project-manager` for coordination and dispatch only.
 3. Read the authored SSOT plan and state through `mstar status validate` / `mstar plan show`; use them over host UI.
-4. For each implement/code todo, require a PM Assignment with `Execute as`, `Delegation`, `Working branch` or `Branch policy`, and SSOT `Plan Path`.
+4. For each implement/code todo, require a PM Assignment whose front matter declares `execute_as`, `delegation`, the SSOT `plan_path`, and one branch form (`working_branch` or `branch_policy`). The branch declaration is required because the dispatch is writable — only a read-only `scout` / `explore` orientation may omit it — and is refused when both forms appear. Branch-form contract and its control-domain variant → **`mstar-branch-worktree`** § Assignment 要求（PM）; key set → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical).
 5. If the Assignment or SSOT state is missing, report **Blocked** and repair the harness state before implementation.
 
 Allowed in the parent Build session: plan/status maintenance, routing decisions, Assignment writing, and host task dispatch.
@@ -59,7 +59,7 @@ After the host plan is created, keep the host plan body and mirror file **in syn
 
 **Before marking the todo done:**
 
-1. **Commit**: `git add` + `git commit` on the authorized **Working branch** for this **task id** (one commit per task unless PM explicitly allowed batched commits in Assignment).
+1. **Commit**: `git add` + `git commit` on the authorized front matter `working_branch` for this **task id** (one commit per task unless PM explicitly allowed batched commits in Assignment).
    Each todo's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 2. **Plan checkbox**: Set `- [x]` on the matching line in `{PLAN_DIR}/<plan-id>-<name>.md`.
 3. **Execution state** (PM only): use the appropriate public `mstar plan` verb for store-backed status; append notes through the authorized notes ledger operation. Keep `notes.jsonl` append-only; never patch ACTIVE status/snapshot files.
@@ -90,7 +90,7 @@ Dev-role NEVER rules also apply when executing as implementer: `mstar-roles/refe
 | Host plan only, no harness authority | Run bootstrap; write authored mirror plan and register through public engine producer |
 | Todo done, no commit | Commit per task; paste `git log -1` evidence |
 | Drift between host plan and SSOT plan | Update both in same round |
-| Host plan URI as Plan Path | Use `{PLAN_DIR}/...` path |
+| Host plan URI as `plan_path` | Use `{PLAN_DIR}/...` path |
 | Skip `spec-register` | Register workflow/plan rows through public engine producer before implement |
 | Build starts coding in the parent session | Resume PM context; dispatch implement work or block on missing Assignment |
 | Host plan approval treated as Done authority | Check harness plan/status/QC/PM Acceptance gates first |

@@ -46,6 +46,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -92,6 +93,7 @@ import { upgradeStoreMinimal } from "./store-upgrade-minimal.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
 import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
+import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-consumers-"));
 afterAll(() => {
@@ -494,7 +496,8 @@ async function registeredStore(label: string): Promise<StoreContext> {
   mkdirSync(join(context.harnessDir, planDir), { recursive: true });
   writeFileSync(
     join(context.harnessDir, planDir, `${CROSS_PLAN}.md`),
-    `# ${planTitle}\n\n**plan_id:** ${CROSS_PLAN}\n`,
+    planFrontMatter(CROSS_PLAN, `# ${planTitle}
+`),
   );
   const execution = { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) };
   const request = {

@@ -56,14 +56,16 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Fully valid writable Assignment with plan + task identity (ledger derivation target). */
-const VALID_FORK = `## Assignment
+const VALID_FORK = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/00000814-dsh-fallbacks-integration
+plan_path: /proj/plans/00000814-fork-gate.md
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/00000814-dsh-fallbacks-integration
-**Plan Path**: /proj/plans/00000814-fork-gate.md
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 ## Task 3
 
@@ -71,11 +73,13 @@ Fork the assigned work, evidence-first.
 `
 
 /** Missing `Execute as` — the opencode consumer's first field-gate case. */
-const MISSING_EXECUTE_AS = `## Assignment
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
@@ -88,9 +92,11 @@ const ROLE_PRESET = 'mstar-execute'
 
 /** One mstar-style Assignment prompt seeded into a fork child session. */
 const FORK_ASSIGNMENT_PROMPT = [
-  '**Execute as**: fullstack-dev',
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
+  '---',
+  'execute_as: fullstack-dev',
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
   '',
   'Fork the assigned work, evidence-first.',
 ].join('\n')
@@ -183,7 +189,7 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
 
     expect(secondRan).toBe(false) // deny without next() short-circuits the waterfall
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.execute-as')
     // The veto is the signal — advisory is warn-mode only; the hard deny still
     // lands in the ledger (spec §2.1.1: hard deny samples record too).
     const view = flowOf(app)
@@ -211,6 +217,43 @@ describe('fork gate — subagent_fork under Enforcement: hard', () => {
       verdict: 'ok',
       hard: true,
     })
+  })
+})
+
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+
+describe('fork gate — the retired body-label grammar refuses on the fork carrier too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a fork
+    // carrier whose fields live in the retired `**Label**` grammar reaches
+    // the terminal legacy-format refusal exactly like the subagent carrier.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+    const app = booted = await bootApp({ enforcement: 'hard', seedV2: true })
+    let secondRan = false
+    app.ctx.on('tools/pre-execute', () => {
+      secondRan = true
+      return Promise.resolve<PreToolDecision>({ kind: 'allow' })
+    })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', forkExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    // the veto short-circuits the waterfall
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(secondRan).toBe(false)
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
   })
 })
 

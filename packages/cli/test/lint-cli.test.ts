@@ -5,6 +5,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope, expectUsageDiagnostic, lintResults, lintViolationCodes } from "./support/cli-assertions";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 /** why: the ratchet diffs the working tree against this commit, so each test
  * edits one file after seeding and then lints what it wrote. */
@@ -37,7 +38,7 @@ describe("mstar lint — content-type lints", () => {
   test("clean plan file → OK, exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
       const file = join(dir, "20260808-good-plan.md");
-      writeFileSync(file, "# Plan\n\n## Goal\nShip the module.\n");
+      writeFileSync(file, planFrontMatter("20260808-good-plan", "# Plan\n\n## Goal\nShip the module.\n"));
       const result = runCli(["lint", file]);
       expect(result.exitCode).toBe(0);
       expect(lintResults(result)[0]?.violations).toEqual([]);
@@ -532,8 +533,8 @@ Check result: exit 0; changed scope line found.
 
   test("dir walk aggregates violations → exit 1", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
-      writeFileSync(join(dir, "20260808-bad-plan.md"), "# Plan\n\n## Goal\nShip TBD.\n");
-      writeFileSync(join(dir, "20260808-good-plan.md"), "# Plan\n\n## Goal\nShip it.\n");
+      writeFileSync(join(dir, "20260808-bad-plan.md"), planFrontMatter("20260808-bad-plan", "# Plan\n\n## Goal\nShip TBD.\n"));
+      writeFileSync(join(dir, "20260808-good-plan.md"), planFrontMatter("20260808-good-plan", "# Plan\n\n## Goal\nShip it.\n"));
       const result = runCli(["lint", dir]);
       expect(result.exitCode).toBe(1);
       const results = lintResults(result);
@@ -544,7 +545,7 @@ Check result: exit 0; changed scope line found.
 
   test("dir walk with only clean files → exit 0", () => {
     withTempDir("mstar-slice4-cli-", (dir) => {
-      writeFileSync(join(dir, "20260808-good-plan.md"), "# Plan\n\n## Goal\nShip it.\n");
+      writeFileSync(join(dir, "20260808-good-plan.md"), planFrontMatter("20260808-good-plan", "# Plan\n\n## Goal\nShip it.\n"));
       writeFileSync(join(dir, "STRATEGY.md"), "# S\n\n## Vision\n## What we build\n## What we don't build\n## Guiding Principles\n## Technology Direction\n## Decision Log\n");
       const result = runCli(["lint", dir]);
       expect(result.exitCode).toBe(0);

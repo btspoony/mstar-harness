@@ -11,6 +11,7 @@ import { getCatalog } from "./catalog.js";
 import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import {
+
   abortCatalogExecution,
   assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
@@ -23,6 +24,7 @@ import { mutateExecutionWorkflow } from "./execution-workflow.js";
 import { createFsStore, setArtifactStore } from "./store.js";
 import { initializeStore, openStore, tableNamesOn, type StoreContext } from "./store-db.js";
 import { WORKFLOW_SNAPSHOT_FILE } from "./workflow.js";
+import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 
 /**
  * note: The collaboration lane is user-level, so every fixture pins `homedir` to a
@@ -98,7 +100,8 @@ describe("ACTIVE catalog execution registration and legacy recovery", () => {
   function planWorkflow(harnessDir: string, workflowId: string, id: string, title: string) {
     const file = join(harnessDir, "plans", `${id}.md`);
     mkdirSync(join(harnessDir, "plans"), { recursive: true });
-    writeFileSync(file, `# ${title}\n\n**plan_id:** ${id}\n`);
+    writeFileSync(file, planFrontMatter(id, `# ${title}
+`));
     return {
       kind: "plan" as const,
       workflowId,

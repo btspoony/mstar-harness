@@ -12,6 +12,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseDocumentFrontmatterEntries, setOwn } from "./document-frontmatter.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 // Call-time-only cycle with catalog.ts (which reaches this module through
 // coordination.ts): `catalogRootDir` only resolves roots when a catalog
@@ -1049,6 +1050,12 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
  * Parse flat-subset YAML frontmatter from raw file content — the single
  * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
  * the roadmap validator (extract/reuse the same parsing, no fork).
+ * The structural parse delegates to `parseDocumentFrontmatterEntries` in
+ * the flat profile — one pass, no line rescan, and that profile already
+ * carries the compass scalar contract: values are the decoded declaration
+ * text (one boundary quote pair strips, a double-quoted scalar
+ * JSON-escape-decodes because the roadmap export writes values with
+ * `JSON.stringify`) and are never typed `true` / numbers / `null`.
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);
@@ -1059,82 +1066,25 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
   if (end === -1) {
     throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
   }
+  const frontmatter = lines.slice(1, end).join("\n");
+  // One structural pass in the shared reader under the flat compass
+  // profile: nested maps and block scalars refuse with the file and line,
+  // and every entry carries its original scalar text, so nothing is
+  // rescanned here.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const entries = parseDocumentFrontmatterEntries(frontmatter, filePath, "flat");
   const doc: Record<string, unknown> = {};
-  let listKey: string | null = null;
-  for (let i = 1; i < end; i += 1) {
-    const line = lines[i] ?? "";
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-    // `- item` lines (optionally indented) continue the most recent
-    // `key:` list (plans:).
-    if (listKey !== null && /^\s*-\s+/.test(line)) {
-      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
-      if (!Array.isArray(doc[listKey])) doc[listKey] = [];
-      (doc[listKey] as string[]).push(item);
-      continue;
-    }
-    listKey = null;
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) {
-      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
-    }
-    const value = kv[2]!.trim();
-    // A flat flow-style array (`plans: []` / `plans: [a, b]`) becomes an
-    // array of trimmed string items; anything else stays a scalar (empty
-    // value → null, like before).
-    doc[kv[1]!] =
-      value === ""
-        ? null
-        : value.startsWith('"') && value.endsWith('"') && value.length >= 2
-          ? // Double-quoted scalar (e.g. from JSON.stringify in roadmap export):
-            // decode \\ and \" (placeholder pass so \" survives the \\ decode).
-            value
-              .slice(1, -1)
-              // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
-              // \\" → quote, \\\\ → backslash; a lone backslash before any
-              // other character is preserved (JSON.stringify parity).
-              .replace(/\\(.)/g, (_, ch: string) =>
-                ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
-              )
-          : /^\[.*\]$/.test(value)
-            ? parseFlowArray(value, filePath)
-            : value.replace(/^["']|["']$/g, "");
-      listKey = value === "" ? kv[1] : null;
+  // Every projected key lands as an own data property: a plain assignment
+  // for the accepted key `__proto__` would invoke the inherited prototype
+  // setter, dropping the value and repointing the prototype instead.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+  for (const [key, entry] of entries) {
+    // A bare `key:` with no children is null in the compass contract; a list
+    // (bare key with `- item` children, flow array, or block list) projects
+    // its items; every other scalar is the value the flat profile decoded.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const bare = entry.kind !== "list" && entry.rawText === "";
+    setOwn(doc, key, bare ? null : entry.value);
   }
   return doc;
-}
-
-function parseFlowArray(raw: string, filePath: string): string[] {
-  const inner = raw.slice(1, -1);
-  if (/[[\]]/.test(inner)) {
-    throw new Error(
-      `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} \u2014 only flat scalar items are supported (e.g. [a, b])`,
-    );
-  }
-  // Quote-aware scan BEFORE the naive split: a comma inside a quoted item
-  // (single OR double quotes) must stay part of its item, so `["a, b"]` /
-  // `['a, b']` cannot be split unambiguously and are rejected here (a
-  // post-split `item.includes(",")` check would be dead — split(",") items
-  // can never contain a comma). A different quote char inside a quoted item
-  // is a literal character (YAML parity), not a toggle.
-  let quote: string | null = null;
-  for (const ch of inner) {
-    if (ch === '"' || ch === "'") {
-      if (quote === null) quote = ch;
-      else if (quote === ch) quote = null;
-    } else if (ch === "," && quote !== null) {
-      throw new Error(
-        `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} \u2014 quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
-      );
-    }
-  }
-  if (quote !== null) {
-    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
-  }
-  const items: string[] = [];
-  for (const part of inner.split(",")) {
-    const item = part.trim().replace(/^["']|["']$/g, "");
-    if (item === "") continue;
-    items.push(item);
-  }
-  return items;
 }

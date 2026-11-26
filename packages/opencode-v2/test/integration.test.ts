@@ -86,13 +86,18 @@ async function setup(fixture: ReturnType<typeof hostFixture>) {
 }
 
 const validAssignment = [
+  "---",
+  "enforcement: hard",
+  "execute_as: fullstack-dev",
+  "delegation: forbidden",
+  "task_category: logic",
+  "task_budget: one implementer round",
+  "working_branch: feature/integration-fixture",
+  "---",
+  "",
   "## Assignment",
-  "Enforcement: hard",
-  "Execute as: fullstack-dev",
-  "Delegation: forbidden",
-  "Task category: logic",
-  "**Task budget (implement / ops rounds)**: one implementer round",
-  "Working branch: feature/integration-fixture",
+  "",
+  "Do the thing, evidence-first.",
 ].join("\n");
 
 const dispatchEvent = (caller: string, target: string, prompt: unknown, id = "call-1"): ExecuteBeforeEvent => ({
