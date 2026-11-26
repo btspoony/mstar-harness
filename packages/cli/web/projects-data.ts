@@ -369,4 +369,4 @@ export {
   type AssignableIssuesRead,
   type MilestoneWriteSurface,
 };
-export type { IssuePage, IterationListDTO, MilestoneRead as MilestoneReadDTO, ProjectFeature };
+export type { IssuePage, IterationListDTO, MilestoneReadDTO, ProjectFeature };

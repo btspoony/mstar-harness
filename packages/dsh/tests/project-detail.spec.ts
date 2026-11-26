@@ -2,7 +2,8 @@
  * `project-detail` — the product's only hierarchy page (final round).
  *
  * The milestone rollup is the page's default body, read from the project-scoped
- * `overview` read's `milestones` member; the adapter owns the list-FEATURE
+ * `milestones` view (collaboration data only, so it answers without an execution
+ * store); the adapter owns the list-FEATURE
  * state: the fixed two tabs, `Issues` the default, and each tab's body from its
  * own project-scoped read.
  */
@@ -18,14 +19,8 @@ import { ProjectDetailDestination } from '../src/client/panel/destinations.tsx'
 const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
 const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
 
-const OVERVIEW = {
-  projectId: 'proj-1',
-  workflows: { state: 'not-applicable', reason: 'not read' },
-  residuals: { state: 'not-applicable', reason: 'not read' },
-  milestones: { state: 'read', data: { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 } },
-  latestIteration: { state: 'not-applicable', reason: 'not read' },
-  issueFlow: { state: 'not-applicable', reason: 'not read' },
-}
+/** note: The project-detail read answers the milestone grouping itself, not an overview. */
+const MILESTONES = { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 }
 
 const PROJECTS = {
   items: [
@@ -42,7 +37,7 @@ const ISSUES = { items: [{ id: 'I-1', title: 'a project issue', severity: 'high'
 function render(over: { issues?: unknown; feature?: string; projects?: unknown } = {}): string {
   return renderToStaticMarkup(createElement(ProjectDetailDestination, {
     id: 'proj-1',
-    state: envelope(OVERVIEW),
+    state: envelope(MILESTONES),
     locale: 'en',
     onBack: () => {},
     issues: envelope(over.issues ?? ISSUES),
@@ -90,24 +85,28 @@ describe('project detail — one absence authority and the degraded member arms'
     } as never))
 
   it('an empty milestone set answers the empty arm, never an absent one', () => {
-    const markup = renderState(envelope(OVERVIEW))
+    const markup = renderState(envelope(MILESTONES))
     expect(markup).toContain('data-ms-absence="empty"')
     expect(markup).not.toContain('data-ms-absence="absent"')
   })
 
-  it('an unavailable milestones member keeps its own arm and reason', () => {
-    const degraded = {
-      ...OVERVIEW,
-      milestones: { state: 'unavailable', reason: 'the milestone read could not be completed' },
-    }
-    const markup = renderState(envelope(degraded))
-    expect(markup).toContain('data-ms-absence="unavailable"')
+  it('a degraded read keeps its own arm and reason', () => {
+    // The milestone read is the page's own read, so its refusal is the page's refusal:
+    // the reason travels verbatim and nothing is drawn as an empty board.
+    const degraded = { kind: 'unavailable' as const, reason: 'the milestone read could not be completed' }
+    const markup = renderState(degraded)
     expect(markup).toContain('the milestone read could not be completed')
+    expect(markup).not.toContain('data-ms-absence="empty"')
+  })
+
+  it('a null payload is an unavailable milestone read, not an empty board', () => {
+    const markup = renderState(envelope(null))
+    expect(markup).toContain('data-ms-absence="unavailable"')
   })
 
   it('a successful-but-empty feature read draws an explicit empty arm', () => {
     // Red: `ReadState` returned null for an `ok` read, so the slot drew nothing.
-    const markup = renderState(envelope(OVERVIEW), { issues: envelope(null), feature: 'issues' })
+    const markup = renderState(envelope(MILESTONES), { issues: envelope(null), feature: 'issues' })
     expect(markup).toContain('data-ms-absence="empty"')
   })
 

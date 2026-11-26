@@ -2192,28 +2192,40 @@ describe("collaboration remote schema ladder", () => {
       recovered.close();
     }
 
-    // invariant: The replay starts from the recovered snapshot ALONE. The interrupted lane's files are
-    // abandoned rather than reused: every one of them is removed, the recovered copy is restored onto
-    // the lane path, and only then is the same verb run - so the replay proves the copy, not whatever
-    // the aborted call left behind (a surviving sidecar is a second writer, which is the `store.busy`
-    // this case used to race).
-    for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
-    copyFileSync(snapshotPath, location.dbPath);
-    chmodSync(location.dbPath, 0o600);
+    // invariant: The replay starts from the recovered snapshot ALONE, on a lane path NOTHING else in
+    // this process has opened. The interrupted checkout's lane is abandoned outright (never restored
+    // onto, never reopened): the copy is written to a SECOND fresh home's lane, which resolves the
+    // same repository key and mode from the same synthetic origin, so the receipt and the binding
+    // checks below still prove the recovered generation while no earlier handle - the aborted upgrade's
+    // connection or the probe that read the v6 metadata - can hold the target past the bounded wait.
+    // A restored-over lane still races that way, which is the `store.busy` this case used to hit.
+    const replayHome = join(ROOT, `crash-replay-${sequence++}`);
+    mkdirSync(replayHome, { recursive: true });
+    resolvedHome = replayHome;
+    const replayContext = contextAt(repo);
+    const replayLocation = locationAt(repo);
+    expect(replayLocation.repoKey).toBe(location.repoKey);
+    expect(replayLocation.dbPath).not.toBe(location.dbPath);
+    // note: The storage tree is created PRIVATE, the way the lane's own initializer makes it:
+    // a plain recursive `mkdir` lands at 0755 and the admission refuses it before any read.
+    mkdirSync(dirname(replayLocation.dbPath), { recursive: true, mode: 0o700 });
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${replayLocation.dbPath}${suffix}`, { force: true });
+    copyFileSync(snapshotPath, replayLocation.dbPath);
+    chmodSync(replayLocation.dbPath, 0o600);
     // note: The recovered copy is the same generation the interrupted call held, so the binding this
     // checkout holds is the one its own metadata row proves: store id and epoch come from the copy.
-    writeCollaborationBinding(context, {
-      repoKey: location.repoKey,
-      mode: location.mode,
+    writeCollaborationBinding(replayContext, {
+      repoKey: replayLocation.repoKey,
+      mode: replayLocation.mode,
       storeId: v6Meta.store_id,
       epoch: v6Meta.authority_epoch,
       binding: "active",
     });
-    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    const receipt = await upgradeCollaborationStore(replayContext, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
-    expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
-    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
-    const db = new DatabaseSync(location.dbPath);
+    expect(tableNames(replayLocation.dbPath)).not.toContain("project_roadmaps");
+    expect(ledgerVersions(replayLocation.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    const db = new DatabaseSync(replayLocation.dbPath);
     try {
       // invariant: The reclassified row keeps its revision and its registration instant.
       expect(db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get()).toEqual({
