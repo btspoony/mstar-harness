@@ -13,9 +13,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 /** `ok: true` carries the pack root (caller-owned cleanup) and the tarball
- * path inside it; `ok: false` is the printed skip reason — the pack root
- * was already removed. */
-export type PackProbeResult = { ok: true; packRoot: string; tarball: string } | { ok: false; reason: string }
+ * path inside it; `ok: false` is the printed skip reason plus the exact
+ * pack root this invocation created — the helper already removed it, and
+ * it is exposed so the caller asserts/cleans that path alone, never a
+ * shared-tmpdir scan that could catch a concurrent process's root. */
+export type PackProbeResult = { ok: true; packRoot: string; tarball: string } | { ok: false; reason: string; packRoot: string }
 
 export interface PackProbeArgs {
   /** cwd of the package to pack. */
@@ -70,7 +72,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
     if (packProc === undefined || packProc.exitCode !== 0) {
       const stderrLine = stderrLineOf(packProc?.stderr)
       const stderrSuffix = stderrLine === '' ? '' : `: ${stderrLine}`
-      return { ok: false, reason: `local artifact pack failed (npm pack --json --pack-destination <dir>, ${spawnDetail(packProc?.exitCode, packError)})${stderrSuffix} — ${publishNote}` }
+      return { ok: false, reason: `local artifact pack failed (npm pack --json --pack-destination <dir>, ${spawnDetail(packProc?.exitCode, packError)})${stderrSuffix} — ${publishNote}`, packRoot }
     }
     let packFilename: string | undefined
     try {
@@ -85,7 +87,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
       packFilename = undefined
     }
     if (packFilename === undefined) {
-      return { ok: false, reason: `local artifact pack failed (npm pack --json --pack-destination <dir>, no filename in the pack report) — ${publishNote}` }
+      return { ok: false, reason: `local artifact pack failed (npm pack --json --pack-destination <dir>, no filename in the pack report) — ${publishNote}`, packRoot }
     }
     const tarball = join(packRoot, packFilename)
     const probeHome = await mkdtemp(join(tmpdir(), 'dsh-e2e-probe-home-'))
@@ -106,7 +108,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
       if (probe === undefined || probe.exitCode !== 0) {
         const stderrLine = stderrLineOf(probe?.stderr)
         const stderrSuffix = stderrLine === '' ? '' : `: ${stderrLine}`
-        return { ok: false, reason: `local artifact install failed (dsh plugin --profile web add file:<tarball>, ${spawnDetail(probe?.exitCode, probeError)})${stderrSuffix} — ${publishNote}` }
+        return { ok: false, reason: `local artifact install failed (dsh plugin --profile web add file:<tarball>, ${spawnDetail(probe?.exitCode, probeError)})${stderrSuffix} — ${publishNote}`, packRoot }
       }
     } finally {
       await rm(probeHome, { recursive: true, force: true })
