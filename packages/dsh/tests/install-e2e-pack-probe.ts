@@ -1,55 +1,29 @@
-/**
- * The install-e2e skip-guard's local-artifact step as one testable unit:
- * `npm pack --json` the workspace package into a throwaway pack root, then
- * probe-install the tarball into a throwaway dsh home. Every failure —
- * non-zero exit, spawn error (a missing `npm` or `dsh` binary throws from
- * `Bun.spawnSync`), or a malformed pack report — returns a named skip
- * reason instead of throwing, and the pack root is removed before any
- * failure return (a skip never leaves it behind; the successful path hands
- * it to the caller, whose own cleanup owns it).
- */
+// see packages/dsh/tests/install-e2e-pack-probe.spec.ts - every spawn/pack failure becomes the printed skip reason, never a throw, and the pack root is removed before any failure return; the success path hands it to the caller's cleanup.
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
-/** `ok: true` carries the pack root (caller-owned cleanup) and the tarball
- * path inside it; `ok: false` is the printed skip reason plus the exact
- * pack root this invocation created — the helper already removed it, and
- * it is exposed so the caller asserts/cleans that path alone, never a
- * shared-tmpdir scan that could catch a concurrent process's root. */
 export type PackProbeResult = { ok: true; packRoot: string; tarball: string } | { ok: false; reason: string; packRoot: string }
 
 export interface PackProbeArgs {
-  /** cwd of the package to pack. */
   packageRoot: string
-  /** The workspace version, embedded in the pending-publish note. */
   repoVersion: string
-  /** The dsh profile the probe install targets. */
   profile: string
-  /** Spawn env for the probe (`DSH_HOME` forced to the throwaway home). */
   env: (probeHome: string) => Record<string, string>
-  /** Binary overrides: the regression spec passes names of genuinely
-   * missing executables so the spawn-error path is exercised for real. */
   npmBin?: string
+  spawnTimeoutMs?: number
   dshBin?: string
 }
 
-/** One failure detail: `exit <n>` for a finished process, the error message
- * for a spawn that never started (its exit is unavailable). The first
- * non-empty stderr line is appended after the closing paren of the reason —
- * the caller composes `(<command>, <detail>): <stderr line> — <note>`. */
 function spawnDetail(exitCode: number | null | undefined, error: unknown): string {
   if (error !== undefined) return error instanceof Error ? error.message : String(error)
   return `exit ${exitCode}`
 }
 
-/** The first non-empty stderr line of a finished process, or ''. */
 function stderrLineOf(stderr: string | undefined): string {
   return (stderr?.split('\n').find((line) => line.trim() !== '') ?? '').trim()
 }
 
-/** Pack the workspace artifact and probe-install it by `file:`; never
- * throws — a spawn error is the same named skip as a non-zero exit. */
 export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult> {
   const publishNote = `@mstar-harness/dsh@${args.repoVersion} is not published until the 5.0 release`
   const npmBin = args.npmBin ?? 'npm'
@@ -64,6 +38,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
         cwd: args.packageRoot,
         stdout: 'pipe',
         stderr: 'pipe',
+        timeout: args.spawnTimeoutMs ?? 300_000,
       })
       packProc = { exitCode: proc.exitCode, stderr: proc.stderr.toString(), stdout: proc.stdout.toString() }
     } catch (error) {
@@ -79,7 +54,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
       const packReport: unknown = JSON.parse(packProc.stdout)
       if (Array.isArray(packReport)) {
         const entry: unknown = packReport[0]
-        if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string' && entry.filename !== '') {
+        if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string' && entry.filename !== '' && basename(entry.filename) === entry.filename) {
           packFilename = entry.filename
         }
       }
@@ -99,7 +74,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
           env: args.env(probeHome),
           stdout: 'pipe',
           stderr: 'pipe',
-          timeout: 300_000,
+          timeout: args.spawnTimeoutMs ?? 300_000,
         })
         probe = { exitCode: proc.exitCode, stderr: proc.stderr.toString() }
       } catch (error) {

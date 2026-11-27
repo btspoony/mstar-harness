@@ -50,9 +50,8 @@
  *       installed deployment. The artifact bundle keeps the entry's frozen
  *       export surface (no probe symbol exported), so the pin observes the
  *       probe's contract structurally: canary dispatch + brand stamp +
- *       unchanged wrapper key surface. Armed by 4b: artifacts published
- *       before the seam probe shipped print the explicit deviation instead
- *       (never a silent skip).
+ *       unchanged wrapper key surface. Step 4b pins the surface on the
+ *       locally packed artifact unconditionally.
  *   6. The HOST config-stack re-composition is modeled (the real app's
  *      HMR/typert path): the fallbacks effective readback reads the row
  *      config captured at apply time, so after the seed write the host
@@ -193,21 +192,10 @@ function hasSeedsSurface(mstarPkgDir: string): boolean {
   return readFileSync(distIndex, 'utf8').includes('mstar seeds declared')
 }
 
-/** The role-preset-channel + seam-probe surface the shipped bundle carries:
- * the fail-loud warn text AND the ported channel's single start surface
- * (`startActivation`) in `dist/index.js` (the gates compile INTO the
- * single-file bundle; same marker mechanism as `hasSeedsSurface`). BOTH are
- * required: an artifact published on the removed per-start persona slot
- * carries the warn text but no `startActivation`, and its channel does not
- * wrap a `startActivation`-only runtime at all — so the 5b wrapper pin below
- * must stay disarmed for it. Absent markers are reported as an explicit
- * deviation (never a silent skip).
- * Cross-link (`SEAM_WARN` in `src/gates/role-persona.ts`): the warn marker is
- * a verbatim prefix of that warn text — REWORDING `SEAM_WARN` silently DISARMS
- * the 5b shipped-surface assertions (published artifacts stop matching the
- * marker, so the vintage guard would print the deviation forever). Change
- * the two strings together, and update the f9/f10 warn pins in
- * `tests/persona-seam-probe.spec.ts` in the same edit. */
+/** see packages/dsh/src/gates/role-persona.ts - the warn marker here is a
+ * verbatim prefix of `SEAM_WARN`; rewording `SEAM_WARN` breaks this match,
+ * so change both strings (and the f9/f10 warn pins in
+ * `tests/persona-seam-probe.spec.ts`) in the same edit. */
 function hasSeamProbeSurface(mstarPkgDir: string): boolean {
   const distIndex = join(mstarPkgDir, 'dist/index.js')
   if (!existsSync(distIndex)) return false
@@ -297,7 +285,18 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     const repoVersion = await readVersion(join(packageRoot, 'package.json'))
     expect(installedVersion).toBe(repoVersion)
     expect(hasSeedsSurface(installedMstarDir(dshHome))).toBe(true)
-    expect(readFileSync(join(installedMstarDir(dshHome), 'dist/index.js'), 'utf8')).toBe(readFileSync(join(packageRoot, 'dist/index.js'), 'utf8'))
+    const profileManifest: unknown = JSON.parse(readFileSync(join(profileDir(dshHome), 'package.json'), 'utf8'))
+    let mstarSpec: string | undefined
+    if (typeof profileManifest === 'object' && profileManifest !== null && 'dependencies' in profileManifest) {
+      const deps = profileManifest.dependencies
+      if (typeof deps === 'object' && deps !== null && '@mstar-harness/dsh' in deps && typeof deps['@mstar-harness/dsh'] === 'string') {
+        mstarSpec = deps["@mstar-harness/dsh"]
+      }
+    }
+    expect(mstarSpec, 'profile manifest carries a string @mstar-harness/dsh spec').toBeDefined()
+    expect(resolve(mstarSpec!.replace(/^file:/, '')), 'the installed row resolves to this invocation’s tarball').toBe(resolve(localTarball!))
+    const lockText = readFileSync(join(profileDir(dshHome), 'pnpm-lock.yaml'), 'utf8')
+    expect(lockText.includes(`specifier: file:${localTarball}`), 'the lockfile records this invocation’s tarball as the mstar specifier').toBe(true)
     const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
     expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after the local overwrite').toBe(1)
     expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after the local overwrite').toBe(1)
