@@ -1939,8 +1939,9 @@ const ADR_STATUS_LINE = /^Status: (proposed|implemented|rejected) \u2014 .+$/;
 const ADR_ARCHIVED_LINE = /^Archived: \d{4}-\d{2}-\d{2} \u2014 .+$/;
 
 /** see docs/adr/README.md - a demoted marker in any list-marker or emphasis
- * spelling; the label is case-insensitive. */
-const ADR_SUPERSEDED_BY = /^\s*(?:[-*+]\s+)?(?:\*+|_+)?superseded-by:(?:\*+|_+)?\s*(.*)$/i;
+ * spelling; the label is case-insensitive, and its emphasis pair may close
+ * before the colon or after it. */
+const ADR_SUPERSEDED_BY = /^\s*(?:[-*+]\s+)?(?:\*+|_+)?superseded-by(?:\*+|_+)?:(?:\*+|_+)?\s*(.*)$/i;
 
 /** Required and banned sections per bucket. `archived` reuses the implemented
  * shape: it accepts implemented records only. */
@@ -2053,7 +2054,9 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
     // still proposed. Single-file rule - no cross-file lookup.
     const demoted = header.map((line) => line.match(ADR_SUPERSEDED_BY)).find((match) => match !== null);
     if (demoted != null) {
-      const value = demoted[1]!.trim().replace(/(?:\*+|_+)$/, "");
+      // see docs/adr/README.md - the emphasis limit covers the label and, in a
+      // wrapped value, the value's own pair; both are markup, not part of the name.
+      const value = demoted[1]!.trim().replace(/^(?:\*+|_+)|(?:\*+|_+)$/g, "");
       const supersededBy = `Superseded-by: ${value}`;
       const cls = relPath.split("/").at(-2);
       const filename = basename(relPath);
