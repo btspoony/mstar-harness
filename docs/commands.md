@@ -177,7 +177,7 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **Args** — a `path|subsystem` token narrows the round; `dry-run` is a read-only exit that returns the ranked candidates and their already-observed baseline in the response — no audit run directory, report or evidence file, scout dispatch, issue capture, ADR write or edit — and claims no net-complexity figure.
 
-**Stop conditions** — no candidate survives the rejected-move list with a proven net reduction; the run budget is reached; the next move needs a product or architecture decision or a destructive migration (captured as an issue, then the round ends, and a later run needs that decision plus the captured issue); or no remaining candidate has a behaviour baseline (each such candidate is skipped and stays in the pool, and the round ends only when none remain).
+**Stop conditions** — no candidate survives the rejected-move list with a proven net reduction; the run budget is reached; or the next move needs a product or architecture decision or a destructive migration (captured as an issue, then the round ends, and a later run needs that decision plus the captured issue). A candidate with no behaviour baseline is skipped with its missing evidence named and stays in the pool; the round then ends under one of those conditions.
 
 **Defined in** — [`commands/codebase-arch-governance.md`](../commands/codebase-arch-governance.md); semantics → `mstar-coding-behavior` (`references/architecture-governance.md`); structural decisions → `mstar-doc-corpus` → `references/adr.md`.
 

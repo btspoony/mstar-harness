@@ -35,7 +35,7 @@ Generate candidate moves, then take the one with the **lowest total complexity**
 
 Reject a governance candidate whose only justification is one of these:
 
-- An abstraction, base class or interface with no stated varying axis — the `Speculative` label in `deep-module-vocabulary.md` § One adapter means a hypothetical seam, never a blocking move.
+- A seam, adapter or interface with one implementation and no stated varying axis — the `Speculative` label in `deep-module-vocabulary.md` § One adapter means a hypothetical seam, never a blocking move.
 - A directory or file move with no ownership, dependency-direction or responsibility change.
 - Merging semantically different concepts because they now look alike — form symmetry is not a property above.
 - Condensed code that trades readability for a smaller line count.
@@ -44,12 +44,13 @@ Reject a governance candidate whose only justification is one of these:
 
 ## Stop conditions
 
-End the round — and say which one fired — when any holds:
+The round ends when any of these holds, and the report names which one:
 
 - No candidate survives the rejection list with an evidence-backed net complexity reduction.
 - The run budget is reached; report the completed batches and the remaining pool, not a partial batch.
 - The next move needs a product decision, an architecture decision, or a destructive migration: capture it per `mstar-project-governance` § Issue capture and end the round. A later run needs that decision and the captured issue; the captured decision is not authority to act on it.
-- A remaining candidate has no behaviour baseline: skip it, keep it in the optimisation pool, and continue with the others; the round ends only when none remain, and the skipped candidates are named with the missing evidence.
+
+A candidate whose behaviour baseline cannot be established is not a round stop: skip it, keep it in the optimisation pool, name the missing evidence, and continue with the other candidates. The round then ends under one of the conditions above.
 
 ## Progress carriers
 
