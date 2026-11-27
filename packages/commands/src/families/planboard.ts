@@ -36,7 +36,7 @@ export function getPlanboardCommandDefinitions(): readonly CommandDefinition<Inp
             message: `No control harness resolved from ${context.cwd}, so there is no board to read.`,
             details: { cwd: context.cwd, harness: input.harness ?? null },
             recovery:
-              "Run from inside the repository whose control checkout owns the harness, or name it: `mstar planboard check --harness <abs .mstar>`. Run `mstar path resolve` to print that path.",
+              "Name the harness: `mstar planboard check --harness=<dir>`, or run `mstar path resolve` to print that path. Running from inside the repository that owns the control checkout resolves the same root without the flag.",
           });
         }
         const result = await checkPlanboard({ harnessDir });

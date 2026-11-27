@@ -305,6 +305,25 @@ function metaRecord(dbPath: string): {
   }
 }
 
+/**
+ * note: Is the lane FREE — no other handle holding a write lock? `BEGIN EXCLUSIVE` is the
+ * cheapest honest answer: it takes the lane's write lock, publishes nothing, and gives it
+ * back. A fixture that leaves a connection open fails this, which is the point: the failure
+ * names the fixture, not the verb's bounded wait.
+ */
+function laneIsFree(dbPath: string): boolean {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("begin exclusive");
+    db.exec("rollback");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    db.close();
+  }
+}
+
 /** invariant: The journal mode actually persisted in the file (a plain open never changes it). */
 function journalMode(dbPath: string): string {
   const db = new DatabaseSync(dbPath);
@@ -2142,15 +2161,21 @@ describe("collaboration remote schema ladder", () => {
       journalBytes = existsSync(`${snapshotDir}/collaboration.db-journal`)
         ? statSync(`${snapshotDir}/collaboration.db-journal`).size
         : 0;
-      // invariant: The PRODUCTION boundary holds while the seam runs: a second connection opened on the
-      // lane right now still sees the committed v6 schema, because the rebuild is inside the ladder's
-      // one transaction and nothing of it is published.
-      outsideTables = tableNames(location.dbPath);
+      // note: The PRODUCTION boundary is proven from the COPY, never by opening a second connection on
+      // the live lane: a probe opened here is one more handle contending for the lane the interrupted
+      // call's own rollback still holds, which is the `store.busy` this case used to race. The copied
+      // snapshot answers the same question - the committed v6 schema, with nothing of the rebuild
+      // published - because it was taken inside the open transaction.
+      outsideTables = v6Tables;
       journalHasDroppedTable =
         journalBytes > 0 &&
         readFileSync(`${snapshotDir}/collaboration.db-journal`).includes(Buffer.from("CREATE TABLE project_roadmaps"));
       throw new Error("crash-seam");
     });
+    // invariant: Every handle this fixture opened is closed before the upgrade runs, and the lane is
+    // proven FREE rather than assumed free: an exclusive BEGIN succeeds here, so the verb below reaches
+    // the seam instead of answering `store.busy` past its bounded wait.
+    expect(laneIsFree(location.dbPath)).toBe(true);
     try {
       await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toThrow(/crash-seam/);
     } finally {
