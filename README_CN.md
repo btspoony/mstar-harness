@@ -62,6 +62,8 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
   - CLI：`npx @mstar-harness/cli init --target codex`
   - 原生：`codex plugin marketplace add btspoony/mstar-harness --ref main`，再执行 `codex plugin add morning-star-harness@mstar-repo`
 
+从既有的 4.x 安装升级是一次经审查的 cutover，而不是安装器的一步；请遵循 [`docs/migration-5.0.md`](docs/migration-5.0.md)。
+
 ## 使用
 
 每个会话进入一次 PM，然后用你自己的话描述要做什么；PM 会在该会话中推进整个流程。
@@ -183,6 +185,7 @@ mstar-harness schema --command issue.close  # 同一份契约的机器可读 JSO
 
 - [`docs/runtime-reference.md`](docs/runtime-reference.md) —— 组件、存储布局、角色与技能、CLI 与 MCP 参考。
 - [`INSTALL.md`](INSTALL.md) —— 各宿主的安装与校验，以及 `report` 命令的完整说明。
+- [`docs/migration-5.0.md`](docs/migration-5.0.md) —— 从 4.9.x 升级到 5.0 协作权威：有哪些破坏性变更、cutover 阶梯，以及拒绝后的恢复。
 - [`docs/commands.md`](docs/commands.md) —— 八条斜杠命令：参数、适用场景、归属 skill。
 - [`CONCEPTS.md`](CONCEPTS.md) —— harness 在 skills 与文档中使用的术语表。
 - 更新说明：[`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md)。CLI 参数：**`mstar-use-cli`** skill。
