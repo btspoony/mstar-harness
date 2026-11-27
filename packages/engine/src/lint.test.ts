@@ -141,6 +141,44 @@ Prose between the real table and an example table.
     expect(result.violations[0]?.message).toContain('"p_1"');
   });
 
+  test("prose before the Plans table does not hide its rows", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+This section tracks every plan layer of the iteration.
+
+| plan_id | Name | Status |
+|---|---|---|
+| p1-store | Store authority | Done |
+
+${COMPASS_STACK_HEAD}| s1 | p2-board | o/r #7 | layer <- main | a -> b | reviewing | pending |
+`);
+    expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
+    expect(result.violations[0]?.message).toContain("p1-store");
+  });
+
+  test("_p1_ is a literal id, distinct from p1", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| \`_p1_\` | Underscored | Done |
+| p1 | Plain | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p1 | o/r #1 |
+`);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(result.violations[0]?.message).toContain('"_p1_"');
+  });
+
   test("marks wrapping a cell are formatting, not part of the id", () => {
     const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | \`**p1-store**\` | \u2014 | layer <- main | a -> b | landed | empty range |
 `);

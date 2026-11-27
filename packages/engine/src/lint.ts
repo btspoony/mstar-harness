@@ -1592,19 +1592,22 @@ type CompassTable = { header: string[]; rows: string[][] };
 
 /** why: the table under the heading, not every pipe row until the next
  * heading — a later table in the same section is another document's example,
- * never a row of this one. Leading blank lines are allowed; the table ends at
- * the first blank line or non-row line once it has started. */
+ * never a row of this one. Prose or blank lines may precede the table, so a
+ * section is scanned until the first row starts the table; from there the
+ * table ends at the first blank or non-row line, or at the next heading. */
 function compassTable(lines: readonly string[], name: string): CompassTable | null {
   const start = lines.findIndex((line) => line.trim().startsWith("## ") && hasSectionName([line.trim().slice(3).trim()], name));
   if (start < 0) return null;
   const rows: string[][] = [];
+  let started = false;
   for (let index = start + 1; index < lines.length; index++) {
     const line = lines[index]!.trim();
-    if (line === "") {
-      if (rows.length > 0) break;
+    if (/^#{1,6}\s/.test(line)) break;
+    if (!line.startsWith("|")) {
+      if (started) break;
       continue;
     }
-    if (!line.startsWith("|")) break;
+    started = true;
     const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
     if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
     rows.push(cells);
@@ -1613,12 +1616,12 @@ function compassTable(lines: readonly string[], name: string): CompassTable | nu
   return { header: header ?? [], rows: data };
 }
 
-/** A cell's comparable text: emphasis and code marks WRAPPING the whole cell
- * are formatting; a mark inside it is part of the value, so `p_1` and `p1`
- * stay distinct ids. */
+/** A cell's comparable text: backticks and bold WRAPPING the whole cell are
+ * formatting; a single `_`/`*` emphasis and any mark inside the value are
+ * literal, so `_p1_` and `p1` stay distinct ids. */
 function cellText(cell: string): string {
   let text = cell.trim();
-  const wrapper = /^([`*_]+)(.*)\1$/s;
+  const wrapper = /^(`+|\*\*)(.*)\1$/s;
   for (let match = wrapper.exec(text); match !== null; match = wrapper.exec(text)) text = match[2]!.trim();
   return text;
 }
