@@ -1810,7 +1810,10 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
  * registration order and stored status — because that is the execution
  * authority: a publication held by a size stop stays visible while the compass
  * `Status` cell still lags, and reading that cell would let the lagging document
- * hide an unpaid obligation. The compass therefore supplies row existence only.
+ * hide an unpaid obligation. The compass therefore supplies row existence only:
+ * a `## PR stack` section or `Accountable plan` column this check cannot read
+ * records no plan layer, so it refuses as unverifiable instead of crediting a
+ * neighbouring column.
  *
  * `compass_ref` is the workflow's registered harness-relative pointer, resolved
  * against the control harness root exactly as `mstar workflow compass-ref`
@@ -1818,8 +1821,8 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
  * the compass is the registration/compass checks' business, and this reminder
  * never invents a second refusal for a document it cannot read.
  *
- * A `## Plans` header the check cannot read states no order, so it refuses as
- * unverifiable rather than reading as "no earlier plan".
+ * Every refusal names the store-derived plans it blocks on, so the transport's
+ * "each plan named by the refusal" recovery is true for all three reasons.
  * see skills/mstar-iteration/references/pr-stack.md
  */
 function assertEarlierLayersPublished(context: ExecutionContext, snapshot: WorkflowSnapshot, planId: string): void {
@@ -1841,24 +1844,35 @@ function assertEarlierLayersPublished(context: ExecutionContext, snapshot: Workf
   }
   const obligation = earlierLayerObligation(text, { earlierPlanIds });
   if (obligation.ok) return;
-  const details = { plan_id: planId, workflow_id: snapshot.id, compass_ref: ref, reason: obligation.reason };
+  const details = {
+    plan_id: planId,
+    workflow_id: snapshot.id,
+    compass_ref: ref,
+    reason: obligation.reason,
+    unpublished_plan_ids: earlierPlanIds,
+  };
+  const blocking = earlierPlanIds.map((id) => `"${id}"`).join(", ");
   if (obligation.reason === "header-missing") {
+    // reachability: manual — the message names the runtime block ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
     throw new CoordinationError(
       "coordination.layer-unpublished",
-      "The compass `## PR stack` table carries no `Accountable plan` column, so no row records a plan layer and rows added under another header are ignored; restore the table's header, then record the missing layer rows and retry the same completion.",
+      `The compass \`## PR stack\` table carries no \`Accountable plan\` column, so no row records a plan layer and rows added under another header are ignored; the earlier Done plans left unrecorded are ${blocking}. Add that column and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.`,
       details,
     );
   }
   if (obligation.reason === "section-missing") {
+    // reachability: manual — the message names the runtime block ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
     throw new CoordinationError(
       "coordination.layer-unpublished",
-      "The compass carries no `## PR stack` section, so no layer record names any plan's publication; add that section and one row per Done plan, then retry the same completion.",
+      `The compass carries no \`## PR stack\` section, so no layer record names any plan's publication; the earlier Done plans left unrecorded are ${blocking}. Add that section and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.`,
       details,
     );
   }
+  // Only the plans this reason leaves unrecorded; see skills/mstar-iteration/references/pr-stack.md
+  const unrecorded = obligation.planIds.map((id) => `"${id}"`).join(", ");
   throw new CoordinationError(
     "coordination.layer-unpublished",
-    "An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass `## PR stack` table and retry the same completion. " +
+    `An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass \`## PR stack\` table and retry the same completion. The unrecorded plans are ${unrecorded}. ` +
       "The row names a real layer PR, or `\u2014` for an empty range, or the iteration's already-open aggregate PR; a compass without that section needs it added first, with one row per Done plan.",
     { ...details, unpublished_plan_ids: obligation.planIds },
   );

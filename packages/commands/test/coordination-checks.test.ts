@@ -547,7 +547,10 @@ plans:
       { workflow: "wf-layers-plans-header", compass, harness } as never,
       context(cwd),
     );
-    expect(result.status).toBe("refused");
+    // The unfinished plan also reports PLAN_NOT_DONE, but the layer violation is
+    // the actionable refusal: the obligation itself cannot be stated.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+    expect(result).toMatchObject({ status: "refused", code: "lint.iteration.plans-header-missing" });
     if (result.status === "refused") {
       const gate = result.details?.gate as { violations: Array<{ code: string; message?: string }> };
       expect(gate.violations).toEqual(expect.arrayContaining([

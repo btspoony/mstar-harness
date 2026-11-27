@@ -127,9 +127,14 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           const unverifiable = layerViolations.some((item) => item.code === "lint.iteration.plans-header-missing");
           const violations = base.allPlansDone || unverifiable ? [...entryViolations, ...base.exit.violations] : [];
           const gate = { ...base, entry, violations, ok: violations.length === 0 };
+          // The layer finding is the more actionable refusal: a plan-level entry
+          // code says one plan is unfinished, while a missing row or an unreadable
+          // `## Plans` header says the layer record itself is unpaid or unreadable.
+          // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+          const layerCode = layerViolations.find((item) => violations.includes(item))?.code;
           return gate.ok
             ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit })
-            : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
+            : refusalEnvelope({ command: id, status: "refused", code: layerCode ?? gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
         } catch (error) { return engineFailure(id, error, "iteration.gate.refused"); }
       },
     }),

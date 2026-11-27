@@ -5038,8 +5038,13 @@ describe("execution-workflow: iteration layer publication on complete", () => {
     const before = refusalFootprint(fixture.context);
     const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
     expect(refusal.code).toBe("coordination.layer-unpublished");
-    expect(refusal.details).toMatchObject({ reason: "section-missing" });
+    // The recovery says "each plan named by the refusal", so every reason names
+    // the store-derived plans it blocks on — not only the missing-row shape.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+    expect(refusal.details).toMatchObject({ reason: "section-missing", unpublished_plan_ids: ["p-earlier"] });
     expect(refusal.message).toContain("no `## PR stack` section");
+    expect(refusal.message).toContain('"p-earlier"');
+    expect(refusal.message).toContain("mstar plan complete");
     expect(refusalFootprint(fixture.context)).toEqual(before);
   });
 
@@ -5077,11 +5082,13 @@ describe("execution-workflow: iteration layer publication on complete", () => {
     );
     const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
     expect(refusal.code).toBe("coordination.layer-unpublished");
-    expect(refusal.details).toMatchObject({ reason: "header-missing" });
-    // Rows are ignored until the column exists, so the refusal names that repair.
+    expect(refusal.details).toMatchObject({ reason: "header-missing", unpublished_plan_ids: ["p-earlier"] });
+    // Rows are ignored until the column exists, so the refusal names that repair
+    // and the plans it leaves unrecorded.
     // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     expect(refusal.message).toContain("`Accountable plan` column");
     expect(refusal.message).toContain("ignored");
+    expect(refusal.message).toContain('"p-earlier"');
   });
 
   test("an earlier store row Done with a lagging compass status still refuses the completion", async () => {
