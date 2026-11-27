@@ -14,17 +14,16 @@ Governance, not a rewrite: the codebase is converged batch by batch, and every b
 ## Boot
 
 - PM: `mstar-harness-core` + this entry's routing; `mstar-phase-gates` + `mstar-dispatch-gates` before the first implement dispatch; `mstar-conventions` (path symbols) and `mstar-host` (invoke capability).
-- Discovery seat: `mstar-audit` → `references/codebase-audit.md` § scope variants (`simplify`).
+- Discovery rubric: `mstar-audit` → `references/codebase-audit.md` § scope variants (`simplify`) — read it as the method for ranking candidates, not as a dispatched seat.
 - Execution and QC seats: `mstar-coding-behavior` → `references/architecture-governance.md`; `mstar-sdd` when the batch is multi-task; `mstar-coding-behavior` → `references/constraint-ladder.md` when a settled rule needs enforcing; `mstar-doc-corpus` → `references/adr.md` when a structural decision is promoted.
 
 ## Execute
 
-1. **Discover.** Run the `simplify` audit pass (`mstar-audit` → `references/codebase-audit.md`) over the scope, read-only, and keep its evidence. `dry-run` ends here: publish the prioritised batches with their measured baseline and stop — no edits, no development dispatch, no issue or ADR writes, and no claimed net-complexity figure.
+1. **Discover.** Rank candidate moves by the `simplify` rubric (`mstar-audit` → `references/codebase-audit.md`), keeping only evidence the reads produced. `dry-run` exits here: read and rank in this session, return the ranked candidates with the baseline already observed in the response, and write nothing — no audit run directory, report or evidence files, scout dispatch, issue capture, ADR write, edit, or claimed net-complexity figure. Without `dry-run`, run the same pass as a read-only audit and keep its evidence.
 2. **Select one batch.** Take the candidate with the lowest total complexity per that reference's § Choosing the batch, and drop every candidate its § Not a finding list rejects. One batch per plan row.
-3. **Prepare.** The batch is a normal plan: `specify → clarify → plan` per `mstar-phase-gates`, with the behaviour baseline landed before the move and a characterization test first where coverage is thin.
-4. **Execute.** PM dispatches a development seat (SDD for multi-task), then independent QC, then PM Acceptance (`mstar-roles/references/project-manager/acceptance.md`). Every caller the batch touches is migrated inside that batch.
-5. **Lock the rule.** Land the settled rule on the strongest available constraint, or record it as a residual; a residual that repeats moves up the ladder in a later batch.
-6. **Next batch.** Record the batch's net complexity, then repeat steps 2–5 until a stop condition fires. Invoking this command is the opt-in for running successive batches without a confirmation prompt between them; it is not approval for a merge, a destructive migration, or a product or architecture decision — those still stop the round.
+3. **Prepare.** The batch is a normal plan: `specify → clarify → plan` per `mstar-phase-gates`, with the behaviour baseline landed before the move (`mstar-audit/references/codebase-audit.md` § Write the report states the behavior-preservation gates) and its AC carrying the closed-batch conditions as acceptance evidence — every live caller accounted for, the replaced path absent, the baseline observed, the rule landed on a constraint or recorded as an authorized residual. A caller the batch cannot migrate rejects the whole move; the old path is never kept alive beside the new one.
+4. **Execute, lock, then review.** PM dispatches a development seat (SDD for multi-task); the batch lands the settled rule on the strongest available constraint (`constraint-ladder.md`) or records an authorized residual, then independent QC and PM Acceptance judge that complete move (`mstar-roles/references/project-manager/acceptance.md`).
+5. **Next batch.** Record the batch's net complexity, then repeat steps 2–4 until a stop condition fires. Invoking this command is the opt-in for running successive batches without a confirmation prompt between them; it is not approval for a merge, a destructive migration, or a product or architecture decision — those capture an issue and end the round per that reference's § Stop conditions.
 
 ## Close-out
 

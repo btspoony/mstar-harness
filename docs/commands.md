@@ -175,9 +175,9 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 
 **When** — the shape itself is the problem: one semantic implemented several ways, a concept scattered across callers, forwarding layers, or a convention held only by prose. `/codebase-audit` reports the same surfaces read-only and produces plans; this entry executes those batches under the normal plan gates. `/codebase-comment-cleanup` is the same idea for comments alone.
 
-**Args** — a `path|subsystem` token narrows the round; `dry-run` is a read-only exit that publishes the prioritised batches with their measured baseline, then stops.
+**Args** — a `path|subsystem` token narrows the round; `dry-run` is a read-only exit that returns the ranked candidates and their already-observed baseline in the response — no audit run directory, report or evidence file, scout dispatch, issue capture, ADR write or edit — and claims no net-complexity figure.
 
-**Stop conditions** — no candidate survives the rejected-move list with a proven net reduction, the run budget is reached, the next move needs a product or architecture decision or a destructive migration (captured as an issue, then skipped), or no behaviour baseline can be established for that surface.
+**Stop conditions** — no candidate survives the rejected-move list with a proven net reduction; the run budget is reached; the next move needs a product or architecture decision or a destructive migration (captured as an issue, then the round ends, and a later run needs that decision plus the captured issue); or no remaining candidate has a behaviour baseline (each such candidate is skipped and stays in the pool, and the round ends only when none remain).
 
 **Defined in** — [`commands/codebase-arch-governance.md`](../commands/codebase-arch-governance.md); semantics → `mstar-coding-behavior` (`references/architecture-governance.md`); structural decisions → `mstar-doc-corpus` → `references/adr.md`.
 

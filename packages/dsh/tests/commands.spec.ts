@@ -2,10 +2,8 @@
  * Bundled mstar commands (omp parity, iteration v2.1.0 gap fill): the plugin
  * registers the packaged `harness-commands/*.md` mirror (synced from the
  * repo root by `bundle-assets`; gitignored) on `ctx.commands` — every shipped
- * mstar slash command (`iteration-start`, `iteration-drive`, `iteration-loop`,
- * `codebase-audit`, `codebase-comment-cleanup`, `amazing-pr-review`,
- * `amazing-test-audit`, `amazing-e2e-check`), matching the omp/opencode
- * command surface. Each registered command's handler steers the command body
+ * mstar slash command (full set: `docs/commands.md`), matching the
+ * omp/opencode command surface. Each registered command's handler steers the command body
  * into the receiving agent as a user message (the dsh-commands "explicitly
  * schedule model-visible work through the receiving Agent" path).
  *

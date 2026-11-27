@@ -33,7 +33,7 @@ Start from the user's original outcome, not from the machinery already built.
 
 ### Architecture governance rounds
 
-A round whose target is the codebase's **shape** — parallel implementations of one semantic, one concept scattered across callers, layers that forward instead of hiding, a settled rule held only by prose — is judged by `references/architecture-governance.md`, not by how many files it can touch. Every batch still passes through the simplicity rules above: a new abstraction whose callers are not migrated is an open parallel path, not a governance win, and "the architecture needs it" never widens one change into a rewrite.
+A round whose target is the codebase's **shape** — parallel implementations of one semantic, one concept scattered across callers, layers that forward instead of hiding, a settled rule held only by prose — is judged by `references/architecture-governance.md`, not by how many files it can touch.
 
 ### Agent-facing products
 

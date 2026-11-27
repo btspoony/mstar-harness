@@ -97,7 +97,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 |------|------|
 | `/codebase-audit [keywords]` | 只读盘点，产出按优先级排序、可直接执行的改进计划；按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）可缩小范围。 |
 | `/codebase-comment-cleanup [path\|subsystem] [dry-run]` | 把每条代码注释归入 删除 / ADR / issue / 保留并定型 四类；按 PR 逐个收紧（ratchet）只读取本次 diff 触及的注释，因此闸门只判定本次变更新增或修改的注释，既有语料保持 advisory。 |
-| `/codebase-arch-governance [path\|subsystem] [dry-run]` | 把代码库分闭环批次收敛到其当前需求本应产出的形态：每批只做总复杂度最低的一项改动，迁移全部调用方、删除被替代的实现，并把已确立的规则固化为可执行检查。`dry-run` 只报告批次与基线，不改代码。 |
+| `/codebase-arch-governance [path\|subsystem] [dry-run]` | 把代码库分闭环批次收敛到其当前需求本应产出的形态：每批只做总复杂度最低的一项改动，迁移全部调用方、删除被替代的实现，并把已确立的规则固化为可执行检查。`dry-run` 只在回复中给出排序后的候选与已观测基线——不建审计运行目录、不写报告/证据文件、不捕获 issue、不写 ADR，也不改代码。 |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：settled（无中断完成、必需领域全部打开、已解析的 diff basis 可读且完整）的 run 按 finding tally 给出 `ship it`、`needs fixes` 或 `blocked`；仅在三种情况下给出唯一派生的 `incomplete`：run 在综合之前被中止，必需领域从未打开，或已解析的 diff basis 不可读。超过 wall clock 预算不属于这三种情况：完整覆盖的 run 即使超时，仍按 tally 给出结论，并把超时作为 note 声明。 |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | 对测试面做只读审计 → 产出删除、修复、合并或迁移测试的计划。 |
 | `/amazing-e2e-check [environment] [scenarios]` | 在独立 workflow 中运行你明确要求的浏览器、真机或安装部署场景。 |
