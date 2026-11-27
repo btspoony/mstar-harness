@@ -179,8 +179,65 @@ ${COMPASS_STACK_HEAD}| s1 | p2-board | o/r #7 | layer <- main | a -> b | reviewi
     expect(result.violations[0]?.message).toContain('"_p1_"');
   });
 
-  test("marks wrapping a cell are formatting, not part of the id", () => {
-    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | \`**p1-store**\` | \u2014 | layer <- main | a -> b | landed | empty range |
+  test("bold wrapping a cell is formatting, not part of the id", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | **p1-store** | \u2014 | layer <- main | a -> b | landed | empty range |
+`);
+    expect(result).toEqual({ ok: true, violations: [] });
+  });
+
+  test("a code span keeps its contents literal", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p1 | Plain | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | \`**p1**\` | o/r #1 |
+`);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(result.violations[0]?.message).toContain('"p1"');
+  });
+
+  test("a code-formatted id keeps its literal marks in the diagnostic", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| \`**p1**\` | Marked | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p1 | o/r #1 |
+`);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.message).toContain('"**p1**"');
+  });
+
+  test("an exactly code-formatted id matches its plan", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p1 | Plain | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | \`p1\` | o/r #1 |
 `);
     expect(result).toEqual({ ok: true, violations: [] });
   });

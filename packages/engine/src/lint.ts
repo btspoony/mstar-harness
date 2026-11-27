@@ -1616,14 +1616,20 @@ function compassTable(lines: readonly string[], name: string): CompassTable | nu
   return { header: header ?? [], rows: data };
 }
 
-/** A cell's comparable text: backticks and bold WRAPPING the whole cell are
- * formatting; a single `_`/`*` emphasis and any mark inside the value are
- * literal, so `_p1_` and `p1` stay distinct ids. */
+/** A cell's comparable text: bold WRAPPING the whole cell is formatting, but a
+ * code span's contents are literal once its backticks are gone, so `_p1_`,
+ * `**p1**` and `p1` stay distinct ids. */
 function cellText(cell: string): string {
   let text = cell.trim();
-  const wrapper = /^(`+|\*\*)(.*)\1$/s;
-  for (let match = wrapper.exec(text); match !== null; match = wrapper.exec(text)) text = match[2]!.trim();
-  return text;
+  const code = /^(`+)(.*)\1$/s;
+  const bold = /^\*\*(.*)\*\*$/s;
+  for (;;) {
+    const codeMatch = code.exec(text);
+    if (codeMatch !== null) return codeMatch[2]!.trim();
+    const boldMatch = bold.exec(text);
+    if (boldMatch === null) return text;
+    text = boldMatch[1]!.trim();
+  }
 }
 
 /** Index of the named column, or the positional fallback when a compass
