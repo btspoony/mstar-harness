@@ -82,6 +82,7 @@ import { subagentRoleIds } from '../src/gates/agent-personas.ts'
 import { PERSONA_SEAM_EVENT } from '../src/gates/role-persona.ts'
 import { checkHostBuild, HOST_BUILD_RECOVERY } from '../scripts/build-host.ts'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
+import { packAndProbe } from './install-e2e-pack-probe.ts'
 
 /** Repo root (packages/dsh/tests → up three levels). */
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
@@ -98,7 +99,10 @@ writeFileSync(join(cliCwd, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh
 const LOCAL_MIRROR = join(packageRoot, 'harness-agents')
 /** The profile the dsh CLI fixes for installs (dsh adapter `web`). */
 const DSH_PROFILE = 'web'
-/** see packages/dsh/tests/install-e2e.spec.ts - // invariant: skip-guard: `dsh` bin on PATH + npm registry reachability (the `dsh plugin add` flow forwards to pnpm over the network) + a current local host build that packs and installs by `file:`. Module scope — the describe is skipped when any fails, with the reason printed. `packRoot` is declared BEFORE the guard (a `let` beside the booted/dshHome state would still be in its TDZ while the awaited guard runs). */
+// see scripts/ci-packed-manifest-guard.ts — the pack below uses `npm pack`
+// because a `workspace:` spec makes `bun pm pack` throw. `packRoot` and
+// `localTarball` are declared BEFORE the guard: a `let` beside the
+// booted/dshHome state would still be in its TDZ while the awaited guard runs.
 let packRoot: string | undefined
 let localTarball: string | undefined
 const skipReason = await (async (): Promise<string | undefined> => {
@@ -119,49 +123,15 @@ const skipReason = await (async (): Promise<string | undefined> => {
   } catch (error) {
     return `npm registry unreachable (${error instanceof Error ? error.message : String(error)})`
   }
-  // see packages/dsh/tests/install-e2e.spec.ts - // invariant: skip-guard (local artifact): a stale or missing host build, a failed `npm pack` (never `bun pm pack` — the manifest's devDependencies carry `workspace:*`, which makes it throw) or a failed `file:` probe install becomes the printed skip reason, naming the command, the exit code, the first stderr line and the pending 5.0 publish.
   const buildCheck = checkHostBuild()
   if (buildCheck.state !== 'current') {
     return `${buildCheck.input} is ${buildCheck.state} for packages/dsh/dist/index.js — run \`${HOST_BUILD_RECOVERY}\` first`
   }
   const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-  packRoot = await mkdtemp(join(tmpdir(), 'dsh-e2e-pack-'))
-  const packProc = Bun.spawnSync(['npm', 'pack', '--json', '--pack-destination', packRoot], {
-    cwd: packageRoot,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  })
-  if (packProc.exitCode !== 0) {
-    const stderrLine = (packProc.stderr.toString().split('\n').find((line) => line.trim() !== '') ?? '').trim()
-    return `local artifact pack failed (npm pack --json --pack-destination <dir>, exit ${packProc.exitCode}): ${stderrLine} — @mstar-harness/dsh@${repoVersion} is not published until the 5.0 release`
-  }
-  const packReport: unknown = JSON.parse(packProc.stdout.toString())
-  let packFilename: string | undefined
-  if (Array.isArray(packReport)) {
-    const entry: unknown = packReport[0]
-    if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string') {
-      packFilename = entry.filename
-    }
-  }
-  if (packFilename === undefined) {
-    return 'local artifact pack failed (npm pack --json --pack-destination <dir>): no filename in the pack report'
-  }
-  localTarball = join(packRoot, packFilename)
-  const probeHome = await mkdtemp(join(tmpdir(), 'dsh-e2e-probe-home-'))
-  try {
-    const probe = Bun.spawnSync(['dsh', 'plugin', '--profile', DSH_PROFILE, 'add', `file:${localTarball}`], {
-      env: dshEnv(probeHome),
-      stdout: 'pipe',
-      stderr: 'pipe',
-      timeout: 300_000,
-    })
-    if (probe.exitCode !== 0) {
-      const stderrLine = (probe.stderr.toString().split('\n').find((line) => line.trim() !== '') ?? '').trim()
-      return `local artifact install failed (dsh plugin --profile web add file:<tarball>, exit ${probe.exitCode}): ${stderrLine} — @mstar-harness/dsh@${repoVersion} is not published until the 5.0 release`
-    }
-  } finally {
-    await rm(probeHome, { recursive: true, force: true })
-  }
+  const result = await packAndProbe({ packageRoot, repoVersion, profile: DSH_PROFILE, env: dshEnv })
+  if (!result.ok) return result.reason
+  packRoot = result.packRoot
+  localTarball = result.tarball
   return undefined
 })()
 
@@ -322,19 +292,16 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     const peersDir = join(profileDir(dshHome), 'node_modules/@deepseek-ai')
     console.log(`install-e2e: peers materialized under DSH_HOME profile: ${existsSync(peersDir)} (host provides seams)`)
 
-    // see packages/dsh/tests/install-e2e.spec.ts - // invariant: 4. The local build replaces the registry row: the registry's @mstar-harness/dsh carries the same version number with older content until the 5.0 release publishes, so only byte equality of dist/index.js tells the two builds apart.
     runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `file:${localTarball}`], 300_000)
     const installedVersion = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
     const repoVersion = await readVersion(join(packageRoot, 'package.json'))
     expect(installedVersion).toBe(repoVersion)
     expect(hasSeedsSurface(installedMstarDir(dshHome))).toBe(true)
     expect(readFileSync(join(installedMstarDir(dshHome), 'dist/index.js'), 'utf8')).toBe(readFileSync(join(packageRoot, 'dist/index.js'), 'utf8'))
-    // see packages/dsh/tests/install-e2e.spec.ts - // invariant: loader rows after the overwrite: a file: install's row still reads `name: '@mstar-harness/dsh'` (probed on dsh 0.2.2-rc.5 — the row name comes from the installed package, not the add spec), so the mstar row count is assertable; `^  name:` matches every built-in profile row (~200), so the count is per-name, never a total.
     const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
     expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after the local overwrite').toBe(1)
     expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after the local overwrite').toBe(1)
 
-    // see packages/dsh/tests/install-e2e.spec.ts - // invariant: 4b. The local artifact is built from this worktree, whose role-persona channel carries the seam-probe surface, so 5b is armed on every run; a missing surface is a packaging defect and fails here.
     const probeSurfaceArmed = hasSeamProbeSurface(installedMstarDir(dshHome))
     expect(probeSurfaceArmed, 'the locally packed artifact carries the role-preset channel surface').toBe(true)
     console.log('install-e2e: role-preset channel surface PRESENT on the locally packed artifact — 5b assertion armed')
@@ -492,7 +459,6 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
   }, { timeout: 600_000 })
 })
 
-// see packages/dsh/tests/install-e2e.spec.ts - // invariant: skip log: the skip-guard reason is printed ALWAYS so a skipped run is never a silent green; a skipped run also leaves nothing behind — afterEach never fires without a test, so the pack root is removed here.
 if (skipReason !== undefined) {
   console.log(`install-e2e: SKIPPED — ${skipReason}`)
   if (packRoot !== undefined) await rm(packRoot, { recursive: true, force: true })
