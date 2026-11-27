@@ -866,7 +866,6 @@ test("store.upgrade advances a combined source's execution schema before directi
   }
 });
 
-/** note: A combined store rewound to the last schema a released 4.9.x build writes and admits. */
 function rewindToReleasedSchema(harness: string): void {
   const fenceVersion = MIGRATIONS.find((migration) => migration.name === "collaboration-cutover-fence")!.version;
   const effortVersion = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
@@ -933,8 +932,6 @@ test("store.upgrade refuses an open mirror run before the schema leaves the rele
     // settles that checkout's store and leaves this control root's run open.
     expect(recoveryOf(refused)).toContain("mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|->");
     expect(recoveryOf(refused)).toContain("mstar store upgrade --harness <same-control-root> --operator <name>");
-    // invariant: The refusal left the store at the last schema the 4.9.x build admits, with the
-    // run row intact, so that build can still settle it.
     const after = await openStore({ harnessDir: harness }, "read");
     try {
       expect(after.schemaVersion).toBe(releasedSchema);

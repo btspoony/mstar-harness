@@ -2210,9 +2210,10 @@ export const MIGRATIONS: readonly Migration[] = [
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
 /**
- * note: The highest schema the last released 4.9.x build writes and admits. Migration 20 is the
- * cutover fence, which that build refuses as `store.schema-unsupported`; so a combined store's
- * open mirror run is only settleable while the store stays at or below this version.
+ * See docs/specs/architecture/collaboration-authority.md. The highest schema the last released
+ * 4.9.x build writes and admits. Migration 20 is the cutover fence, which that build refuses as
+ * `store.schema-unsupported`; so a combined store's open mirror run is only settleable while the
+ * store stays at or below this version.
  */
 const RELEASED_COMBINED_SCHEMA_MAX = 19;
 
