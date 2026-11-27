@@ -1920,6 +1920,7 @@ export type AdrLintFailure = {
     | "lint.adr.section-banned"
     | "lint.adr.index-forbidden"
     | "lint.adr.name-shape"
+    | "lint.adr.implemented-superseded"
     | "lint.adr.fence-unclosed";
   message: string;
   recovery: string;
@@ -2040,6 +2041,23 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
     }
   }
 
+  if (bucket === "implemented") {
+    // see packages/engine/src/lint.ts - // `implemented/` is the live bucket: a record carrying `Superseded-by:`
+    // is already demoted and must move to `archived/`, whatever the state of
+    // its replacement. Single-file rule - no cross-file lookup.
+    const supersededBy = header.find((line) => line.startsWith("Superseded-by:"));
+    if (supersededBy !== undefined) {
+      const cls = relPath.split("/").at(-2);
+      const filename = basename(relPath);
+      push({
+        file: relPath,
+        code: "lint.adr.implemented-superseded",
+        message: `${relPath}: a record under implemented/ must not carry "${supersededBy}" \u2014 implemented/ holds only current decisions`,
+        recovery: `one of two valid operations applies: if the replacement is implemented or promoted in this change, move the record to archived/${cls}/${filename} under the same ADR tree, add one bare header line "Archived: <yyyy-mm-dd> \u2014 superseded by ${supersededBy.slice("Superseded-by:".length).trim()}" right after the Status line, and keep the Superseded-by: line; if the replacement is still proposed, the demotion is premature \u2014 remove the Superseded-by: line and leave the record in implemented/`,
+      });
+    }
+  }
+
   if (bucket === "archived") {
     // Archived is a freeze, not a fourth fate: the record keeps its implemented
     // Status line and gains exactly one Archived line.
@@ -2050,7 +2068,7 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
         code: "lint.adr.archive-line-missing",
         message: `${relPath}: archived record needs exactly one "Archived: YYYY-MM-DD \u2014 <reason>" header line, found ${archiveLines.length}`,
         recovery:
-          'add one bare header line "Archived: <yyyy-mm-dd> \u2014 <why this record no longer guides future work>" right after the Status line; a record without historical value is deleted, not archived',
+          'add one bare header line "Archived: <yyyy-mm-dd> \u2014 <why this record no longer guides future work>" right after the Status line; deletion instead of archival applies only to a mechanism gone without replacement and without historical value \u2014 supersession is never deletion',
       });
     } else if (!ADR_ARCHIVED_LINE.test(archiveLines[0]!)) {
       push({

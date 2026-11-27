@@ -13,7 +13,7 @@
  * it is exported so raising the budget is one visible line rather than a number
  * nobody can find. Both artifacts sit well inside today.
  */
-// The narrow-band work (declared column widths, the table floor and its scroller,
+// see packages/cli/scripts/dashboard-assets.ts - // The narrow-band work (declared column widths, the table floor and its scroller,
 // the shared pane band) cost ~350 B: the table markup grew one wrapper, each list
 // screen carries its widths, and the header carries the band class. Raised once,
 // visibly, from 300 KB to 308 KB — the artifact is still an order of magnitude
@@ -53,11 +53,16 @@
 // open-issue count. That bundle came in **71 bytes over** 340 KB, so the raise was what the
 // footer actually cost, not slack.
 //
+// 355 KB: the milestone write channel's page-state transitions — the conflict policy and the
+// settle reducer that make "accepted re-reads and clears, conflict re-reads and keeps the
+// draft" assertable without a DOM runner — measured 362,712 B, 216 B over 354 KB. The growth is
+// the one behavior the QC review required be proven; the ceiling lands on the next whole KB
+// above the measurement rather than on the byte, as every raise here has.
 // **This budget is now the tightest thing in the build and it has silently reverted three
 // rounds of measurement work**: an over-ceiling bundle leaves `dist/` stale, and the dashboard
 // then serves the previous build. `check:stale` catches that now; before it did, three
 // separate rounds measured the change before the one they had just made.
-export const JS_CEILING = 354 * 1024;
+export const JS_CEILING = 355 * 1024;
 // Raised, 60 KB to 100 KB: the product's component styles are now generated from the
 // approved prototype and shipped whole (values unchanged, selectors scoped, queries
 // unnamed) instead of being re-typed one screen at a time. Re-typing is exactly what

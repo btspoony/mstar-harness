@@ -28,7 +28,25 @@ const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_STATUS_DONE = "Done";
 const COMPASS_FILE = "delivery-compass.md";
-const ROADMAP_FILE = "roadmap.md";
+
+/**
+ * note: The marker file a project package used to carry. A catalog row registered at
+ * `projects/<id>/roadmap.md` and one registered at the directory `projects/<id>` name the same
+ * project: the roadmap authority is gone, so the marker is history, and a completeness or import
+ * comparison treats the two spellings as that one project instead of reporting a gap or a conflict
+ * against a row the store already holds.
+ */
+export const PROJECT_MARKER_FILE = "roadmap.md";
+
+/**
+ * note: One project location's identity: `projects/<id>` and its retired marker spelling agree on the id.
+ * The marker is compared LITERALLY (no pattern), so an ordinary document whose name merely resembles it
+ * keeps its own identity instead of collapsing onto the directory.
+ */
+export function projectLocationIdentity(relativePath: string): string {
+  const suffix = `/${PROJECT_MARKER_FILE}`;
+  return relativePath.endsWith(suffix) ? relativePath.slice(0, -suffix.length) : relativePath;
+}
 
 /**
  * Loose shape of a parsed workflow snapshot (`workflows/<id>/snapshot.json`).
@@ -856,13 +874,7 @@ function listDocumentBodies(dir: string, base = ""): string[] {
   return bodies.sort();
 }
 
-/**
- * Every store location the harness layout convention proposes (§4: discovery
- * is a proposal, never a live parallel authority). Identity comes from the
- * layout rule — an iteration is a directory carrying a compass, a project a
- * directory carrying a roadmap, a plan a file under `plans/` — and never from
- * a maintained index table.
- */
+/** see packages/engine/src/iteration.ts - Every store location the harness layout convention proposes (§4: discovery is a proposal, never a live parallel authority). Identity comes from the layout rule — an iteration is a directory carrying a compass, a project a directory under `projects/`, a plan a file under `plans/` — and never from a maintained index table. */
 function discoverCatalogLocations(context: StoreContext, roots: readonly CatalogCompletenessRoot[]): DiscoveredLocation[] {
   const locations: DiscoveredLocation[] = [];
   for (const rootKind of roots) {
@@ -881,9 +893,7 @@ function discoverCatalogLocations(context: StoreContext, roots: readonly Catalog
       }
       case "projects": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync(join(dir, id, ROADMAP_FILE))) {
-            locations.push({ rootKind, kind: "project", id, relativePath: `${id}/${ROADMAP_FILE}` });
-          }
+          locations.push({ rootKind, kind: "project", id, relativePath: id });
         }
         break;
       }
@@ -946,6 +956,8 @@ export async function readCatalogCompleteness(
   }
   const discovered = discoverCatalogLocations(context, [...covered]);
   const registered = new Set<string>();
+  /** see packages/engine/src/iteration.ts - The project directory identities backed by an ACTUAL project row. A document registered under the `projects` root - at the directory spelling or at a retained body's path - is not a project registration, so it can neither cover a discovered directory nor hide a missing project row. */
+  const registeredProjects = new Set<string>();
   let storeRevision = 0;
   let catalogRevision = 0;
   try {
@@ -953,13 +965,22 @@ export async function readCatalogCompleteness(
     try {
       storeRevision = handle.authority.revision;
       catalogRevision = handle.authority.catalogRevision;
+      // see packages/engine/src/iteration.ts - // note: The row KIND is read with the location: only a `project` row names a project. A retained
+      // document under the `projects` root (a reclassified roadmap body, say) is not a registration of
+      // the directory it happens to sit in.
       const rows = handle.db
-        .prepare("select root_kind, relative_path from catalog_entities")
-        .all() as Array<{ root_kind?: unknown; relative_path?: unknown }>;
+        .prepare("select kind, root_kind, relative_path from catalog_entities")
+        .all() as Array<{ kind?: unknown; root_kind?: unknown; relative_path?: unknown }>;
       for (const row of rows) {
         if (typeof row.root_kind !== "string" || typeof row.relative_path !== "string") continue;
         if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
         registered.add(`${row.root_kind}\u0000${row.relative_path}`);
+        // see packages/engine/src/iteration.ts - // invariant: A PROJECT row registered at the retired `roadmap.md` marker names the same project as
+        // its directory, so the directory it names reads as registered. Only a project row can say this:
+        // the set below is what the project gap check consults, and nothing else writes to it.
+        if (row.kind === "project" && row.root_kind === "projects") {
+          registeredProjects.add(projectLocationIdentity(row.relative_path));
+        }
       }
     } finally {
       handle.close();
@@ -973,7 +994,13 @@ export async function readCatalogCompleteness(
 
   const gaps: CatalogCompletenessGap[] = [];
   for (const location of discovered) {
-    if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) continue;
+    // see packages/engine/src/iteration.ts - // note: A discovered project location is covered only by a project row naming it - directly, or
+    // through the retired marker alias. A document at the same path is not that row.
+    if (location.rootKind === "projects") {
+      if (registeredProjects.has(location.relativePath)) continue;
+    } else if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) {
+      continue;
+    }
     const code = GAP_CODE[location.kind];
     gaps.push({
       rootKind: location.rootKind,
@@ -1036,7 +1063,7 @@ export async function assertCatalogCompleteness(
  * iteration-compass-template.md` Fields guide); `validateCompassFrontmatter`
  * validates the parsed doc. The engine deliberately has no YAML dependency,
  * so this hand-rolled flat-subset parser lives here — the single shared
- * parser used by the CLI and the roadmap validator (no fork). Path wrapper
+ * parser used by the CLI and the compass validator (no fork). Path wrapper
  * over `parseCompassFrontmatterText`.
  *
  * Throws with the file path on structural errors (no fence / unterminated
@@ -1048,14 +1075,12 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
 
 /**
  * Parse flat-subset YAML frontmatter from raw file content — the single
- * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
- * the roadmap validator (extract/reuse the same parsing, no fork).
+ * shared parser core behind `parseCompassFrontmatter` (path wrapper).
  * The structural parse delegates to `parseDocumentFrontmatterEntries` in
  * the flat profile — one pass, no line rescan, and that profile already
  * carries the compass scalar contract: values are the decoded declaration
  * text (one boundary quote pair strips, a double-quoted scalar
- * JSON-escape-decodes because the roadmap export writes values with
- * `JSON.stringify`) and are never typed `true` / numbers / `null`.
+ * JSON-escape-decodes) and are never typed `true` / numbers / `null`.
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);

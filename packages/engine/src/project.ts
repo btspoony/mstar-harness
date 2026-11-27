@@ -1,49 +1,7 @@
-/**
- * Engine project module — project layer (conventions:
- * mstar-conventions/references/artifact-storage-paths.md § project layer;
- * roadmap frontmatter
- * validator + project register validator. This module is the only register
- * validator; the register re-hosts the residual entry schema from `status.ts`
- * via import — no copy.
- *
- * Spec sources (each export cites the plan/compass section it enforces):
- * - Roadmap frontmatter schema `{ project_id, title, status:
- * active|paused|completed, created_at, milestones[]?, residuals_ref }`
- * (; compass-style frontmatter + engine validator, machine-
- * checkable). Validation is shared with the content-taking roadmap module;
- * Markdown structure uses the engine's GFM parser dependencies.
- * - Goal-item body conventions are documented conventions surfaced as
- * validator **warnings only** — not a hard gate (compass Non-Goal /
- * AC-P1). No residual-to-goal-item auto-link this iteration (compass
- * ruling 2).
- * - Register file `projects/<id>/residuals.json` shape
- * `{ entries: { [key]: (ResidualEntry & { source_plan, registered_at,
- * lifecycle_id? })[] } }` ( ) — entries keyed by
- * plan id, each value an ARRAY of entries (v1 `residual_findings[plan-id]`
- * semantics preserved verbatim: a plan may hold 2+ open residuals); entry
- * validation delegates verbatim to `validateResidual` (status.ts), so the
- * severity enum + lifecycle semantics are preserved at the new address.
- * - `_DEFAULT_PROJECT` fallback for project-less flows (compass ruling 2).
- * - Theme-scoped research corpus `projects/<id>/references/`: engine owns
- * `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles` — directory
- * metadata only (`readdirSync` with `withFileTypes`), never file bodies,
- * never a markdown schema; placement semantics are skills prose, not
- * engine validation.
- * - Project-register consumers: `findingsCleanupGate` (findings-cleanup
- * modes; issue-governance cutover G2a — it consumes the authoritative open
- * issues linked to the plan in `store.db`, never the legacy register) lives
- * HERE. The legacy register rollup (`techDebtRollup`) is deleted (plan QC fix
- * wave FW-5): the register authority is retired and the findings rollup
- * computes from the issue store (`readIssueRollup`), so the register-walking
- * reader had no supported caller left. status.ts no longer imports this
- * module (the former module cycle stays broken).
- */
-import { readFileSync, readdirSync, type Dirent } from "node:fs";
+/** see packages/engine/src/project.ts - Engine project module — project layer (conventions: mstar-conventions/references/artifact-storage-paths.md § project layer; project register validator. This module is the only register validator; the register re-hosts the residual entry schema from `status.ts` via import — no copy. Spec sources (each export cites the plan/compass section it enforces): - Register file `projects/<id>/residuals.json` shape `{ entries: { [key]: (ResidualEntry & { source_plan, registered_at, lifecycle_id? })[] } }` ( ) — entries keyed by plan id, each value an ARRAY of entries (v1 `residual_findings[plan-id]` semantics preserved verbatim: a plan may hold 2+ open residuals); entry validation delegates verbatim to `validateResidual` (status.ts), so the severity enum + lifecycle semantics are preserved at the new address. - `_DEFAULT_PROJECT` fallback for project-less flows (compass ruling 2). - Theme-scoped research corpus `projects/<id>/references/`: engine owns `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles` — directory metadata only (`readdirSync` with `withFileTypes`), never file bodies, never a markdown schema; placement semantics are skills prose, not engine validation. - Project-register consumers: `findingsCleanupGate` (findings-cleanup modes; issue-governance cutover G2a — it consumes the authoritative open issues linked to the plan in `store.db`, never the legacy register) lives HERE. The legacy register rollup (`techDebtRollup`) is deleted (plan QC fix wave FW-5): the register authority is retired and the findings rollup computes from the issue store (`readIssueRollup`), so the register-walking reader had no supported caller left. status.ts no longer imports this module (the former module cycle stays broken). */
+import { readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";
-import { validateRoadmapContent, ROADMAP_STATUSES, type RoadmapValidation } from "./roadmap-content.js";
-export type { RoadmapValidation } from "./roadmap-content.js";
-export { ROADMAP_STATUSES };
 import { isPlainObject } from "./coordination-write.js";
 import { createHash } from "node:crypto";
 import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
@@ -62,9 +20,6 @@ import {
   type ResidualEntry,
 } from "./status.js";
 
-/** Roadmap file name inside `projects/<id>/`: legacy layout reference and transport candidate, never a live writer target. */
-export const PROJECT_ROADMAP_FILE = "roadmap.md";
-
 /** Theme-scoped research directory name inside `projects/<id>/`. */
 export const PROJECT_REFERENCES_DIR = "references";
 
@@ -74,24 +29,6 @@ export const PROJECT_REGISTER_FILE = "residuals.json";
 /** Fallback project id for project-less flows ( — compass ruling 2). */
 export const _DEFAULT_PROJECT = "_default";
 
-
-export type RoadmapStatus = (typeof ROADMAP_STATUSES)[number];
-
-/**
- * Roadmap frontmatter (): machine-checkable subset. All fields
- * are `unknown` because documents come from YAML at runtime; the validator
- * narrows them. `milestones` / `residuals_ref` are optional; goal-item body
- * conventions are warnings only.
- */
-export type RoadmapFrontmatter = {
-  project_id?: unknown;
-  title?: unknown;
-  status?: unknown;
-  created_at?: unknown;
-  milestones?: unknown;
-  residuals_ref?: unknown;
-  [key: string]: unknown;
-};
 
 /** One register entry: the v1 residual entry verbatim + register provenance. */
 export type ProjectRegisterEntry = ResidualEntry & {
@@ -137,20 +74,6 @@ function validateNonEmptyString(
   }
 }
 
-/** Validate a roadmap file by delegating to the shared content validator. */
-export function validateRoadmap(filePath: string): RoadmapValidation {
-  let content: string;
-  try {
-    content = readFileSync(filePath, "utf8");
-  } catch {
-    return {
-      ok: false,
-      violations: [violation("high", "project.roadmap.unreadable", `cannot read roadmap file: ${filePath}`)],
-      warnings: [],
-    };
-  }
-  return validateRoadmapContent(content, filePath);
-}
 /**
  * Validate a project register document (`projects/<id>/residuals.json`,
  *  `{ entries: { [key]: entry[] } }` keyed by
@@ -455,9 +378,8 @@ export async function assertPlanFindingsCurrent(
  * files plus files exactly one subdirectory deep; deeper nesting ignored;
  * directories never listed; regular files only (`Dirent.isFile()`). Returns
  * paths relative to the references root with `/` separators, sorted by code
- * unit. Strays named exactly `roadmap.md` / `residuals.json` at the
- * references **root** are excluded — project-layer filenames are never
- * research rows. `projectDir` is the **per-project** directory (the caller
+ * unit. Strays named exactly `residuals.json` at the references **root**
+ * are excluded — project-layer filenames are never research rows. `projectDir` is the **per-project** directory (the caller
  * resolves `join(resolveProjectDir(startDir), projectId)`; `_DEFAULT_PROJECT`
  * is the fallback id), never the projects root. Missing or unreadable
  * `references/` → `[]`; never throws; never opens a file body.
@@ -472,7 +394,7 @@ export function listProjectReferenceFiles(projectDir: string): string[] {
   }
   const files: string[] = [];
   for (const entry of entries) {
-    if (entry.name === PROJECT_ROADMAP_FILE || entry.name === PROJECT_REGISTER_FILE) continue;
+    if (entry.name === PROJECT_REGISTER_FILE) continue;
     if (entry.isFile()) {
       files.push(entry.name);
     } else if (entry.isDirectory()) {

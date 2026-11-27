@@ -497,7 +497,7 @@
 
 .ms-container .rm-project-go { color: var(--ms-text-muted); font-size: 11px; width: 14px; text-align: right; }
 
-/* Milestone timeline (project roadmap, plan 20261029-dashboard-alignment Task 6):
+/* Milestone timeline (the project screen's milestone body, plan 20261029-dashboard-alignment Task 6):
    the declarations mirror the prototype's one-for-one, so `check:declarations`
    compares identical values and the visual is the prototype's. */
 .ms-container .timeline { display: flex; gap: 10px; position: relative; margin: 6px 0 4px; padding: 4px 0 16px; }

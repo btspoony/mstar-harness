@@ -4,7 +4,7 @@
 
 ## Load Order
 
-After `mstar-harness-core`, read **`mstar-project-governance`** as the sole owner of project roadmap/milestone read/write rules; this reference only defines when Phase 1 consumes them.
+After `mstar-harness-core`, read **`mstar-project-governance`** as the sole owner of project milestone/issue read/write rules; this reference only defines when Phase 1 consumes them.
 
 PM 在新迭代启动时执行。
 
@@ -13,7 +13,16 @@ PM 在新迭代启动时执行。
 1. 查 catalog 了解历史迭代：`mstar catalog list`（按 kind 过滤，见 help；`{ITERATION_DIR}/README.md` 若存在只是散文导览，**不**是登记表；store 未初始化/未激活时查询拒绝 —— `store.not-initialized` / `store.not-active`，**不**读作「没有迭代」）
 2. 读 `STRATEGY.md`（若存在），对齐战略方向（创建/维护 → `mstar-knowledge` `mstar-knowledge/references/strategy-document.md`）
 3. 查 catalog 取 Research 候选：`mstar catalog list`（按 kind / document kind / lifecycle 过滤出 `active` knowledge；见 help；**不**要求阅读全部 knowledge 正文；README 表格不再是权威）
-4. 确定所选 catalog project（未归属使用 `_default`），通过 `mstar roadmap show --project <id>` 读取 `{HARNESS_DIR}/store.db` roadmap 域的未完成路线范围（含上一迭代 `next`），纳入本次迭代范围候选；另用 `mstar milestone list --project <id>` 读取结构化目标。已知项目缺少 roadmap 记录或 milestone 时明确记录 absence；legacy Markdown 仅 transport/history，绝不从项目文件、README 索引行或 catalog 路径回退读取路线内容。读写规则 → **`mstar-project-governance`**。
+4. 确定所选 catalog project（未归属使用 `_default`），分三处读取候选来源：
+   - **项目目标**：`mstar milestone list --project <id>` 读结构化目标。
+   - **本地指针板**：先 `mstar planboard check` 取漂移报告，**再直接读 `{HARNESS_DIR}/planboard.md` 本身取指针**。`check` 只回答哪些行有问题（`malformed` / `stale` / `missing` / `overdue` / `unverified`），返回的 `captured` / `candidates` 也是同一份文件的内容；干净的板在 `findings` 为空时仍列出它的指针，但 PM 判断「按什么顺序取什么」读的是文件正文，不是报告。planboard 缺失或无指针行时按 absence 记录。
+   - **上一迭代投影**：读上一迭代 compass 的 `## Roadmap Position`（迭代 package 已持有的文件），取其中记录的 next iteration 内容、触发条件和 owner。
+
+   三者一并纳入本次迭代范围候选。PM 随后在迭代起点编辑 planboard：删除 `stale` / `missing` 行；**每一个** `overdue` 候选都必须在重写 `review_after` 之前处置——用 `mstar issue add` 捕获成 issue，或直接删除该行；处置完才写新的 `review_after`。
+
+   **候选转为已捕获时的改写方式**：候选行（`- ? …`）不能在原位改成 issue 行（`## Candidates` 只接受候选）。捕获成功后，**删除该候选行**；若仍要在板上保留指针，就在 `## Captured` 下**新增**一行 `- <id> — <ordering reason>`。id 的写法由 `.mstarc` 的 `[collaboration] mode` 决定：`local` / `mirror` 用 display id `I-xxxxxx`；`remote` 用 stable reference `mstar:issue:<uuid>`（remote 选择只按该引用解析，display id 在那里永远 `unverified`）。两种写法都合法，`check` 按当前模式解析。
+
+   已知项目缺少 milestone 时明确记录 absence；`check` 报 `unverified` 时先分辨原因：`storeCode` 指向 store/lane 打不开（`collaboration.*` / `store.*`）就是本机 issue store 未作答，不读作 open；`issue.scope-refused` 则表示该行 id 形态与当前模式不符（见上），不是快照过期。上一迭代 compass 缺失或无 `## Roadmap Position` 同样明确记录 absence，不从 milestone 数据推断 handoff；绝不从项目文件、README 索引行或 catalog 路径回退读取路线内容。`planboard check` 在控制 harness 无法解析时以 `planboard.harness-unresolved` 拒绝，而不是读 cwd 下的同名文件。issue/milestone 读写规则 → **`mstar-project-governance`**。
 5. 读 ADR proposals：先用 `mstar path resolve` 解析 `{ADR_DIR}`，按记录层列出 `{ADR_DIR}/proposed/*/*.md`（`proposed/TEMPLATE.md` 骨架不是候选），逐份读 `Problem` / `Proposal` / `Acceptance criteria` 作为范围与验收种子。只有 `proposed/` 供给候选；ADR 不是 catalog 行（无 `adr` document kind，树内禁建索引），**不**经 `mstar catalog list` 读取；无记录（`proposed/` 缺失、为空或只剩骨架）明确记录 absence。方向锁定后（§1.2），入选但不在本迭代实施的大改动**写回** `{ADR_DIR}/proposed/<class>/`（已存在则复用，不建第二份），供后续迭代读取。桶语义与记录形态 → **`{ADR_DIR}/README.md`**，不复述。
 6. 读 open issues：`mstar status tech-debt` 取汇总，`mstar issue list --disposition open`（可选 `--project <id>`）取条目 —— 这些是 `{HARNESS_DIR}/store.db` 的残留 SSOT，按 severity 排序纳入候选。列表默认分页 50 行（上限 200），更晚的 issue 须用 `--limit` / `--offset` 翻页，或用 `--severity` / `--project` 收窄，不把首页读作全集。store 未初始化/未激活时查询拒绝 —— `store.not-initialized` / `store.not-active`，**不**读作「没有 open issue」。契约 → **`mstar-project-governance`**「Issue capture」，不复述；项目 register（`residuals.json`）只是迁移历史，**不**是来源。
 
@@ -54,9 +63,9 @@ compass/plans 初稿落盘前，必须锁定**单一**迭代方向、成功标�
 
 The prototype checkpoint in §1.2.5 applies with or without a Plan session. Obey the active host's Plan-mode write and approval limits: if the package path is not yet writable, prepare the preview in the permitted session-plan surface, obtain the host-required transition, then persist it in the package before formal authoring. Do not use another writer or a second session plan to bypass that restriction. User design confirmation is not authorization to implement or to enter Build.
 
-**禁止**：在未显式 opt-in 时自行切换到 `autonomous`（例如仅因读了本 reference 或存在 roadmap next）。
+**禁止**：在未显式 opt-in 时自行切换到 `autonomous`（例如仅因读了本 reference 或存在 compass 记录的 next iteration 内容）。
 
-**Branch policy gate（interactive — 默认路径）**：若用户、现有 roadmap、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR（默认分支门禁与 `Branch policy: direct on <branch>` 例外写法 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））。
+**Branch policy gate（interactive — 默认路径）**：若用户、既有迭代记录、或项目约定未明确 `iteration_base_branch` / `target_branch`，PM 必须检查当前分支并向用户确认（**Plan 会话**走上方「推荐写入 plan + 反馈改正」；非 Plan 仍须确认）。**不得**因为存在 `main` / `master` 就默认从默认分支开 iteration 或向默认分支提 PR（默认分支门禁与 `Branch policy: direct on <branch>` 例外写法 → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库））。
 
 **Autonomous policy resolve**：仅 `autonomous` 模式。branch 的解析顺序与缺失时的 STOP → `references/autonomous-direction-lock.md`「Autonomous policy resolve」；`pr_merge_policy` 按同节证据顺序推荐，无 STOP（无 bot 证据时落到 `reviewed-auto`）。勿把这套顺序套用到 interactive 以跳过用户确认。
 

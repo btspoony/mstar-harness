@@ -14,6 +14,10 @@ docs/adr/{bucket}/{class}/yyyy-mm-dd-topic.md
 - Classes: `feature/`, `bug-fix/`, `simplification/`, `architecture/`, `process/`, `testing/`.
 - `docs/adr/proposed/TEMPLATE.md` and `docs/adr/implemented/TEMPLATE.md` are the skeletons a new record copies; `rejected/` reuses the proposed shape.
 
+## What a reader may take as current
+
+`implemented/` is the only bucket a reader or an agent may take as current decisions; anything filed there is a live statement, and the gate refuses a record carrying `Superseded-by:` in it, because such a record is already demoted. `archived/` is history: it may be read only through an explicit link that cites history, and active prose never summarizes an archived record as authority.
+
 ## Where the trigger lives
 
 The contract's required/optional test is the only admission test. The runtime surfaces that point at it, so a decision is recorded in the change that makes it rather than at a later cleanup:
@@ -32,4 +36,4 @@ Mechanical edits, local edits whose rationale is visible in code or the change d
 
 `bun run validation:drift` (Guard 12, `scripts/adr-check.ts` over the engine's `lintAdrTree`) checks membership, filename shape, `Status` agreeing with the directory for the three live buckets (and an `Archived:` line, with `Status: implemented`, for `archived/`), balanced code fences (an unterminated fence fails the record instead of hiding its tail), and the required and banned sections per bucket. The record-format checks walk `{bucket}/{class}/`, so a stray `.md` directly under `docs/adr/` or directly under a bucket root is invisible to them and review catches it rather than CI; the `INDEX.md` ban covers the whole tree, so an index at either level still fails.
 
-What no tree walk can check stays a review duty: whether `Problem` carries real stakes instead of restating the change, whether `Alternatives considered` lists options genuinely weighed rather than strawmen built afterwards, the rejected-body and archived-body freezes, the same-PR freshness duty for live records, the supersession search and its links, and the title form.
+The gate refuses a `Superseded-by:` header under `implemented/` mechanically. What no tree walk can check stays a review duty: whether `Problem` carries real stakes instead of restating the change, whether `Alternatives considered` lists options genuinely weighed rather than strawmen built afterwards, the rejected-body and archived-body freezes, the same-PR freshness duty for live records, the supersession search — including that the replacement carries `Supersedes:`, the archived record keeps the matching `Superseded-by:`, and both targets are correct — and the title form.

@@ -1,28 +1,4 @@
-/**
- * store-read.ts -- the issue-store READ boundary (state-projection-contract §6).
- *
- * One request = one read handle (`withStoreRead`): an optional lazy projection
- * refresh for the views that need projected execution/roadmap rows, then every
- * view query inside ONE read transaction over committed store data. The view
- * readers return DTOs only -- no source JSON is read or parsed here, and no
- * filesystem probe happens in a view (source I/O is isolated in the projection
- * refresh boundary, `refreshProjections`).
- *
- * Why the view SQL is written out here instead of calling `listIssues` /
- * `getIssue` / `listCatalog`: those functions each open their OWN connection,
- * which would break both contract §6 requirements -- "one store handle per
- * request" and one transaction that sees issue, catalog and projection rows at
- * the same point in time. The issue readers below therefore mirror
- * `issue.ts` (`LAST_ACTIVITY_SQL`, `bindFilter`, `listIssues`, `getIssue`)
- * statement for statement, and `store-read.test.ts` pins the two readers to the
- * same answer so a future change to one side cannot drift silently.
- *
- * Refusals reuse the frozen vocabulary: `store.not-active` for a staged store,
- * the issue domain's `issue.not-found` for an absent issue, and the engine's
- * `SddScriptError(…, 2)` usage failure (the CLI's exit-2 / HTTP-400 class) for
- * a request shape the contract does not define -- an unknown view, a missing
- * required filter or an out-of-range page.
- */
+/** see packages/engine/src/store-read.ts - store-read.ts -- the issue-store READ boundary (state-projection-contract §6). One request = one read handle (`withStoreRead`): an optional lazy projection refresh for the views that need projected execution rows, then every view query inside ONE read transaction over committed store data. The view readers return DTOs only -- no source JSON is read or parsed here, and no filesystem probe happens in a view (source I/O is isolated in the projection refresh boundary, `refreshProjections`). Why the view SQL is written out here instead of calling `listIssues` / `getIssue` / `listCatalog`: those functions each open their OWN connection, which would break both contract §6 requirements -- "one store handle per request" and one transaction that sees issue, catalog and projection rows at the same point in time. The issue readers below therefore mirror `issue.ts` (`LAST_ACTIVITY_SQL`, `bindFilter`, `listIssues`, `getIssue`) statement for statement, and `store-read.test.ts` pins the two readers to the same answer so a future change to one side cannot drift silently. Refusals reuse the frozen vocabulary: `store.not-active` for a staged store, the issue domain's `issue.not-found` for an absent issue, and the engine's `SddScriptError(…, 2)` usage failure (the CLI's exit-2 / HTTP-400 class) for a request shape the contract does not define -- an unknown view, a missing required filter or an out-of-range page. */
 import type { CatalogDocumentKind, CatalogEntityKind, CatalogLifecycle, CatalogRootKind, CatalogKey } from "./catalog.js";
 import {
   assertExecutionSelection,
@@ -66,16 +42,14 @@ import {
   remoteMilestones,
   remotePlanFindings,
   remoteProjectList,
+  remoteProjectListItem,
   remoteResidualCounts,
-  remoteRoadmap,
   requireRemoteProjects,
   type RemoteCatalogRow,
   type RemoteReadView,
 } from "./collaboration-remote-read.js";
 import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
-import type { RoadmapContent } from "./roadmap-content.js";
-import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
@@ -171,14 +145,14 @@ export type DashboardView =
   | "iterations"
   | "iteration-detail"
   | "projects"
-  | "roadmap"
   | "issue-flow"
+  | "milestones"
   | "overview";
 
 /**
  * Request filters. Only the fields a view needs are read: `id` for the three
  * detail views, `issue` for the issue list, `projectId` for the project-scoped
- * views (required by `roadmap`), and `limit`/`offset` for the three lists.
+ * views, and `limit`/`offset` for the three lists.
  */
 export type DashboardFilters = {
   id?: string;
@@ -357,19 +331,6 @@ export type ProjectListItem = {
 
 export type ProjectListDTO = { items: ProjectListItem[]; total: number };
 
-export type RoadmapDTO = {
-  projectId: string;
-  catalog: CatalogIdentityDTO;
-  authority: { state: "present"; revision: number; contentHash: string } | { state: "absent" };
-  content: RoadmapContent | null;
-  /**
-   * The project's authoritative milestone grouping and issue membership
-   * (§4). Required, and independent of the stored Markdown: a project with
-   * milestones but no content answers with `content: null` and this data.
-   */
-  milestones: MilestoneRead;
-};
-
 export type IssueFlowBucket = {
   /** UTC calendar day, `YYYY-MM-DD`. */
   date: string;
@@ -446,8 +407,9 @@ export type DashboardViewData = {
   iterations: IterationListDTO;
   "iteration-detail": IterationDTO | null;
   projects: ProjectListDTO;
-  roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
+  /** see packages/engine/src/store-read.ts - collaboration-only: no execution store needed. */
+  milestones: MilestoneRead;
   overview: OverviewDTO;
 };
 
@@ -460,8 +422,9 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
   projects: { needsProjection: false },
-  roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
+  // see packages/engine/src/store-read.ts - purely collaboration, so no projection and no execution store.
+  milestones: { needsProjection: false },
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
   overview: { needsProjection: true },
@@ -871,14 +834,7 @@ function issuePageKey(filter: IssueFilter): string {
   ].join(":");
 }
 
-/**
- * why: Which sources each view reads and whether it requires them (contract
- * §Read/Completeness): issue/catalog/milestone/roadmap views are pure
- * collaboration; workflow/iteration views require execution and disclose an
- * optional catalog association; the overview needs both of its combined counts.
- * A project filter is catalog data, so it makes the optional collaboration
- * source required -- an unfiltered list may still render without it.
- */
+/** see docs/specs/architecture/overview.md - which sources each view reads and requires. */
 function viewSources(view: DashboardView, filters: DashboardFilters): ViewSources {
   const projectId = text(filters.projectId);
   // invariant: A project-narrowed query declares exactly the projects it contributes,
@@ -910,9 +866,14 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
       return { collaboration: { scope: { kind: "query", key: "projects" }, required: true }, execution: "not-requested" };
     case "issue-flow":
       return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
-    case "roadmap":
-      if (projectId === null) usage("the roadmap view requires filters.projectId");
-      return { collaboration: { scope: { kind: "project", key: projectId }, required: true, projectIds: [projectId] }, execution: "not-requested" };
+    case "milestones": {
+      // see packages/engine/src/store-read.ts - a milestone grouping belongs to one project.
+      if (projectId === null) usage("the milestones view requires a project");
+      return {
+        collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
+        execution: "not-requested",
+      };
+    }
     case "workflows": {
       const { limit, offset } = page();
       return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null, projectIds: narrowed(projectId) }, execution: "required" };
@@ -1111,14 +1072,18 @@ function dashboardView(view: DashboardView, sources: StoreReadSources, filters: 
       return readIterationList(sources, filters);
     case "iteration-detail":
       return readIterationDetail(sources, filters);
-    case "roadmap":
-      return readRoadmap(sources, filters);
     case "projects":
       return readProjectList(sources);
     case "issue-flow":
       return sources.remote === null
         ? readIssueFlow(collaborationSource(sources), text(filters.projectId) ?? undefined)
         : remoteIssueFlow(sources.remote, text(filters.projectId) ?? undefined);
+    case "milestones": {
+      const projectId = text(filters.projectId) as string;
+      return sources.remote === null
+        ? readMilestonesOn(collaborationSource(sources), projectId)
+        : remoteMilestones(sources.remote, projectId);
+    }
     case "overview":
       return readOverview(sources, filters);
   }
@@ -1644,6 +1609,58 @@ function readProjectList(sources: StoreReadSources): ProjectListDTO {
   return sources.remote === null ? readProjectListOn(collaborationSource(sources)) : remoteProjectList(sources.remote);
 }
 
+/**
+ * One project's catalog row, or `null` when no catalog row backs that id.
+ *
+ * Scoped to the requested id by construction: an unreadable SIBLING project cannot turn
+ * this answer into a refusal, which is what a whole-list lookup would do in remote mode.
+ */
+export async function readProjectCatalogRow(
+  context: StoreContext,
+  projectId: string,
+): Promise<ProjectListDTO["items"][number] | null> {
+  const envelope = await withStoreRead(context, queryProjectRow(projectId));
+  return envelope.data;
+}
+
+/** see packages/engine/src/store-read.ts - a single-project catalog read: collaboration only. */
+function queryProjectRow(projectId: string): StoreReadQuery<ProjectListDTO["items"][number] | null> {
+  return {
+    view: "projects",
+    needsProjection: false,
+    collaboration: { scope: { kind: "query", key: `project:${projectId}` }, required: true, projectIds: [projectId] },
+    execution: "not-requested",
+    run: (sources) => ({
+      data:
+        sources.remote === null
+          ? projectRowOn(collaborationSource(sources), projectId)
+          : remoteProjectRow(sources.remote, projectId),
+    }),
+  };
+}
+
+/** see packages/engine/src/store-read.ts - `null` when no catalog row backs the id. */
+function projectRowOn(db: StoreDb, projectId: string): ProjectListDTO["items"][number] | null {
+  const row = db
+    .prepare(
+      `select catalog.id as id, catalog.title as title, catalog.description, catalog.lifecycle,
+              (select count(*) from issues where issues.project_id = catalog.id and issues.disposition = 'open'
+                 and ${SWITCHED_NOT_PRESENTED_SQL}) as open_issues
+       from catalog_entities catalog where catalog.kind = 'project' and catalog.id = ?`,
+    )
+    .get(projectId) as { id: string; title: string; description: string | null; lifecycle: CatalogLifecycle; open_issues: number } | undefined;
+  if (row === undefined) return null;
+  return {
+    project: { id: row.id, title: row.title, description: row.description, lifecycle: row.lifecycle },
+    openIssues: row.open_issues,
+  };
+}
+
+/** see packages/engine/src/collaboration-remote-read.ts - the same row from the admitted snapshot. */
+function remoteProjectRow(view: RemoteReadView, projectId: string): ProjectListDTO["items"][number] | null {
+  return remoteProjectListItem(view, projectId);
+}
+
 // --- Remote catalog adapters ------------------------------------------------
 //
 // note: The portable catalog a remote snapshot carries is identity and relations
@@ -1658,7 +1675,7 @@ function remoteIdentity(row: RemoteCatalogRow): CatalogIdentityDTO {
     description: row.description,
     rootKind: null,
     relativePath: null,
-    documentKind: row.documentKind as CatalogDocumentKind | null,
+    documentKind: row.documentKind,
     lifecycle: row.lifecycle,
     revision: row.revision,
     registeredAt: null,
@@ -2472,39 +2489,4 @@ function readLatestIteration(sources: StoreReadSources, projectId: string): Iter
     }
   }
   return latest;
-}
-
-// ---------------------------------------------------------------------------
-// Roadmap view
-// ---------------------------------------------------------------------------
-
-function readRoadmap(sources: StoreReadSources, filters: DashboardFilters): RoadmapDTO | null {
-  const projectId = text(filters.projectId);
-  if (projectId === null) usage("the roadmap view requires filters.projectId");
-  if (sources.remote !== null) return remoteRoadmap(sources.remote, projectId);
-  const db = collaborationSource(sources);
-  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId));
-  if (catalog === undefined) return null;
-
-  let authority: RoadmapRead;
-  try {
-    authority = readRoadmapAuthorityOn(db, projectId);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "roadmap.project-not-found") return null;
-    throw error;
-  }
-  // The milestone grouping is authoritative store data read on the SAME
-  // handle/snapshot as the content authority: it never depends on the stored
-  // Markdown, so an existing project with absent content still answers it.
-  const milestones = readMilestonesOn(db, projectId);
-  if (authority.roadmap === null) {
-    return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
-  }
-  return {
-    projectId,
-    catalog,
-    authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: authority.content,
-    milestones,
-  };
 }

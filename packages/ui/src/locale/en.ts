@@ -64,7 +64,7 @@ export const en = {
       projects: "Projects",
     },
     skipLink: "Skip to content",
-    footer: "Read-only · Make changes with the CLI",
+    footer: "Milestones are editable here · every other change goes through the CLI",
     openIssueCount: (n: number): string => `${n} open ${n === 1 ? "issue" : "issues"}`,
     storeRevision: (n: number) => `${n} store revision`,
     theme: { label: "Colour scheme", light: "Light", dark: "Dark" },
@@ -465,13 +465,13 @@ export const en = {
 
   projects: {
     listHeading: "Catalog projects",
-    listMeta: "Select a project to open its roadmap, issues and iterations",
+    listMeta: "Select a project to open its milestones, issues and iterations",
     lifecycleNote: "Lifecycle is the catalog lifecycle, never the execution state.",
     noLifecycle: "no lifecycle",
     pageTitle: "Projects",
     totalMeta: (n: number): string => `${n} ${n === 1 ? "project" : "projects"}`,
     openIssuesMeta: (n: number): string => `${n} open ${n === 1 ? "issue" : "issues"}`,
-    headNote: "a project owns its roadmap, issues and iterations",
+    headNote: "a project owns its milestones, issues and iterations",
     tableCaption: "Projects",
     columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
     openIssues: (count: number) => `${count} open`,
@@ -479,18 +479,15 @@ export const en = {
   },
 
   projectDetail: {
-  roadmapState: "roadmap present",
-  revisionLabel: "Revision",
   openIssuesUnit: "open issues",
     breadcrumb: { label: "Breadcrumb", trail: "Projects" },
     tabLabel: "Project features",
-    /** The fixed three features, in their fixed order (IA §4). */
-    features: { roadmap: "Roadmap", issues: "Issues", iterations: "Iterations" },
-    roadmap: {
+    /** see packages/ui/src/locale/en.ts - The fixed list features, in their fixed order (IA §4). */
+    features: { issues: "Issues", iterations: "Iterations" },
+    milestones: {
       milestonesHeading: "Milestone board",
     milestonesUnit: "milestones",
     unassignedUnit: "unassigned issues",
-      milestoneProgress: (done: number, total: number) => `${done}/${total}`,
       milestoneOpen: (open: number) => `${open} open`,
       effort: (sessions: number) => `${sessions} sessions`,
       unestimated: "unestimated",
@@ -510,11 +507,13 @@ export const en = {
         assign: "Assign issues",
         unassign: "Unassign",
         assignCap: "Showing the first 50 unassigned open issues. Narrow the issue list to see the rest.",
+        assignLoading: "Loading assignable issues…",
+        assignFailed: "The assignable issues could not be read:",
+        assignRetry: "Retry",
         remove: "Remove",
         removeConfirm: "Remove this milestone?",
         refusalLead: "The store refused the change:",
       },
-      absentNextStep: (features: string) => `This project still has: ${features}.`,
     },
     scope: {
       label: (projectId: string) => `project: ${projectId}`,

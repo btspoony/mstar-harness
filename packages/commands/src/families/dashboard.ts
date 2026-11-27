@@ -164,7 +164,7 @@ export function getDashboardCommandDefinitions(): readonly CommandDefinition[] {
     input: inputSchema,
     output: commandEnvelopeSchema,
     effects: ["service"],
-    description: "Start the read-only Morning Star dashboard on 127.0.0.1; the listener lasts for the MCP connection.",
+    description: "Start the Morning Star dashboard on 127.0.0.1: read views, plus one bounded milestone write route (revision CAS); the listener lasts for the MCP connection.",
     requirements: [
       { name: "project", ownership: "caller", route: "cli", required: false },
       { name: "project", ownership: "caller", route: "mcp", required: false },

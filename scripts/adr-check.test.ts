@@ -139,6 +139,51 @@ describe("checkAdrTree — failure codes", () => {
   });
 });
 
+// see scripts/adr-check.test.ts - // `implemented/` is the live bucket: a record already demoted by a
+// `Superseded-by:` line must move to `archived/`, and the rule is single-file
+// - it never checks whether the replacement exists.
+describe("checkAdrTree — implemented-superseded", () => {
+  test("adr.implemented-superseded: an implemented record carrying Superseded-by fails with the move in the message", () => {
+    const body = record("implemented", IMPLEMENTED_SECTIONS).replace(
+      "Status: implemented — because",
+      "Status: implemented — because\nSuperseded-by: 2026-02-01-replacement.md",
+    );
+    const result = withTree({ "implemented/architecture/2026-01-14-demoted.md": body }, checkAdrTree);
+    expect(result.failures.map((f) => f.code)).toEqual(["adr.implemented-superseded"]);
+    const [failure] = result.failures;
+    expect(failure.message).toContain(`${ADR_ROOT}/implemented/architecture/2026-01-14-demoted.md`);
+    // see scripts/adr-check.test.ts - // The recovery names both valid operations: the archived move when the
+    // replacement is promoted, and removing the premature header while the
+    // replacement is still proposed. The destination is tree-relative — the
+    // engine does not know the repository's ADR root.
+    expect(failure.recovery).toContain("archived/architecture/2026-01-14-demoted.md");
+    expect(failure.recovery).not.toContain("docs/adr/archived");
+    expect(failure.recovery).toContain("Archived:");
+    expect(failure.recovery).toContain("2026-02-01-replacement.md");
+    expect(failure.recovery).toContain("Superseded-by:");
+    expect(failure.recovery).toContain("remove the Superseded-by: line");
+  });
+
+  test("an archived record with Archived: and Superseded-by passes", () => {
+    const body = record("implemented", IMPLEMENTED_SECTIONS).replace(
+      "Status: implemented — because",
+      "Status: implemented — because\nArchived: 2026-01-15 — superseded by 2026-02-01-replacement.md\nSuperseded-by: 2026-02-01-replacement.md",
+    );
+    const result = withTree({ "archived/architecture/2026-01-15-demoted.md": body }, checkAdrTree);
+    expect(result.records).toBe(1);
+    expect(result.failures).toEqual([]);
+  });
+
+  test("an implemented record carrying only Supersedes: passes (the replacement stays live)", () => {
+    const body = record("implemented", IMPLEMENTED_SECTIONS).replace(
+      "Status: implemented — because",
+      "Status: implemented — because\nSupersedes: 2026-01-01-older.md",
+    );
+    const result = withTree({ "implemented/architecture/2026-01-16-replacement.md": body }, checkAdrTree);
+    expect(result.failures).toEqual([]);
+  });
+});
+
 // A fenced block is example text: a `## <name>` line inside it is not a section
 // of the record, in either direction.
 describe("checkAdrTree — headings inside fenced code blocks", () => {

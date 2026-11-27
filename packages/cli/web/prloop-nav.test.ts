@@ -15,15 +15,15 @@ import { escapeTarget, parentAddress, parseRoute } from "./route";
 const mainSource = readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "main.tsx"), "utf8");
 
 describe("F4: the breadcrumb and Escape are the same move", () => {
-  test("from a non-default feature both answer the project's Roadmap", () => {
+  test("from a non-default feature both answer the project's default feature", () => {
     // `onBack` hardcoded the `projects` destination while Escape walked `parentOf`,
     // so the two controls disagreed: the breadcrumb left the project entirely.
-    const address = parseRoute("#project/engine/issues");
+    const address = parseRoute("#project/engine/iterations");
     const escape = escapeTarget(address);
     const breadcrumb = parentAddress(address);
     expect(escape).not.toBeNull();
     expect(escape).toEqual(breadcrumb);
-    expect(escape?.route).toEqual({ name: "project", id: "engine", feature: "roadmap" });
+    expect(escape?.route).toEqual({ name: "project", id: "engine", feature: "issues" });
   });
 
   test("the project detail's back handler uses that same function", () => {

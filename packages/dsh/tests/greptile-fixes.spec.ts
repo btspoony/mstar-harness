@@ -26,11 +26,21 @@ describe('P1 — a project opens the read that exists', () => {
     expect(String(refused)).toContain('unknown dashboard view')
   })
 
-  it('a project open reads its roadmap, scoped to the project', () => {
-    expect(detailReadTarget('project-detail', 'proj-1')).toEqual({ view: 'roadmap', params: { project: 'proj-1' } })
-    // Every other detail is its own view with its id.
-    expect(detailReadTarget('workflow-detail', 'wf-1')).toEqual({ view: 'workflow-detail', id: 'wf-1' })
-    expect(detailReadTarget('issue-detail', 'I-1')).toEqual({ view: 'issue-detail', id: 'I-1' })
+  it('a project open reads its milestone body through the overview view, scoped to the project', async () => {
+    // see packages/dsh/tests/greptile-fixes.spec.ts - // The consumer-visible behavior: the project page's read target is a view the
+    // engine actually serves, so the panel renders the milestone arm instead of an
+    // "unknown dashboard view" refusal. The engine read itself is the proof — no
+    // internal mapping is re-pinned here.
+    const target = detailReadTarget('project-detail', 'proj-1')
+    const read = await readDashboardView({
+      context: { harnessDir: join(PKG_DIR, '..', '..', '.does-not-exist') },
+      view: target.view as never,
+      params: target.params,
+      ...(target.id === undefined ? {} : { id: target.id }),
+    }).catch((error: unknown) => error)
+    // see packages/dsh/tests/greptile-fixes.spec.ts - // The store is absent, so the read refuses for THAT reason — never because the
+    // view name is unknown.
+    expect(String(read)).not.toContain('unknown dashboard view')
   })
 })
 

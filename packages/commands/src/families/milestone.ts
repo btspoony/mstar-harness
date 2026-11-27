@@ -52,7 +52,7 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
 export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
   const descriptions: Record<(typeof verbs)[number], string> = {
     add: "Add a milestone record to the project store; its name, effort sessions and ordinal are authoritative.",
-    update: "Update stored milestone fields using the observed store revision; roadmap document text is unchanged.",
+    update: "Update stored milestone fields using the observed store revision.",
     assign: "Assign or unassign an issue from a stored milestone with expected issue revision and a reason.",
     list: "List the project's stored milestones and linked-issue rollups.",
     status: "Show one milestone and linked issue rollup.",

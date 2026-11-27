@@ -1,13 +1,14 @@
 # ADR: Planning order is a local pointer board, not a stored roadmap document
 
-Status: proposed — recorded before implementation: nothing is removed and `mstar planboard` does not exist until the implementing plan lands.
+Status: implemented — the roadmap domain is removed from the engine, the command surface, the collaboration schema and the remote protocol.
 Date: 2026-11-26
+Supersedes: 2026-10-02-roadmap-content-authority.md
 
 Scope: the roadmap domain — `project_roadmaps` and its Markdown content authority, the `mstar roadmap` family, the dashboard `roadmap` view and the surfaces that read it, the remote snapshot's `project.roadmap` member, the `roadmap.*` codes and the `roadmap` catalog document kind — and its replacement, `{HARNESS_DIR}/planboard.md` with `mstar planboard check`. Milestones, issues, the iteration compass and the `mstar milestone` family keep their authority.
 
 ## Problem
 
-The [2026-10-02 record](../../implemented/architecture/2026-10-02-roadmap-content-authority.md) made one complete Markdown document the roadmap authority so that "what is this project's roadmap" had a single answer. Since then every fact that document was meant to own gained an authority elsewhere: open work became issues in the issue store at capture, structured goals became milestone records with linked issues, and the per-iteration position became the compass. What remained was a hand-written copy, and the copy stopped being written as a plan.
+The [2026-10-02 record](../../archived/architecture/2026-10-02-roadmap-content-authority.md) made one complete Markdown document the roadmap authority so that "what is this project's roadmap" had a single answer. Since then every fact that document was meant to own gained an authority elsewhere: open work became issues in the issue store at capture, structured goals became milestone records with linked issues, and the per-iteration position became the compass. What remained was a hand-written copy, and the copy stopped being written as a plan.
 
 On 2026-11-26 the collaboration lane holds three roadmap records, and none contains an unstarted plan:
 
@@ -23,9 +24,9 @@ Keeping it costs about 1,700 lines — engine roadmap-store/content with its tes
 
 Without a decision the same divergence ships in 5.0: the collaboration cutover, the remote fidelity contract and the projection write point would each carry a document no reader trusts, while iteration start would still open it first to learn what comes next — the one question none of the three records answers. That ordering has no other home: the issue list sorts by severity and project, a milestone orders goals rather than issues, and the compass `## Roadmap Position` belongs to a single iteration.
 
-## Proposal
+## Decision
 
-This record supersedes the [2026-10-02 record](../../implemented/architecture/2026-10-02-roadmap-content-authority.md) once it is promoted: the same change moves that record to `archived/architecture/` with an `Archived:` line, per the [superseded-records-archive record](../process/2026-11-26-superseded-records-archive.md). While this record is proposed, the 2026-10-02 record stays in `implemented/` untouched.
+This record supersedes the [2026-10-02 record](../../archived/architecture/2026-10-02-roadmap-content-authority.md): the same change moved that record to `archived/architecture/` with an `Archived:` line, per the [superseded-records-archive record](../process/2026-11-26-superseded-records-archive.md).
 
 ### Remove the roadmap domain
 
@@ -94,7 +95,7 @@ The milestone timeline and the milestone write forms of the dashboard project sc
 
 ### Migration and recovery
 
-- 4.x is the last line that can run `mstar roadmap export`. The 5.0 `mstar store upgrade` removes the domain; after it nothing can read or write a roadmap. The implementing change will add this export-before-upgrade statement to `docs/migration-5.0.md` under "What breaks in 5.0".
+- 4.x is the last line that can run `mstar roadmap export`. The 5.0 `mstar store upgrade` removes the domain; after it nothing can read or write a roadmap.
 - The 5.0 migration only drops roadmap content. A forward-only lane migration removes `project_roadmaps` and copies nothing out, and the execution store keeps no copy after its cutover. The one write it makes is the catalog reclassification above; no roadmap text is carried forward.
 - Nothing is imported afterwards. Work that an exported document still describes is captured as issues with `mstar issue add`, a goal becomes a milestone with `mstar milestone add`, and direction prose belongs in `STRATEGY.md`. The exported file stays history.
 
@@ -106,7 +107,7 @@ The milestone timeline and the milestone write forms of the dashboard project sc
 
 ### Relationship to the collaboration authority record
 
-The [collaboration authority record](2026-11-21-collaboration-state-authority.md) lists roadmaps among the data collaboration owns — in its Problem, in "Separate the domains", in the `remote` fidelity paragraph and in the "All read models and gates" criterion. This decision removes roadmaps from all four sites: collaboration owns issues, milestones and portable identity, not roadmap prose. Nothing else in that record changes, and the board sits on the execution side of its split by design.
+The [collaboration authority record](../../proposed/architecture/2026-11-21-collaboration-state-authority.md) lists roadmaps among the data collaboration owns — in its Problem, in "Separate the domains", in the `remote` fidelity paragraph and in the "All read models and gates" criterion. This decision removes roadmaps from all four sites: collaboration owns issues, milestones and portable identity, not roadmap prose. Nothing else in that record changes, and the board sits on the execution side of its split by design.
 
 ## Alternatives considered
 
@@ -118,11 +119,11 @@ The [collaboration authority record](2026-11-21-collaboration-state-authority.md
 - **Keep the dashboard view under its old name.** A `roadmap` view that holds no roadmap keeps a retired concept alive in a route, a view name and an error namespace, and invites the document back. The milestone board takes a name that says what it is.
 - **Bump the remote documents to `version: 2`.** A version bump separates two released shapes. Here there is no released shape that carries a roadmap, so the bump would only leave a version 1 that no build shipped in that form.
 
-## Acceptance criteria
+## Consequences
 
-A future implementation must demonstrate the following; this proposed record removes nothing by itself.
+This record is implemented; the following hold.
 
-- **The removal is total.** A search for the retired names — `roadmap-store`, `roadmap-content`, `project_roadmaps`, `projection_roadmaps`, `RoadmapDTO`, `RemoteRoadmap`, `roadmapBody`, `RoadmapSourceView`, `/api/roadmap`, `#roadmap`, the `roadmap.*` codes — names only immutable migration texts, the execution store's and the collaboration lane's, the hook bundles that inline them and the ADR tree. `mstar roadmap` is an unknown command, and no skill, spec or operator page describes a roadmap authority.
+- **The removal is total across the named surface.** A search for the retired names — `roadmap-store`, `roadmap-content`, `project_roadmaps`, `projection_roadmaps`, `RoadmapDTO`, `RemoteRoadmap`, `roadmapBody`, `RoadmapSourceView`, `/api/roadmap`, `#roadmap`, the `roadmap.*` codes — names only immutable migration texts, the execution store's and the collaboration lane's, the hook bundles that inline them and the ADR tree. `mstar roadmap` is an unknown command; no engine module, command definition, host gate, remote document or catalog enum describes a roadmap authority, and the specs and knowledge pages that carry the change's subject have dropped it. A page outside that set that still mentions a roadmap is stale prose, not a surviving authority.
 - **No table remains.** After the migration neither database admits a lane or store that carries `project_roadmaps`, and no cutover manifest reports a roadmap count.
 - **The catalog kind is gone.** A catalog write with `documentKind: "roadmap"` is refused, no row carries the value, and it is absent from every published enum. A lane that held such rows migrates each one to `other` with its registration intact.
 - **The migration page states the route.** `docs/migration-5.0.md` says that 4.x is the last line that can run `mstar roadmap export`, that the 5.0 `mstar store upgrade` removes the domain, and that after it nothing can read or write a roadmap.
@@ -134,11 +135,11 @@ A future implementation must demonstrate the following; this proposed record rem
 - **The remote documents are consistent.** An observe submission that carries `project.roadmap` is refused by name at that path, one without it is accepted, and no frozen `project-replace` event carries a roadmap.
 - **Adjacent records are brought into line.** The collaboration authority record no longer lists roadmaps as collaboration data — the word is gone from its Problem, "Separate the domains", the `remote` fidelity paragraph and the "All read models and gates" criterion, not rephrased — the dashboard projects-view record no longer names a roadmap entry, and this record is promoted.
 
-## Risks
+### Accepted risks
 
 - **The removal destroys content that is not recovered.** An operator who skips the export loses the roadmap text at the upgrade. The migration page's warning is the only guard; the facts worth keeping have owners elsewhere, and the exported file stays readable as a file.
 - **The board can become a second roadmap.** Nothing forces the PM to run `check`, and prose written into an ordering reason or a candidate is not machine-judged. The closed grammar, the 20-entry cap and the two edit points are the whole defense; a board that grows status again is a review finding, not a refusal.
 - **A candidate exists nowhere else.** The board is local to one machine and is not recovered with collaboration data. An uncaptured candidate lost with the checkout is lost; `review_after` exists to make capture the normal outcome before that can matter.
 - **Remote judgments are only as good as the observation.** In `remote` mode `stale` and `missing` describe the admitted snapshot, not the provider. The verb is not a gate, so a stale observation cannot block work, only misreport a board.
 - **The milestone surfaces change host.** Moving the timeline and the write forms off the roadmap read touches published screens in two hosts. A regression there loses milestone writing from every surface at once, which the end-to-end milestone criterion exists to catch.
-- **The collaboration authority record disagrees until updated.** It still names roadmaps as collaboration data; until the implementing change removes them from its four sites, a reader of that record alone would rebuild roadmap storage.
+- **A reader of the older collaboration record could still rebuild roadmap storage.** That record no longer names roadmaps as collaboration data, but any copy taken before it was brought into line carries the obsolete list.

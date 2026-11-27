@@ -521,19 +521,19 @@ The screen is the prototype's, in its order — **as of the confirmed baseline
 (the dashboard alignment change), which removed every document block**:
 
 ```
-.detail-head        title, the roadmap's direction above the identity meta
-                    (id · lifecycle · Revision N · N open issues), then the roadmap's
-                    presence chip and the catalog path
-.subtabs            Roadmap / Issues / Iterations, each with its count
+.detail-head        title, the project's description above the identity meta
+                    (id · lifecycle · N open issues)
 .panel              the milestone timeline — one node per milestone in ordinal order (the
                     milestone's stored position), plus one trailing unassigned-issues node
 .panel              the milestone board (writable), one row per milestone
+.subtabs            Issues / Iterations, each with its count
 ```
 
-The catalog-identity panel, the roadmap-authority panel, the stored-markdown disclosure
-and the stored-facts panel are **removed** with the user's decision; the direction moved
-into the header (falling back to the catalog description when the roadmap declares none;
-both absent renders nothing). The roadmap-presence chip and the location line stay.
+The milestone body is the screen's **default body, not a tab**. The catalog-identity
+panel, the roadmap-authority panel, the stored-markdown disclosure, the stored-facts
+panel and the roadmap-presence chip are **removed** with the roadmap domain; the header
+line is the project's own description (none renders nothing). The head renders the
+identity meta only — id, lifecycle and open-issue count — and no catalog path.
 
 Each milestone row carries its planned effort — `<n> sessions`, or the localized word for
 *unestimated* when the count is null — and four tallies (`N open`, `N resolved`, `N retired without

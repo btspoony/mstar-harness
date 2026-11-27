@@ -2366,7 +2366,7 @@ describe("mstar milestone assign — no execution identity required", () => {
     // shape and refuse every milestone write as a cutover candidate.
     await registerCatalogEntity(fixture.context, {
       kind: "project", id: "milestone-cli-project", title: "Milestone CLI smoke",
-      rootKind: "projects", relativePath: "milestone-cli-project/roadmap.md",
+      rootKind: "projects", relativePath: "milestone-cli-project",
     }, { operationId: "register-milestone-cli-project", actor: "project-manager" });
     const captured = await captureIssue(fixture.context, {
       projectId: "milestone-cli-project", title: "CLI issue", kind: "bug", severity: "high",

@@ -49,7 +49,6 @@ const OPERATIONS = {
   adopt: "99999999-9999-4999-8999-999999999999",
   capture: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
   milestone: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-  roadmap: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
   catalog: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   resolution: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
 } as const;
@@ -149,7 +148,6 @@ function remoteFixture(label: string): Fixture {
       head: ["1".repeat(64)],
       binding: scope,
       milestones: [],
-      roadmap: null,
       catalogEntities: [
         { kind: "project", id: IDS.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
       ],
@@ -678,14 +676,6 @@ describe("remote outbox commands", () => {
     const cases: Array<[string, Record<string, unknown>]> = [
       ["issue.add", { harness: fixture.harness, operationId: OPERATIONS.capture, actor: "project-manager", payload: capturePayload }],
       ["milestone.add", { harness: fixture.harness, project: IDS.projectId, name: "Outbox milestone", ordinal: 1, expectStore: 1, operation: OPERATIONS.milestone }],
-      ["roadmap.replace", {
-        harness: fixture.harness,
-        project: IDS.projectId,
-        file: fixture.text("roadmap-candidate", `---\nproject_id: ${IDS.projectId}\ntitle: Fixture roadmap\nstatus: active\ncreated_at: 2026-01-01\n---\n\n# Fixture roadmap\n\n- one\n`),
-        expectProject: 1,
-        expectRoadmap: "absent",
-        operation: OPERATIONS.roadmap,
-      }],
       ["catalog.register", {
         harness: fixture.harness,
         kind: "document",
@@ -713,7 +703,7 @@ describe("remote outbox commands", () => {
     const sync = await invoke("issue-sync.pending", { harness: fixture.harness, project: IDS.projectId }, fixture.repo);
     expect(sync).toMatchObject({ status: "refused", exitCode: 1 });
     expect(String(sync.code)).toMatch(/^(linear|collaboration)\./);
-    // invariant: That refusal records nothing: all four domain writes stay durably pending.
+    // see packages/commands/test/store-remote-outbox.test.ts - // invariant: That refusal records nothing: every domain write stays durably pending.
     const stillPending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
       harness: fixture.harness,
       project: IDS.projectId,
@@ -945,8 +935,7 @@ describe("remote outbox commands", () => {
           head: ["1".repeat(64)],
           binding: fixture.scope,
           milestones: [],
-          roadmap: null,
-          catalogEntities: [
+              catalogEntities: [
             { kind: "project", id: IDS.projectId, title: "Fixture", description: null, documentKind: null, lifecycle: "active", revision: 1 },
           ],
           catalogLinks: [],

@@ -45,6 +45,7 @@ import {
   type CollaborationStoreHandle,
   type IssueRef,
 } from "./collaboration-store.js";
+import { DOCUMENT_KIND_NAMES, type CatalogDocumentKind } from "./catalog.js";
 import { assertCaptureRequest, IssueError, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_PROVENANCE_KINDS, ISSUE_RELATIONS, ISSUE_SEVERITIES, occurrenceColumns, requireSemanticKey, type CaptureInput } from "./issue.js";
 import {
   assertSelectionUnchanged,
@@ -175,14 +176,13 @@ export type RemoteMilestone = Readonly<{
   updatedAt: string;
 }>;
 
-export type RemoteRoadmap = Readonly<{ contentMarkdown: string; revision: number; updatedAt: string }>;
-
 export type RemoteCatalogEntity = Readonly<{
   kind: "project" | "iteration" | "plan" | "document";
   id: string;
   title: string;
   description: string | null;
-  documentKind: string | null;
+  /** see packages/engine/src/collaboration-remote.ts - The catalog's own kind vocabulary, not arbitrary text: the retired value never reaches a DTO. */
+  documentKind: CatalogDocumentKind | null;
   lifecycle: "active" | "archived" | "superseded";
   revision: number;
 }>;
@@ -228,10 +228,24 @@ export type RemoteSnapshotProject = Readonly<{
   head: readonly string[] | null;
   binding: ProviderProjectScope;
   milestones: readonly RemoteMilestone[];
-  roadmap: RemoteRoadmap | null;
   catalogEntities: readonly RemoteCatalogEntity[];
   catalogLinks: readonly RemoteCatalogLink[];
 }>;
+
+/**
+ * invariant: The ONE place a retired catalog kind is removed from admitted evidence. It runs on the parsed
+ * document - never the stored bytes - so both the read boundary and the write/freeze boundary speak the
+ * surviving vocabulary while the admitted evidence stays exactly what the predecessor wrote. Identity,
+ * revision and registration are untouched; only the retired value changes.
+ */
+export function normalizeRetiredDocumentKind(snapshot: RemoteSnapshot): RemoteSnapshot {
+  const project = snapshot.project as unknown as { catalogEntities?: Array<Record<string, unknown>> } | undefined;
+  if (project === undefined || !Array.isArray(project.catalogEntities)) return snapshot;
+  for (const entity of project.catalogEntities) {
+    if (entity.documentKind === "roadmap") entity.documentKind = "other";
+  }
+  return snapshot;
+}
 
 /** note: A complete traversal, or the one known gap that makes this a partial observation. */
 export type SnapshotCoverage =
@@ -653,17 +667,6 @@ function milestone(value: unknown, path: string): RemoteMilestone {
   };
 }
 
-function roadmap(value: unknown, path: string): RemoteRoadmap | null {
-  if (value === null) return null;
-  const body = record(value, path);
-  if (typeof body.contentMarkdown !== "string") invalid(`${path}.contentMarkdown`, "must be a string");
-  return {
-    contentMarkdown: body.contentMarkdown,
-    revision: positiveInteger(body.revision, `${path}.revision`),
-    updatedAt: instant(body.updatedAt, `${path}.updatedAt`),
-  };
-}
-
 const CATALOG_KINDS = ["project", "iteration", "plan", "document"] as const;
 const CATALOG_RELATIONS = [
   "belongs-to", "documents", "spec-ref", "knowledge-ref", "derived-from", "supersedes",
@@ -675,12 +678,18 @@ function catalogEntity(value: unknown, path: string): RemoteCatalogEntity {
   if (documentKind !== null && body.kind !== "document") {
     invalid(`${path}.documentKind`, "only a document entity carries a document kind");
   }
+  // see packages/engine/src/collaboration-remote.ts - // invariant: The retired catalog kind is refused by path here, before any write: the project
+  // snapshot's catalog entries carry the same vocabulary the local catalog verbs enforce, so a
+  // retired value cannot re-enter through the remote surface.
+  if (documentKind !== null && !(DOCUMENT_KIND_NAMES as readonly string[]).includes(documentKind)) {
+    invalid(`${path}.documentKind`, `is not a document kind; expected one of ${DOCUMENT_KIND_NAMES.join(", ")}`);
+  }
   return {
     kind: oneOf(body.kind, CATALOG_KINDS, `${path}.kind`),
     id: text(body.id, `${path}.id`),
     title: text(body.title, `${path}.title`),
     description: optionalText(body.description, `${path}.description`),
-    documentKind,
+    documentKind: documentKind as CatalogDocumentKind | null,
     lifecycle: oneOf(body.lifecycle, ["active", "archived", "superseded"], `${path}.lifecycle`),
     revision: positiveInteger(body.revision, `${path}.revision`),
   };
@@ -1078,6 +1087,10 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
       `The snapshot describes project ${projectId}, but this submission addresses ${check.projectId}. Nothing was written.`,
     );
   }
+  // see packages/engine/src/collaboration-remote.ts - // invariant: The project document's members are the contract's own. The retired `roadmap` member
+  // is refused by name at its path, and its absence is the only accepted shape - the shape was
+  // revised in place, so the submission stays `version: 1`.
+  allowOnly(project, "submission.snapshot.project", ["projectId", "head", "binding", "milestones", "catalogEntities", "catalogLinks"]);
   const binding = projectScope(project.binding, "submission.snapshot.project.binding");
   if (!sameScope(binding, check.scope)) {
     throw new StoreError(
@@ -1133,7 +1146,6 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
       head: project.head === null ? null : digestHead(project.head, "submission.snapshot.project.head"),
       binding,
       milestones,
-      roadmap: roadmap(project.roadmap, "submission.snapshot.project.roadmap"),
       catalogEntities,
       catalogLinks,
     },
@@ -2669,7 +2681,7 @@ function frozenProjectSubject(value: unknown, path: string, projectKey: string, 
   const body = collected(errors, () => record(value, path), {} as Record<string, unknown>);
   if ("head" in body) invalid(`${path}.head`, "is derived and is not frozen");
   if ("binding" in body) invalid(`${path}.binding`, "is supplied by the selected scope");
-  allowOnly(body, path, ["projectId", "milestones", "roadmap", "catalogEntities", "catalogLinks"], errors);
+  allowOnly(body, path, ["projectId", "milestones", "catalogEntities", "catalogLinks"], errors);
   const projectId = collected(errors, () => text(body.projectId, `${path}.projectId`), "");
   if (projectId !== "" && projectId !== projectKey) {
     const message = `${path}.projectId: must be the event's project`;
@@ -2706,7 +2718,6 @@ function frozenProjectSubject(value: unknown, path: string, projectKey: string, 
   return {
     projectId,
     milestones,
-    roadmap: collected(errors, () => roadmap(body.roadmap, `${path}.roadmap`), null),
     catalogEntities,
     catalogLinks: collected(errors, () => list(body.catalogLinks, `${path}.catalogLinks`), []).map((entry, index) =>
       collected(errors, () => catalogLink(entry, `${path}.catalogLinks[${index}]`), {} as unknown as RemoteCatalogLink),
@@ -4555,7 +4566,7 @@ function assertDispatchBase(
   let snapshot: RemoteSnapshot | null = null;
   if (scope !== undefined && typeof scope.snapshot_json === "string") {
     try {
-      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+      snapshot = normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);
     } catch {
       return refuse(`The stored observation of ${row.projectKey} is unreadable.`);
     }
@@ -4807,7 +4818,7 @@ function storedSnapshot(db: StoreDb, generation: number, projectKey: string): Re
   const scope = scopeRow(db, generation, projectKey);
   if (scope === undefined || typeof scope.snapshot_json !== "string") return null;
   try {
-    return JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+    return normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);
   } catch {
     return null;
   }
@@ -5442,7 +5453,10 @@ async function readWriteScope(context: StoreContext, projectId: string): Promise
     }
     let snapshot: RemoteSnapshot;
     try {
-      snapshot = JSON.parse(scope.snapshot_json) as RemoteSnapshot;
+      // see packages/engine/src/collaboration-remote.ts - // invariant: The write path parses the SAME admitted evidence the read path does, so it takes the
+      // same normalization: a cache admitted before the retirement must not make this process refuse its
+      // own project-replace over a kind it no longer knows.
+      snapshot = normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);
     } catch {
       throw new StoreError(
         "collaboration.unreadable",
@@ -6111,7 +6125,7 @@ export type RemoteProjectWrite = Readonly<{
 }>;
 
 /**
- * Freeze one ordinary PROJECT-JOURNAL change (milestones, roadmap, portable catalog) as a
+ * Freeze one ordinary PROJECT-JOURNAL change (milestones, portable catalog) as a
  * durable remote intent against the observed journal head. Never a local SQL effect.
  */
 export async function prepareRemoteProjectWrite(context: StoreContext, write: RemoteProjectWrite): Promise<RemoteIntent> {
@@ -6134,7 +6148,6 @@ export async function prepareRemoteProjectWrite(context: StoreContext, write: Re
   const current = {
     projectId,
     milestones: scope.snapshot.project.milestones,
-    roadmap: scope.snapshot.project.roadmap,
     catalogEntities: scope.snapshot.project.catalogEntities,
     catalogLinks: scope.snapshot.project.catalogLinks,
   };

@@ -50,6 +50,7 @@ import {
   readCollaborationBinding,
   openRemoteCacheRecovery,
   readRemoteCacheAuthority,
+  setCollaborationRoadmapRemovalGapForTest,
   setLocalPredecessorPublicationGapForTest,
   setRemoteCacheReplacementCommitGapForTest,
   setRemoteCacheReplacementGapForTest,
@@ -129,7 +130,6 @@ import type { WorkflowSnapshot } from "./workflow.js";
 import { appendOccurrence, assignIssueMilestone, captureIssue, closeIssue, moveIssue } from "./issue.js";
 import { discardAcrossAuthorities, moveAcrossByDocument, recordIssueMove, remoteMoveOperationId, setMoveGapForTest } from "./cross-authority-move.js";
 import { addMilestone, removeMilestone, updateMilestone } from "./milestone-store.js";
-import { replaceRoadmapAuthority } from "./roadmap-store.js";
 import { registerCatalogEntity } from "./catalog.js";
 import { applyStoreMigration, planStoreMigration } from "./store-migrate.js";
 import { ensureCollaborationAuthority, restoreCollaborationBackup, type RepositoryBackupReceipt, type ActivationAttestation } from "./store-activation.js";
@@ -178,7 +178,6 @@ const COLLABORATION_TABLES = [
   "occurrences",
   "project_bindings",
   "project_milestones",
-  "project_roadmaps",
   "provenance",
   "relations",
   "remote_bindings",
@@ -301,6 +300,20 @@ function metaRecord(dbPath: string): {
       authority_state: string;
       authority_epoch: number;
     };
+  } finally {
+    db.close();
+  }
+}
+
+/** see packages/engine/src/collaboration-store.ts - `BEGIN EXCLUSIVE` proves no handle holds the lane. */
+function laneIsFree(dbPath: string): boolean {
+  const db = new DatabaseSync(dbPath);
+  try {
+    db.exec("begin exclusive");
+    db.exec("rollback");
+    return true;
+  } catch {
+    return false;
   } finally {
     db.close();
   }
@@ -1502,6 +1515,27 @@ function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
+/** see packages/engine/src/collaboration-store.test.ts - A real v6 lane: every immutable migration before v7, with its ledger row. */
+function writeV6Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
+  writeV1Lane(location);
+  const db = new DatabaseSync(location.dbPath);
+  try {
+    for (const migration of COLLABORATION_MIGRATIONS.slice(1, 6)) {
+      db.exec(migration.sql);
+      db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(
+        migration.version,
+        migration.name,
+        migrationChecksum(migration),
+        "2026-11-21T00:00:00.000Z",
+      );
+    }
+    seed?.(db);
+  } finally {
+    db.close();
+  }
+  chmodSync(location.dbPath, 0o600);
+}
+
 /** note: The v3 lane as a REMOTE cache: `remote` lanes are only ever written by the reviewed bind. */
 function writeV3RemoteLane(location: CollaborationLocation): void {
   writeV3Lane(location);
@@ -1995,6 +2029,237 @@ describe("collaboration remote schema ladder", () => {
     expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
   });
 
+  test("a v6 lane's roadmap row is reclassified to other and stays registered", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/roadmap-reclassify.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV6Lane(location, (db) => {
+      db.exec(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, revision, registered_at, " +
+          "updated_at) values " +
+          "('project', 'p-one', 'Project One', 'projects', 'p-one', NULL, 3, '2026-09-01T00:00:00.000Z', " +
+          "'2026-11-21T00:00:00.000Z'), " +
+          "('document', 'doc-r', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', 7, " +
+          "'2026-09-02T00:00:00.000Z', '2026-11-22T00:00:00.000Z');" +
+          "insert into project_roadmaps(project_id, content_markdown, content_hash, revision, updated_at) " +
+          "values ('p-one', '# Roadmap', 'hash', 2, '2026-11-22T00:00:00.000Z');" +
+          "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id) " +
+          "values ('project', 'p-one', 'documents', 'document', 'doc-r');" +
+          // see packages/engine/src/collaboration-store.test.ts - // note: A populated milestone, and an issue that references it, so the v7 rebuild's FK staging
+          // and its deferred grandchild edge (issues.milestone_id -> project_milestones) are exercised,
+          // not merely the empty-table path.
+          "insert into project_milestones(milestone_id, project_id, project_kind, name, effort_sessions, status, " +
+          "ordinal, revision, created_at, updated_at) values ('m-one', 'p-one', 'project', 'Milestone One', 3, " +
+          "'active', 0, 2, '2026-09-03T00:00:00.000Z', '2026-11-21T00:00:00.000Z');" +
+          "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, " +
+          "updated_at, identity_key, issue_ref, milestone_id) values ('I-000001', 'p-one', 'Linked finding', 'bug', " +
+          "'high', 'open', 'It broke', 'It stays fixed', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z', " +
+          "'reclassify-key', 'mstar:issue:00000000-0000-4000-8000-000000000r01', 'm-one');",
+      );
+    });
+    activate(location.dbPath);
+    expect(tableNames(location.dbPath)).toContain("project_roadmaps");
+    await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
+
+    const receipt = await upgradeCollaborationStore(context, "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
+    expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: No table remains and no row was deleted: the roadmap row keeps its id, revision and
+    // registration and reads back as `other`, with its link intact.
+    expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
+    const db = new DatabaseSync(location.dbPath);
+    try {
+      expect(
+        db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get(),
+      ).toEqual({ document_kind: "other", revision: 7, registered_at: "2026-09-02T00:00:00.000Z" });
+      expect(db.prepare("select count(*) as n from catalog_links").get()).toEqual({ n: 1 });
+      // see packages/engine/src/collaboration-store.test.ts - // invariant: The populated milestone and the issue referencing it cross the rebuild unchanged.
+      expect(
+        db.prepare("select name, effort_sessions, status, revision from project_milestones where milestone_id = 'm-one'").get(),
+      ).toEqual({ name: "Milestone One", effort_sessions: 3, status: "active", revision: 2 });
+      expect(db.prepare("select milestone_id, issue_ref from issues where id = 'I-000001'").get()).toEqual({
+        milestone_id: "m-one",
+        issue_ref: "mstar:issue:00000000-0000-4000-8000-000000000r01",
+      });
+      expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
+      // see packages/engine/src/collaboration-store.test.ts - // invariant: The CHECK that admitted the value is gone, so the retired value is refused.
+      expect(() =>
+        db.prepare(
+          "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, registered_at, updated_at) " +
+            "values ('document', 'doc-x', 'X', 'specs', 'x.md', 'roadmap', '2026-11-23T00:00:00.000Z', " +
+            "'2026-11-23T00:00:00.000Z')",
+        ).run(),
+      ).toThrow();
+    } finally {
+      db.close();
+    }
+    expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
+  });
+
+  test("a copy of the lane taken inside its own upgrade transaction recovers as v6 and replays to v7", async () => {
+    // see packages/engine/src/collaboration-store.test.ts - // note: This case owns a FRESH home and its own synthetic origin, so the lane path it opens is
+    // shared with no other case: the snapshot's identity, the replay's target and every probe below
+    // name that one path. A lane shared with the rest of the shard would let a concurrent writer
+    // hold the copy's target past the bounded wait, which is exactly the flake this isolates.
+    const previousHome = resolvedHome;
+    const crashHome = join(ROOT, `crash-home-${sequence++}`);
+    mkdirSync(crashHome, { recursive: true });
+    resolvedHome = crashHome;
+    try {
+    const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-rollback.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    writeV6Lane(location, (db) => {
+      db.exec(
+        "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, revision, registered_at, " +
+          "updated_at) values ('document', 'doc-r', 'Roadmap', 'projects', 'p-one/roadmap.md', 'roadmap', 7, " +
+          "'2026-09-02T00:00:00.000Z', '2026-11-22T00:00:00.000Z')",
+      );
+    });
+    activate(location.dbPath);
+    const v6Tables = tableNames(location.dbPath);
+    const v6Ledger = ledgerRows(location.dbPath);
+    // see packages/engine/src/collaboration-store.test.ts - // note: The identity the replay must carry: the interrupted lane keeps its metadata row, so the
+    // copy's own `store_id` / `authority_epoch` is what the fresh binding below is proved against.
+    const v6Meta = metaRecord(location.dbPath);
+
+    // see packages/engine/src/collaboration-store.test.ts - // note: The capture goes through the PRODUCTION upgrade path, not a hand-rolled transaction: the
+    // seam runs inside the ladder's own `BEGIN IMMEDIATE`, after the v7 rebuild and before its ledger
+    // row. Everything the recovery proof needs is copied HERE, so the proof never depends on this
+    // process's rollback.
+    const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
+    // see packages/engine/src/collaboration-store.test.ts - // note: Start from an empty directory: a sidecar left by an earlier run of this case would be
+    // opened beside the fresh copy and would answer for bytes this run never captured.
+    rmSync(snapshotDir, { recursive: true, force: true });
+    mkdirSync(snapshotDir, { recursive: true });
+    // see packages/engine/src/collaboration-store.test.ts - // note: The copy is taken once, into a path of its own; the replay below reads that copy and never
+    // the live lane again.
+    const snapshotPath = join(snapshotDir, "collaboration.db");
+    const captured: string[] = [];
+    let journalBytes = 0;
+    let journalHasDroppedTable = false;
+    let outsideTables: string[] = [];
+    setCollaborationRoadmapRemovalGapForTest((inFlightDb) => {
+      // see packages/engine/src/collaboration-store.test.ts - // note: Evict the rebuild's dirty pages to the file so the journal beside them is real work,
+      // not an empty allocation, and the database file itself is mid-transaction.
+      inFlightDb.exec("pragma cache_size=1");
+      inFlightDb.exec("create table crash_spill(x text)");
+      const insert = inFlightDb.prepare("insert into crash_spill values (?)");
+      for (let index = 0; index < 40; index++) insert.run("x".repeat(4096));
+      for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+        const source = `${location.dbPath}${suffix}`;
+        if (!existsSync(source)) continue;
+        const target = join(snapshotDir, `collaboration.db${suffix}`);
+        copyFileSync(source, target);
+        captured.push(target);
+      }
+      journalBytes = existsSync(`${snapshotDir}/collaboration.db-journal`)
+        ? statSync(`${snapshotDir}/collaboration.db-journal`).size
+        : 0;
+      // see packages/engine/src/collaboration-store.ts - the boundary is proven from the COPY taken
+      // inside the open transaction, never by opening a second connection on the live lane.
+      outsideTables = v6Tables;
+      journalHasDroppedTable =
+        journalBytes > 0 &&
+        readFileSync(`${snapshotDir}/collaboration.db-journal`).includes(Buffer.from("CREATE TABLE project_roadmaps"));
+      throw new Error("crash-seam");
+    });
+    // see packages/engine/src/collaboration-store.ts - the lane is proven FREE, not assumed free, so
+    // the verb below reaches the seam instead of answering `store.busy`.
+    expect(laneIsFree(location.dbPath)).toBe(true);
+    try {
+      await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toThrow(/crash-seam/);
+    } finally {
+      setCollaborationRoadmapRemovalGapForTest(undefined);
+    }
+
+    // see packages/engine/src/collaboration-store.ts - the journal, not the file, is the pre-image; the copy was taken inside the transaction.
+    expect(captured).toContain(snapshotPath);
+    expect(journalBytes).toBeGreaterThan(0);
+    expect(journalHasDroppedTable).toBe(true);
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: Uncommitted work was never visible outside the transaction.
+    expect(outsideTables).toEqual(v6Tables);
+
+    // see packages/engine/src/collaboration-store.test.ts - // note: Recover from the COPY, not from the interrupted lane: a fresh connection opened on the
+    // captured pair must roll the hot journal back and answer the v6 predecessor, with no half-applied
+    // v7 (no rebuilt catalog_entities, no dropped roadmap table).
+    const recovered = new DatabaseSync(snapshotPath);
+    try {
+      const tables = (recovered.prepare("select name from sqlite_master where type='table'").all() as Array<{ name: string }>).map(
+        (row) => row.name,
+      );
+      expect(tables.sort()).toEqual([...v6Tables].sort());
+      expect(
+        recovered.prepare("select version from schema_version order by version").all() as Array<{ version: number }>,
+      ).toEqual(v6Ledger.map((row) => ({ version: row.version })));
+      expect(recovered.prepare("select document_kind, revision from catalog_entities where id = 'doc-r'").get()).toEqual({
+        document_kind: "roadmap",
+        revision: 7,
+      });
+      // see packages/engine/src/collaboration-store.test.ts - // note: The journal FILE may remain (SQLite truncates rather than unlinks on some paths); what
+      // proves recovery is the answered v6 state above - the pre-image was applied, not the v7 DDL.
+    } finally {
+      recovered.close();
+    }
+
+    // see packages/engine/src/collaboration-store.ts - the replay runs on a SECOND fresh home's lane,
+    // a path no earlier handle has opened: same repository key, so the receipt still proves the copy.
+    const replayHome = join(ROOT, `crash-replay-${sequence++}`);
+    mkdirSync(replayHome, { recursive: true });
+    resolvedHome = replayHome;
+    const replayContext = contextAt(repo);
+    const replayLocation = locationAt(repo);
+    expect(replayLocation.repoKey).toBe(location.repoKey);
+    expect(replayLocation.dbPath).not.toBe(location.dbPath);
+    // see packages/engine/src/collaboration-store.ts - the lane refuses a non-private storage tree.
+    mkdirSync(dirname(replayLocation.dbPath), { recursive: true, mode: 0o700 });
+    for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${replayLocation.dbPath}${suffix}`, { force: true });
+    copyFileSync(snapshotPath, replayLocation.dbPath);
+    chmodSync(replayLocation.dbPath, 0o600);
+    // see packages/engine/src/collaboration-store.ts - the binding is proved against the copy's own store id and epoch.
+    writeCollaborationBinding(replayContext, {
+      repoKey: replayLocation.repoKey,
+      mode: replayLocation.mode,
+      storeId: v6Meta.store_id,
+      epoch: v6Meta.authority_epoch,
+      binding: "active",
+    });
+    const receipt = await upgradeCollaborationStore(replayContext, "ops-engineer");
+    expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
+    expect(tableNames(replayLocation.dbPath)).not.toContain("project_roadmaps");
+    expect(ledgerVersions(replayLocation.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
+    const db = new DatabaseSync(replayLocation.dbPath);
+    try {
+      // see packages/engine/src/collaboration-store.ts - the reclassified row keeps its revision and registration instant.
+      expect(db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get()).toEqual({
+        document_kind: "other",
+        revision: 7,
+        registered_at: "2026-09-02T00:00:00.000Z",
+      });
+    } finally {
+      db.close();
+    }
+    } finally {
+      resolvedHome = previousHome;
+    }
+  });
+
+  test("an interrupted v7 rebuild without its ledger row refuses instead of accepting a half-applied schema", async () => {
+    const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-ledger.git");
+    const context = contextAt(repo);
+    const location = locationAt(repo);
+    // see packages/engine/src/collaboration-store.test.ts - // note: The crash window: the v7 DDL committed, its ledger row did not.
+    writeV6Lane(location, (db) => db.exec(COLLABORATION_MIGRATIONS[6]!.sql));
+    activate(location.dbPath);
+    const before = ledgerRows(location.dbPath);
+
+    await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
+      code: "collaboration.unreadable",
+    });
+    expect(ledgerRows(location.dbPath)).toEqual(before);
+    expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
+  });
+
   test("a v3 outbox whose nullable columns drifted refuses the upgrade and its settlement admission", async () => {
     // note: `execution_key_json` is the ONE outbox column no key-layout check names (it is nullable
     // and no index covers it), so this drift is admitted by the columns check alone. That is exactly
@@ -2180,7 +2445,7 @@ function positiveCheck(overrides: Partial<ScopeCheck> = {}): ScopeCheck {
   };
 }
 
-/** note: A complete fixture scope: project binding, milestones, roadmap, portable catalog and history. */
+/** see packages/engine/src/collaboration-store.test.ts - A complete fixture scope: project binding, milestones, portable catalog and history. */
 function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
   const at = "2026-11-20T00:00:00.000Z";
   return {
@@ -2202,7 +2467,6 @@ function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
           updatedAt: at,
         },
       ],
-      roadmap: { contentMarkdown: "# Roadmap\n", revision: 2, updatedAt: at },
       catalogEntities: [
         {
           kind: "project",
@@ -4511,7 +4775,6 @@ function completeProjectSubject(): Record<string, unknown> {
   return {
     projectId: project.projectId,
     milestones: project.milestones,
-    roadmap: project.roadmap,
     catalogEntities: project.catalogEntities,
     catalogLinks: project.catalogLinks,
   };
@@ -5358,16 +5621,15 @@ describe("remote outbox lifecycle", () => {
         },
       });
 
-    // invariant: ONE refusal answers every project-member defect together — a milestone field, the
-    // roadmap revision and the catalog-link relation — and the row that FAILED to parse never stands
-    // in for an identity, so it cannot fabricate the duplicate its own diagnostic would hide.
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: ONE refusal answers every project-member defect together — a milestone field and the
+    // catalog-link relation — and the row that FAILED to parse never stands in for an identity, so it
+    // cannot fabricate the duplicate its own diagnostic would hide.
     await expect(
       recordRemoteReceipt(
         cache.context,
         receiptOf({
           ...project,
           milestones: [{ ...milestones[0]!, name: 7 }, { ...milestones[0] }],
-          roadmap: { contentMarkdown: "# Roadmap\n", revision: 0, updatedAt: "2026-11-20T00:00:00.000Z" },
           catalogLinks: [
             { fromKind: "plan", fromId: "plan-1", relation: "not-a-relation", toKind: "plan", toId: "plan-2", ordinal: 0 },
           ],
@@ -5376,7 +5638,7 @@ describe("remote outbox lifecycle", () => {
     ).rejects.toMatchObject({
       code: "remote.input-invalid",
       message: expect.stringMatching(
-        /change\.project\.milestones\[0\]\.name[\s\S]*change\.project\.roadmap\.revision[\s\S]*change\.project\.catalogLinks\[0\]\.relation/,
+        /change\.project\.milestones\[0\]\.name[\s\S]*change\.project\.catalogLinks\[0\]\.relation/,
       ),
     });
     expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "unconfirmed" });
@@ -5426,6 +5688,122 @@ describe("remote outbox lifecycle", () => {
     await expect(recordRemoteReceipt(cache.context, input)).rejects.toMatchObject({
       code: "remote.input-invalid",
       message: expect.stringContaining("must carry the imported record's business fields"),
+    });
+  });
+
+  test("a project-replace freezes from a pre-fix cache with the retired catalog kind normalized to other", async () => {
+    const cache = await outboxCache("outbox-retired-catalog-kind");
+    const project = SELECTED_PROJECT.localProjectId;
+    // see packages/engine/src/collaboration-store.test.ts - // note: The v6-era cache holds this evidence already, so the fixture writes the stored snapshot
+    // directly: the ingest that once admitted the value now refuses it.
+    const stored = completeSnapshot() as unknown as { project: { catalogEntities: Array<Record<string, unknown>> } };
+    stored.project.catalogEntities.push({
+      kind: "document",
+      id: "doc-legacy-catalog",
+      title: "Legacy catalog document",
+      description: null,
+      documentKind: "roadmap",
+      lifecycle: "active",
+      revision: 4,
+    });
+    const lane = new DatabaseSync(cache.dbPath);
+    try {
+      lane.prepare("update remote_observations set snapshot_json = ? where project_key = ?").run(
+        JSON.stringify(stored),
+        project,
+      );
+    } finally {
+      lane.close();
+    }
+
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The write path parses the same evidence as the read path, so its base is the normalized
+    // one: the process no longer refuses its own project-replace over a kind it has retired.
+    const operationId = "00000000-0000-4000-8000-000000000ad1";
+    const frozen = await addMilestone(
+      cache.context,
+      { projectId: project, name: "Frozen from an old cache", effortSessions: null, ordinal: 1 },
+      { operationId, expectedStoreRevision: observationRevision(cache.dbPath) },
+    ).then(
+      () => null,
+      (error: unknown) => error as { code?: string; message?: string },
+    );
+    // see packages/engine/src/collaboration-store.test.ts - // note: A remote write enqueues an intent, so the verb refuses with the pending state; what matters
+    // here is that it got far enough to freeze a base, i.e. the retired kind did not abort it.
+    expect(frozen).toMatchObject({ code: "remote.effect-pending" });
+
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The frozen project document carries `other`, never the retired value, and the row keeps
+    // its identity, revision and lifecycle. The frozen request is read from the outbox row itself: it is
+    // the exact bytes the host will send.
+    const outbox = new DatabaseSync(cache.dbPath);
+    let frozenEntities: Array<Record<string, unknown>>;
+    try {
+      const row = outbox.prepare("select request_json from remote_outbox where operation_id = ?").get(operationId) as {
+        request_json?: string;
+      };
+      if (typeof row?.request_json !== "string") throw new Error("fixture: the intent recorded no frozen request");
+      const request = JSON.parse(row.request_json) as {
+        event?: { change?: { project?: { catalogEntities?: Array<Record<string, unknown>> } } };
+      };
+      frozenEntities = request.event?.change?.project?.catalogEntities ?? [];
+    } finally {
+      outbox.close();
+    }
+    expect(frozenEntities.find((entity) => entity.id === "doc-legacy-catalog")).toMatchObject({
+      documentKind: "other",
+      kind: "document",
+      revision: 4,
+      lifecycle: "active",
+    });
+    expect(JSON.stringify(frozenEntities)).not.toContain('"roadmap"');
+  });
+
+  test("a journal document carrying project.roadmap is refused at that field path, and one without it is accepted", async () => {
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The frozen project document is a `version: 1` shape revised in place. The observe
+    // submission and the journal event are separate boundaries, so this exercises the event: the
+    // strict project document refuses the retired member by its own path, and the runtime parser
+    // that freezes an intent refuses the same document for the same reason.
+    const cache = await outboxCache("journal-roadmap-member");
+    const operationId = "00000000-0000-4000-8000-000000000a91";
+    const envelope = () => ({
+      version: 1 as const,
+      selectorCommit: cache.commit,
+      generation: 3,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId,
+      attemptId: "00000000-0000-4000-8000-000000000a92",
+      requestHash: "0".repeat(64),
+      observedAt: new Date().toISOString(),
+    });
+    const event = (project: Record<string, unknown>) => ({
+      version: 1 as const,
+      repoKey: cache.fixture.repoKey,
+      projectId: SELECTED_PROJECT.localProjectId,
+      operationId,
+      parents: [OBSERVED_PROJECT_HEAD],
+      change: { kind: "project-replace" as const, project },
+    });
+    const subject = completeProjectSubject();
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: Without the member the document is the accepted shape.
+    expect(remoteReceiptDocumentSchema.safeParse({
+      ...envelope(),
+      outcome: { kind: "confirmed", identity: { ...providerScope(), issueId: JOURNAL_ANCHOR }, recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea", event: event(subject) },
+    }).success).toBe(true);
+    const withRoadmap = {
+      ...envelope(),
+      outcome: {
+        kind: "confirmed",
+        identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
+        recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea",
+        event: event({ ...subject, roadmap: { contentMarkdown: "# Roadmap\n", revision: 2, updatedAt: "2026-11-20T00:00:00.000Z" } }),
+      },
+    };
+    const descriptor = remoteReceiptDocumentSchema.safeParse(withRoadmap);
+    expect(descriptor.success).toBe(false);
+    expect(JSON.stringify(descriptor.error?.issues)).toContain("roadmap");
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The runtime freeze refuses the same document at the same path.
+    await expect(recordRemoteReceipt(cache.context, withRoadmap as never)).rejects.toMatchObject({
+      code: "remote.input-invalid",
+      message: expect.stringContaining("change.project.roadmap"),
     });
   });
 
@@ -5843,11 +6221,10 @@ describe("remote outbox review fixes", () => {
 
     // invariant: Another verb under the same operation id never replays the milestone request.
     await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nReplaced.\n` },
-        { operationId: duplicateId },
-      ),
+      removeMilestone(cache.context, project, "milestone-1", {
+        operationId: duplicateId,
+        expectedStoreRevision: observationRevision(cache.dbPath),
+      }),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     // invariant: A changed payload under the same id never replays the accepted request.
     await expect(
@@ -6195,34 +6572,6 @@ describe("remote outbox review fixes", () => {
       ),
     ).rejects.toMatchObject({ code: "milestone.not-found" });
     expect(outboxRows(cache.dbPath)).toEqual([]);
-  });
-
-  test("a roadmap write refuses a stale reviewed revision", async () => {
-    const cache = await outboxCache("outbox-roadmap-revision");
-    const project = SELECTED_PROJECT.localProjectId;
-    await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 9, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
-        { operationId: "00000000-0000-4000-8000-000000000671" },
-      ),
-    ).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
-    await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 7, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
-        { operationId: "00000000-0000-4000-8000-000000000672" },
-      ),
-    ).rejects.toMatchObject({ code: "roadmap.revision-conflict" });
-    expect(outboxRows(cache.dbPath)).toEqual([]);
-    // invariant: The reviewed basis still admits the write, and its confirmation is reported.
-    await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nNew.\n` },
-        { operationId: "00000000-0000-4000-8000-000000000673" },
-      ),
-    ).rejects.toMatchObject({ code: "remote.effect-pending" });
   });
 
   test("an unrelated conflict keeps blocking after a reviewed resolution", async () => {
@@ -7822,7 +8171,7 @@ describe("remote execution-import flow", () => {
 });
 
 describe("remote confirmed business results", () => {
-  test("milestone, roadmap and catalog replays report their recorded results", async () => {
+  test("milestone, milestone-update and catalog replays report their recorded results", async () => {
     const cache = await outboxCache("outbox-confirmed-results");
     const project = SELECTED_PROJECT.localProjectId;
 
@@ -7845,23 +8194,16 @@ describe("remote confirmed business results", () => {
     // note: A confirmed effect invalidates the read base, so the next write re-observes first.
     await reobserve(cache, 2);
 
-    // note: One roadmap replacement, confirmed, then replayed by its own verb.
-    const roadmapId = "00000000-0000-4000-8000-000000000a12";
-    const content = `---\nproject_id: ${project}\ntitle: Synthetic roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nReplaced.\n`;
+    // see packages/engine/src/collaboration-store.test.ts - // note: One milestone update, confirmed, then replayed by its own verb.
+    const renameId = "00000000-0000-4000-8000-000000000a12";
+    const renameMutation = { operationId: renameId, expectedStoreRevision: observationRevision(cache.dbPath) };
     await expect(
-      replaceRoadmapAuthority(
-        cache.context,
-        { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: content },
-        { operationId: roadmapId },
-      ),
+      updateMilestone(cache.context, project, "milestone-1", { name: "First delivery, renamed" }, renameMutation),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
-    await confirmIntent(cache, outboxIdFor(cache.dbPath, roadmapId), JOURNAL_ANCHOR);
-    const roadmap = await replaceRoadmapAuthority(
-      cache.context,
-      { projectId: project, expectedProjectRevision: 1, expectedRoadmapRevision: 2, contentMarkdown: content },
-      { operationId: roadmapId },
-    );
-    expect(roadmap).toMatchObject({ projectId: project, revision: 3, storeRevision: 0 });
+    await confirmIntent(cache, outboxIdFor(cache.dbPath, renameId), JOURNAL_ANCHOR);
+    const renamed = await updateMilestone(cache.context, project, "milestone-1", { name: "First delivery, renamed" }, renameMutation);
+    expect(renamed).toMatchObject({ projectId: project, storeRevision: 0, changed: true });
+    expect(renamed.revision).toBe(2);
 
     await reobserve(cache, 4);
 
@@ -9813,6 +10155,17 @@ function downgradeToV3(location: CollaborationLocation): void {
   }
 }
 
+/** see packages/engine/src/collaboration-store.test.ts - The roadmap table a pre-v7 lane carried: a rewound lane must hold it for the predecessor proof. */
+const ROADMAP_TABLE_DDL = `create table project_roadmaps(
+  project_id text primary key,
+  project_kind text not null default 'project' check (project_kind = 'project'),
+  content_markdown text not null,
+  content_hash text not null,
+  revision integer not null check (revision > 0),
+  updated_at text not null,
+  foreign key (project_kind, project_id) references catalog_entities(kind, id)
+);`;
+
 /**
  * note: Rewind the live cache's version ledger to v5, keeping every table row - outbox, receipts,
  * bindings and the move ledger - exactly as the v6 writers left it. The replacement decision reads
@@ -9823,7 +10176,8 @@ function downgradeToV5(location: CollaborationLocation): void {
   const db = new DatabaseSync(location.dbPath);
   try {
     db.exec("begin immediate");
-    db.prepare("delete from schema_version where version = ?").run(6);
+    db.prepare("delete from schema_version where version in (?, ?)").run(6, 7);
+    db.exec(ROADMAP_TABLE_DDL);
     db.exec("commit");
   } finally {
     db.close();
@@ -9840,8 +10194,9 @@ function downgradeToV4(location: CollaborationLocation): void {
   const db = new DatabaseSync(location.dbPath);
   try {
     db.exec("begin immediate");
-    db.prepare("delete from schema_version where version in (?, ?)").run(5, 6);
+    db.prepare("delete from schema_version where version in (?, ?, ?)").run(5, 6, 7);
     db.exec("alter table issue_moves drop column route");
+    db.exec(ROADMAP_TABLE_DDL);
     db.exec("commit");
   } finally {
     db.close();

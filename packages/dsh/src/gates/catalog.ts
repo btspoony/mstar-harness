@@ -1,62 +1,4 @@
-/**
- * Engine-status pre-step catalog — the ONE unified `mstar-engine`
- * row appended at `agent/pre-step`. *
- * `preStepCatalogListener` delegates through `next()` and appends the unified
- * catalog message (ONE compact lifecycle delta line) to the composed step
- * messages, change-gated per session+workspace: first emission, then a
- * rendered-text change only. The panel projection is compared separately, so a
- * panel-only change still persists the payload without spending a model row on
- * it. The block is a PROJECTION of the payload — the open-item rollup (counts
- * and detail rows), the branch policy, plan row scopes, the knowledge digest,
- * the compass direction and the agent-flow ledger stay payload-only (the panel
- * renders them from the persisted emission), and each dropped fact is read on
- * demand from its own authority: `mstar status tech-debt` for the open-issue
- * rollup,
- * `mstar roadmap show` / the compass document for direction and branch policy,
- * `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single
- * `status` command that serves them. ONE exception keeps a line: when the
- * issue authority could not be READ at all, the row renders a fixed failure
- * disclosure (`issues: unavailable (…)`), because "no open issues" and "the
- * rollup was never read" are different states and the on-demand command cannot
- * distinguish them for a model that has no reason to run it. Counts never
- * return: a readable authority renders nothing. The version / harness-dir /
- * enforcement watermark stays in the payload and in the always-on system
- * prompt — never in the row text. A workspace with no resolved
- * `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache
- * (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps
- * the hot path a timestamp compare + Map lookup between refreshes.
- *
- * v3 per-lifecycle aggregation :
- * the state + iteration sections aggregate the SELECTED workflow lifecycle
- * (compass v3.0.0 § Catalog selection rule — `resolveReadWorkflow` in
- * `workflow-selection.ts`): the session's scope/cwd/durable pick, else the
- * only active entry, else the latest terminal snapshot by mtime for an EMPTY
- * active registry; N>1 with no binding is the picker error, never first entry.
- * verbatim, `agentFlow` from the selected workflow's native event rows, open
- * issues from the issue authority, and roadmap milestones from the store
- * roadmap authority — never from retired root or workflow files.
- * The direction one-liner and the iteration gate come
- * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
- * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
- * — never a directory-wide first-active compass scan.
- *
- * Session-scoped catalog identity (D4): the cache key is
- * `harnessDir + session.header.id + cwd + effective hint`, so two sessions in
- * one workspace (even the same cwd) can never share a payload; a session with
- * no stable id is built UNCACHED rather than served another session's
- * selection. The apply-scoped invalidation keeps every current session key per
- * harness dir and evicts them all on a ledger change; a picker commit
- * additionally drops that session's key (and its re-emission digest).
- *
- * Module boundary: no barrel — the entry imports by explicit relative path;
- * the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`,
- * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`,
- * `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`,
- * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and
- * the two renderers/projections — plus the `gateSegment` and `plansSegment`
- * they share with the always-on digest — are exported so both modes are
- * unit-testable.
- */
+/** see packages/dsh/src/gates/catalog.ts - Engine-status pre-step catalog — the ONE unified `mstar-engine` row appended at `agent/pre-step`. * `preStepCatalogListener` delegates through `next()` and appends the unified catalog message (ONE compact lifecycle delta line) to the composed step messages, change-gated per session+workspace: first emission, then a rendered-text change only. The panel projection is compared separately, so a panel-only change still persists the payload without spending a model row on it. The block is a PROJECTION of the payload — the open-item rollup (counts and detail rows), the branch policy, plan row scopes, the knowledge digest, the compass direction and the agent-flow ledger stay payload-only (the panel renders them from the persisted emission), and each dropped fact is read on demand from its own authority: `mstar status tech-debt` for the open-issue rollup, the compass document for direction and branch policy, `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single `status` command that serves them. ONE exception keeps a line: when the issue authority could not be READ at all, the row renders a fixed failure disclosure (`issues: unavailable (…)`), because "no open issues" and "the rollup was never read" are different states and the on-demand command cannot distinguish them for a model that has no reason to run it. Counts never return: a readable authority renders nothing. The version / harness-dir / enforcement watermark stays in the payload and in the always-on system prompt — never in the row text. A workspace with no resolved `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps the hot path a timestamp compare + Map lookup between refreshes. v3 per-lifecycle aggregation : the state + iteration sections aggregate the SELECTED workflow lifecycle (compass v3.0.0 § Catalog selection rule — `resolveReadWorkflow` in `workflow-selection.ts`): the session's scope/cwd/durable pick, else the only active entry, else the latest terminal snapshot by mtime for an EMPTY active registry; N>1 with no binding is the picker error, never first entry. verbatim, `agentFlow` from the selected workflow's native event rows, open issues from the issue authority, and milestone names from the store milestone rollup — never from retired root or workflow files. The direction one-liner and the iteration gate come from the SELECTED snapshot's own `compass_ref` (harness-relative, its frontmatter `iteration_id` matching the snapshot id, `status` active|locked) — never a directory-wide first-active compass scan. Session-scoped catalog identity (D4): the cache key is `harnessDir + session.header.id + cwd + effective hint`, so two sessions in one workspace (even the same cwd) can never share a payload; a session with no stable id is built UNCACHED rather than served another session's selection. The apply-scoped invalidation keeps every current session key per harness dir and evicts them all on a ledger change; a picker commit additionally drops that session's key (and its re-emission digest). Module boundary: no barrel — the entry imports by explicit relative path; the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`, `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`, `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`, `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and the two renderers/projections — plus the `gateSegment` and `plansSegment` they share with the always-on digest — are exported so both modes are unit-testable. */
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
@@ -64,13 +6,14 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
+  queryDashboard,
+  queryMilestones,
   queryOpenIssueRollup,
   resolveRepoEnforcement,
   withStoreRead,
-  listRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
-import type { ReadProjection, StoreContext } from '@mstar-harness/engine'
+import type { ProjectListDTO, ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -85,7 +28,7 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
-  RoadmapSourceView,
+  MilestoneSourceView,
   StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
@@ -856,7 +799,7 @@ function harnessStateSource(
       plans,
       residuals,
       residualFindings,
-      project: projectRollupSource(facts.roadmap, facts.residuals),
+      project: projectRollupSource(facts.milestones, facts.residuals),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -910,7 +853,7 @@ function selectionErrorState(
     // open-item facts.
     residuals: facts.residuals,
     residualFindings: facts.residualFindings,
-    project: projectRollupSource(facts.roadmap, facts.residuals),
+    project: projectRollupSource(facts.milestones, facts.residuals),
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -925,14 +868,11 @@ function selectionErrorState(
   }
 }
 
-/**
- * The project rollup uses only roadmap records read from the store authority.
- * The issue counts are independent and remain available if that read fails.
- */
-function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
+/** see packages/engine/src/store-read.ts - the rollup uses only store-read milestone records. */
+function projectRollupSource(milestones: ProjectMilestoneFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
   return {
-    milestones: roadmap.milestones,
-    roadmapSource: roadmap.source,
+    milestones: milestones.names,
+    milestoneSource: milestones.source,
     openResiduals: residuals,
   }
 }
@@ -945,14 +885,14 @@ function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly H
  * path; the synchronous builders fall back to {@link UNREAD_STORE_FACTS},
  * which says so instead of pretending the rollup is empty.
  */
-interface ProjectRoadmapFacts {
-  readonly milestones: readonly string[]
-  readonly source: RoadmapSourceView
+interface ProjectMilestoneFacts {
+  readonly names: readonly string[]
+  readonly source: MilestoneSourceView
 }
 
 interface StoreFacts {
   readonly source: StoreFactsView
-  readonly roadmap: ProjectRoadmapFacts
+  readonly milestones: ProjectMilestoneFacts
   readonly residuals: readonly HarnessResidualView[]
   readonly residualFindings: readonly ResidualFindingView[] | null
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
@@ -970,12 +910,11 @@ const UNREAD_STORE_FACTS: StoreFacts = {
     asOf: null,
     diagnostic: 'the issue/catalog store was not read for this build',
   },
-  roadmap: {
-    milestones: [],
+  milestones: {
+    names: [],
     source: {
       kind: 'unavailable',
-      absentProjectIds: [],
-      diagnostic: 'the roadmap authority was not read for this build',
+      diagnostic: 'the milestone rollup was not read for this build',
     },
   },
   residuals: [],
@@ -983,37 +922,36 @@ const UNREAD_STORE_FACTS: StoreFacts = {
   knowledge: null,
 }
 
-/** Read the store-backed roadmap authority once, retaining catalog order. */
-async function readProjectRoadmapFacts(context: StoreContext): Promise<ProjectRoadmapFacts> {
+/**
+ * Read the store-backed milestone rollup once, retaining project then ordinal order.
+ *
+ * see packages/engine/src/store-read.ts - the project set comes from the `projects` view, not
+ * `listCatalog`, whose rows carry checkout-relative locations a remote observation does
+ * not have, so `listCatalog` refuses in remote mode and the gate would report milestones
+ * unavailable on every remote checkout. The view answers both modes, and each project's
+ * milestones then come from the one milestone read, which is execution-free.
+ */
+async function readProjectMilestoneFacts(context: StoreContext): Promise<ProjectMilestoneFacts> {
   try {
-    const records = await listRoadmapAuthority(context)
-    const milestones: string[] = []
-    const absentProjectIds: string[] = []
-    let hasRoadmap = false
-    for (const record of records) {
-      if (record.roadmap === null) {
-        absentProjectIds.push(record.projectId)
-        continue
-      }
-      hasRoadmap = true
-      milestones.push(...record.content.milestones)
+    const names: string[] = []
+    const projects = await withStoreRead(context, queryDashboard('projects'))
+    for (const item of (projects.data as ProjectListDTO).items) {
+      const envelope = await withStoreRead(context, queryMilestones(item.project.id))
+      names.push(...envelope.data.milestones.map((milestone) => milestone.name))
     }
-    return {
-      milestones,
-      source: { kind: hasRoadmap ? 'present' : 'absent', absentProjectIds, diagnostic: null },
-    }
+    return { names, source: { kind: 'present', diagnostic: null } }
   } catch (error) {
     return {
-      milestones: [],
-      source: { kind: 'unavailable', absentProjectIds: [], diagnostic: storeRefusalText(error) },
+      names: [],
+      source: { kind: 'unavailable', diagnostic: storeRefusalText(error) },
     }
   }
 }
 
-/** One refresh's open-issue rollup, roadmap source, and knowledge digest. */
+/** see packages/dsh/src/gates/catalog.ts - one refresh's rollup and knowledge digest. */
 async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
-  const roadmap = await readProjectRoadmapFacts(context)
+  const milestones = await readProjectMilestoneFacts(context)
   try {
     // why: ONE scoped collaboration snapshot: totals, grouping and the bounded
     // preview come from the same read, so no offset page from a different
@@ -1030,7 +968,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
           asOf: null,
           diagnostic: observation === null ? 'the collaboration authority did not answer this rollup' : `[${observation.code}] the collaboration authority reported no usable rollup`,
         },
-        roadmap,
+        milestones,
         residuals: [],
         residualFindings: null,
         knowledge: null,
@@ -1061,7 +999,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         diagnostic: storeProjectionDiagnostic(envelope.projection, observation),
       },
       residuals,
-      roadmap,
+      milestones,
       residualFindings,
       knowledge: await readKnowledgeDigest(context),
     }
@@ -1075,7 +1013,7 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         asOf: null,
         diagnostic: storeRefusalText(error),
       },
-      roadmap,
+      milestones,
       residuals: [],
       residualFindings: null,
       knowledge: null,
