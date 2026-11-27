@@ -344,8 +344,8 @@ Refused — the retired form:
 **Delegation**: forbidden
 **Task category**: docs
 **Task budget**: one implementer round closing this guide
-**Working branch**: feature/20261201-docs
-**Plan id**: 20261201-docs
+**Working branch**: feature/20261201-example-docs
+**Plan id**: 20261201-example-docs
 ```
 
 Accepted — the same fields as front matter:
@@ -356,8 +356,8 @@ execute_as: writing-specialist
 delegation: forbidden
 task_category: docs
 task_budget: one implementer round closing this guide
-working_branch: feature/20261201-docs
-plan_id: 20261201-docs
+working_branch: feature/20261201-example-docs
+plan_id: 20261201-example-docs
 ---
 ```
 
