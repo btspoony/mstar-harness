@@ -6,7 +6,7 @@ Everything below is a command an operator runs. No step needs source knowledge, 
 
 ## What breaks in 5.0
 
-**Collaboration state moves out of `{HARNESS_DIR}/store.db`.** Issues, findings, occurrences, transitions, relations, provenance, projects, project bindings, roadmaps, milestones, mirror ledgers, and portable catalog identity move to one user-level SQLite database per canonical repository at `<user home>/.mstar/repos/<host>/<owner>/<repo>/collaboration.db`. `{HARNESS_DIR}/store.db` keeps execution state, projections, host state, execution-side catalog pins, the composite reservations, and the cutover fence ledger.
+**Collaboration state moves out of `{HARNESS_DIR}/store.db`.** Issues, findings, occurrences, transitions, relations, provenance, projects, project bindings, milestones, mirror ledgers, and portable catalog identity move to one user-level SQLite database per canonical repository at `<user home>/.mstar/repos/<host>/<owner>/<repo>/collaboration.db`. `{HARNESS_DIR}/store.db` keeps execution state, projections, host state, execution-side catalog pins, the composite reservations, and the cutover fence ledger.
 
 **The move is a reviewed cutover, not an upgrade.** `store upgrade` advances the execution schema; it never moves collaboration rows. A combined store that still owns those rows refuses runtime collaboration traffic, `store init`, and a fresh `store upgrade` with `collaboration.cutover-required` until the three-verb cutover (`plan`, `apply`, `activate`) publishes the split lane.
 

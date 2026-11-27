@@ -107,7 +107,7 @@ The milestone timeline and the milestone write forms of the dashboard project sc
 
 ### Relationship to the collaboration authority record
 
-The [collaboration authority record](../../implemented/architecture/2026-11-21-collaboration-state-authority.md) lists roadmaps among the data collaboration owns — in its Problem, in "Separate the domains", in the `remote` fidelity paragraph and in the "All read models and gates" criterion. This decision removes roadmaps from all four sites: collaboration owns issues, milestones and portable identity, not roadmap prose. Nothing else in that record changes, and the board sits on the execution side of its split by design.
+When this decision was taken, the [collaboration authority design](../../implemented/architecture/2026-11-21-collaboration-state-authority.md) listed roadmaps among the data collaboration owns — in its Problem, in "Separate the domains", in the `remote` fidelity paragraph and in the "All read models and gates" criterion. This decision removed them from all four sites, and the record as promoted carries no roadmap prose: collaboration owns issues, milestones and portable identity. Nothing else in that record changed, and the board sits on the execution side of its split by design.
 
 ## Alternatives considered
 

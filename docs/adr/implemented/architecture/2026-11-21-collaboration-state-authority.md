@@ -13,7 +13,7 @@ The [control-checkout store](../../../specs/architecture/store-authority.md) tie
 
 **Keep one user-level store per canonical repository.** Each repository has one `collaboration.db` in user-level storage, namespaced by canonical Git origin host and owner/repository. When origin cannot supply that identity, an explicit stable repository ID is required; checkout paths and Git authors are not identity. Clones and worktrees of the same repository for the same user resolve the same database; distinct repositories and forks do not. There is no global authoritative user database. Any future cross-repository index is rebuildable from the individual authorities and owns no data.
 
-**Select exactly one collaboration authority per project.** The mode and any provider binding are explicit. A change of mode or binding is a reviewed authority change, not a fallback or a merge of two writable copies.
+**Select exactly one collaboration authority per project.** The repository's collaboration mode and each applicable project's provider binding are explicit. A change of mode or binding is a reviewed authority change, not a fallback or a merge of two writable copies.
 
 | Mode | Authority | Non-authoritative storage and delivery |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ Each criterion below is proven by the owning scenarios that `docs/specs/architec
 - **All read models and gates.** Unknown never counts as zero, and evidence carries its scope and time without claiming a remote lock.
 - **Migration and rebinding.** Stage, resume and one-time activation are proven on a combined source.
 - **Cross-authority moves and relations.** Proven on one checkout inside the controlled-host boundary (`I-001235`, PR #834).
-- **Provider isolation.** No provider credential, client or transport at rest or during operation.
+- **Provider isolation.** The CLI and engine hold and use no provider credential, client or transport at rest or during operation.
 
 All eight are proven within local SQLite, real local Git and the controlled host fixture only; live Linear permissions, field fidelity, the exact event round-trip, Git server protection policy and operational sender exclusion remain unverified until a separately authorized release or operational acceptance, and this record claims no provider round-trip.
 
