@@ -299,4 +299,23 @@ ${COMPASS_STACK_HEAD}`);
     expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
     expect(result.violations[0]?.message).toContain("p1-store");
   });
+
+  test("untilPlanId judges only the rows above it, so the named plan never blocks itself", () => {
+    const compass = `# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p1-store | Store | Done |
+| p2-board | Board | Done |
+${COMPASS_STACK_HEAD}`;
+    const earlier = lintIterationCompass(compass, { untilPlanId: "p2-board" });
+    expect(earlier.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
+    expect(earlier.violations[0]?.message).toContain("p1-store");
+    // Rows at or after the named id are out of the window; an id the table does
+    // not carry falls back to the whole table.
+    expect(lintIterationCompass(compass, { untilPlanId: "p1-store" })).toEqual({ ok: true, violations: [] });
+    expect(lintIterationCompass(compass, { untilPlanId: "p9-absent" }).violations).toHaveLength(2);
+  });
 });

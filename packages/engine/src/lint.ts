@@ -1640,6 +1640,51 @@ function columnIndex(header: readonly string[], name: string, fallback: number):
   return index >= 0 ? index : fallback;
 }
 
+export type IterationCompassOptions = {
+  /**
+   * Stop the `## Plans` scan AT this plan id, exclusive: only rows above it are
+   * judged. A completion uses this to check the plans completed before it — its
+   * own layer is published after compound, so a self-check would deadlock. An
+   * id the table does not carry scans every row, like the unfiltered rule.
+   */
+  untilPlanId?: string;
+};
+
+/**
+ * The `Done` plans of a compass that no `## PR stack` row accounts for, in
+ * table order. `null` when the compass carries no `## PR stack` section at all
+ * — that absence is the lint's own finding, never a per-plan one, so a caller
+ * that only judges earlier plans has nothing to say about it.
+ */
+function unpublishedCompassPlans(
+  lines: readonly string[],
+  options: IterationCompassOptions,
+): string[] | null {
+  const stack = compassTable(lines, "PR stack");
+  if (stack === null) return null;
+  const plans = compassTable(lines, "Plans");
+  if (plans === null) return [];
+  const idColumn = columnIndex(plans.header, "plan_id", 0);
+  const statusColumn = columnIndex(plans.header, "Status", 2);
+  const accountableColumn = columnIndex(stack.header, "Accountable plan", 1);
+  const accountable = new Set(stack.rows.map((row) => cellText(row[accountableColumn] ?? "")));
+  const unpublished: string[] = [];
+  for (const row of plans.rows) {
+    const planId = cellText(row[idColumn] ?? "");
+    if (options.untilPlanId !== undefined && planId === options.untilPlanId) break;
+    if (planId === "" || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
+    if (accountable.has(planId)) continue;
+    unpublished.push(planId);
+  }
+  return unpublished;
+}
+
+/** The plan ids {@link lintIterationCompass} would report, for callers that
+ * refuse with their own code and need the ids rather than the violations. */
+export function unpublishedCompassPlanIds(text: string, options: IterationCompassOptions = {}): readonly string[] {
+  return unpublishedCompassPlans(unfencedLines(text), options) ?? [];
+}
+
 /**
  * Lint an iteration delivery compass (`skills/mstar-iteration/references/
  * pr-stack.md` § Records): every plan whose `## Plans` status is `Done` has a
@@ -1649,11 +1694,10 @@ function columnIndex(header: readonly string[], name: string, fallback: number):
  * needs no PR).
  * see docs/adr/proposed/process/2026-11-27-iteration-layer-publication-lint.md
  */
-export function lintIterationCompass(text: string): GateResult {
+export function lintIterationCompass(text: string, options: IterationCompassOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
-  const lines = unfencedLines(text);
-  const stack = compassTable(lines, "PR stack");
-  if (stack === null) {
+  const found = unpublishedCompassPlans(unfencedLines(text), options);
+  if (found === null) {
     violations.push(
       violation(
         "medium",
@@ -1664,16 +1708,7 @@ export function lintIterationCompass(text: string): GateResult {
     );
     return { ok: false, violations };
   }
-  const plans = compassTable(lines, "Plans");
-  if (plans === null) return { ok: true, violations };
-  const idColumn = columnIndex(plans.header, "plan_id", 0);
-  const statusColumn = columnIndex(plans.header, "Status", 2);
-  const accountableColumn = columnIndex(stack.header, "Accountable plan", 1);
-  const accounted = new Set(stack.rows.map((row) => cellText(row[accountableColumn] ?? "")));
-  for (const row of plans.rows) {
-    const planId = cellText(row[idColumn] ?? "");
-    if (planId === "" || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
-    if (accounted.has(planId)) continue;
+  for (const planId of found) {
     violations.push(
       violation(
         "medium",

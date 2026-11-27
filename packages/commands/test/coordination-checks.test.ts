@@ -383,6 +383,97 @@ plans:
       data: { transition: "phase-2-execute", entry: { ok: false } },
     });
   });
+
+  /** A compass whose `## Plans` table marks `donePlanId` Done. */
+  function layerCompass(file: string, input: {
+    frontmatterPlans: readonly string[];
+    tablePlans: ReadonlyArray<[string, string]>;
+    stack: readonly string[];
+    closed?: boolean;
+  }): void {
+    writeFileSync(file, [
+      "---",
+      "iteration_id: iter-active-done",
+      'start_date: "2026-09-01"',
+      input.closed === true ? "status: completed" : "status: active",
+      "iteration_base_branch: integration/test",
+      "target_branch: main",
+      "plans:",
+      ...input.frontmatterPlans.map((id) => `  - ${id}`),
+      ...(input.closed === true ? ['end_date: "2026-09-02"'] : []),
+      "---",
+      "",
+      "## Plans",
+      "",
+      "| plan_id | Name | Status | Notes |",
+      "|---|---|---|---|",
+      ...input.tablePlans.map(([id, status]) => `| ${id} | ${id} title | ${status} | |`),
+      "",
+      "## PR stack",
+      "",
+      "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |",
+      "|---|---|---|---|---|---|---|",
+      ...input.stack,
+      "",
+    ].join("\n"));
+  }
+
+  test("the phase-2 window reports a Done plan with no PR stack row without blocking execution", async () => {
+    const cwd = tempRoot();
+    const { harness, planId } = await activeWorkflow(cwd, "wf-layers-phase2");
+    const compass = path.join(cwd, "delivery-compass.md");
+    layerCompass(compass, {
+      frontmatterPlans: [planId],
+      tablePlans: [[planId, "InProgress"], ["p-earlier", "Done"]],
+      stack: [],
+    });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-layers-phase2", compass, harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { transition: "phase-2-execute" } });
+    if (result.status === "ok") {
+      expect(result.data.entry).toMatchObject({
+        ok: false,
+        violations: expect.arrayContaining([expect.objectContaining({ code: "lint.iteration.pr-stack-missing-row" })]),
+      });
+    }
+  });
+
+  test("the phase-3 window refuses on the same missing PR stack row", async () => {
+    const cwd = tempRoot();
+    const { harness, planId } = await activeWorkflow(cwd, "wf-layers-phase3", true);
+    const compass = path.join(cwd, "delivery-compass.md");
+    layerCompass(compass, {
+      frontmatterPlans: [planId],
+      tablePlans: [[planId, "Done"]],
+      stack: [],
+      closed: true,
+    });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-layers-phase3", compass, harness, branch: "integration/test", integration: "integration/test", target: "main" } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "refused", code: "lint.iteration.pr-stack-missing-row" });
+  });
+
+  test("a complete PR stack passes both windows", async () => {
+    const cwd = tempRoot();
+    const { harness, planId } = await activeWorkflow(cwd, "wf-layers-complete", true);
+    const compass = path.join(cwd, "delivery-compass.md");
+    layerCompass(compass, {
+      frontmatterPlans: [planId],
+      tablePlans: [[planId, "Done"]],
+      stack: [`| s1 | ${planId} | o/r #6 | layer <- main | a -> b | landed | merged |`],
+      closed: true,
+    });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-layers-complete", compass, harness, branch: "integration/test", integration: "integration/test", target: "main" } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { transition: "phase-3-close", entry: { ok: true }, exit: { ok: true } } });
+  });
+
 describe("coordination checks command family", () => {
 
   test("the retired migrate verb refuses without touching the source tree", async () => {

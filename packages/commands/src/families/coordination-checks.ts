@@ -1,8 +1,9 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   evaluatePhaseGate,
   evaluatePostMergeCloseFromExecutionAuthority,
-  parseCompassFrontmatter,
+  lintIterationCompass,
+  parseCompassFrontmatterText,
   pushCadenceProbe,
   readRegisteredWorkflowFromExecutionAuthority,
   resolveProcessHarnessDir,
@@ -101,11 +102,26 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           }
           const compassPath = resolveCliPath(input.compass!, context.cwd);
           if (!existsSync(compassPath)) return refusalEnvelope({ command: id, status: "refused", code: "iteration.gate.compass-not-found", exitCode: 1, message: `compass file not found: ${compassPath}`, recovery: "The compass must exist at the reported path before mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });
-          const gate = evaluatePhaseGate(snapshot, parseCompassFrontmatter(compassPath), {
+          const compassText = readFileSync(compassPath, "utf8");
+          const base = evaluatePhaseGate(snapshot, parseCompassFrontmatterText(compassText, compassPath), {
             currentBranch: input.branch,
             specIntegrationBranch: input.integration,
             prBaseBranch: input.target,
           });
+          // The layer-publication reminder joins this gate's checks rather than
+          // opening a second one: every Done plan of the compass needs a
+          // `## PR stack` row. It rides the entry checklist, so the phase-2
+          // window reports it without blocking execution while the phase-3
+          // window, whose verdict is entry+exit, refuses on it. A compass with
+          // no `## PR stack` table at all is the lint surface's own finding —
+          // the aggregate-PR rollout legitimately carries none — so the gate
+          // only reports a Done plan whose layer row is missing.
+          const layerViolations = lintIterationCompass(compassText).violations
+            .filter((item) => item.code === "lint.iteration.pr-stack-missing-row");
+          const entryViolations = [...base.entry.violations, ...layerViolations];
+          const entry = { ...base.entry, ok: entryViolations.length === 0, violations: entryViolations };
+          const violations = base.allPlansDone ? [...entryViolations, ...base.exit.violations] : [];
+          const gate = { ...base, entry, violations, ok: violations.length === 0 };
           return gate.ok
             ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit })
             : refusalEnvelope({ command: id, status: "refused", code: gate.violations[0]?.code ?? "iteration.gate.blocked", exitCode: 1, message: "iteration phase gate is blocked", details: { gate }, recovery: "Resolve the reported phase blockers, then run mstar status validate and mstar iteration gate --workflow <workflow-id> --compass <compass-path>." });

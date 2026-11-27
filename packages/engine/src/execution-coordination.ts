@@ -16,7 +16,8 @@
  * Nothing here is a public surface: the package index publishes only
  * `mutateExecutionPlan`.
  */
-import { dirname, isAbsolute } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   assertCatalogExecutionCommittedOn,
   openSplitJournal,
@@ -37,6 +38,7 @@ import {
   type PlanPrepareConfig,
   type PreparedCoordination,
 } from "./coordination-write.js";
+import { unpublishedCompassPlanIds } from "./lint.js";
 import {
   ExecutionPinConflictError,
   assertEvidenceInsidePlanArea,
@@ -1799,6 +1801,40 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
 }
 
 /**
+ * The iteration layer-publication reminder (`pr-stack.md` § Records): the
+ * plans that complete EARLIER in the compass than this one, and are already
+ * Done with no `## PR stack` row, refuse the completion. The completing plan is
+ * never judged — its own layer is published after compound, so a self-check
+ * would deadlock.
+ *
+ * `compass_ref` is the workflow's registered harness-relative pointer, resolved
+ * against the control harness root exactly as `mstar workflow compass-ref`
+ * stores it. An unset pointer or an unreadable file skips the check: locating
+ * the compass is the registration/compass checks' business, and this reminder
+ * never invents a second refusal for a document it cannot read.
+ */
+function assertEarlierLayersPublished(context: ExecutionContext, snapshot: WorkflowSnapshot, planId: string): void {
+  const ref = snapshot.compass_ref;
+  if (!isNonEmptyString(ref)) return;
+  const path = join(controlHarnessRoot(context), ref);
+  if (!existsSync(path)) return;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return;
+  }
+  const unpublished = unpublishedCompassPlanIds(text, { untilPlanId: planId });
+  if (unpublished.length === 0) return;
+  throw new CoordinationError(
+    "coordination.layer-unpublished",
+    "An earlier Done plan of this iteration has no PR stack row, so its layer was never published; publish that layer, add the row, and retry the same completion. " +
+      "The compass PR stack table records one row per accountable plan layer.",
+    { plan_id: planId, workflow_id: snapshot.id, unpublished_plan_ids: unpublished, compass_ref: ref },
+  );
+}
+
+/**
  * §D/§E one plan's own scope as the addressed ROW records it: the plan worktree
  * and branch an authorized `prepare` recorded into `metadata`. The DB route has
  * no resolved file scope — the row IS the scope — so every Git proof below is
@@ -2246,6 +2282,12 @@ async function captureCompletionWitnesses(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId: read.planId, integration: operation.integration, what: "complete" });
+  // invariant: An iteration row is the only route whose layers are published one
+  // per accountable plan, so only there does an earlier unpublished layer refuse
+  // this completion. A standalone development/report-only plan is untouched.
+  if (snapshot.type === "iteration" && route === "integration") {
+    assertEarlierLayersPublished(context, snapshot, read.planId);
+  }
   const evidence = readCompletionEvidence(operation.evidence);
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);

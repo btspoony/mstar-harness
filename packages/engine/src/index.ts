@@ -586,6 +586,7 @@ export type {
   CommentPointer,
   CommentedCodeFinding,
   EphemeralCitation,
+  IterationCompassOptions,
   PlanQualityFinding,
   PlanQualityResult,
   ProvenanceCitation,
@@ -617,6 +618,7 @@ export {
   lintSpecsTree,
   lintStrategySections,
   planQualityBar,
+  unpublishedCompassPlanIds,
 } from "./lint.js";
 export type {
   DevTrackParam,

@@ -4898,3 +4898,151 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
     expect(storedHeader(fixture.context)).toMatchObject({ registered: 1, status: "running", ended_at: null });
   });
 });
+
+/* ------------------------------------------------------------------------ *
+ * The iteration layer-publication reminder on `complete`
+ * (docs/adr/proposed/process/2026-11-27-iteration-layer-publication-lint.md)
+ * ------------------------------------------------------------------------ */
+
+/** The fixture's compass with a real `## Plans` / `## PR stack` body. */
+function writeLayerCompass(
+  fixture: Fixture,
+  plans: ReadonlyArray<[string, string]>,
+  stack: readonly string[],
+): void {
+  writeText(fixture.compassPath, [
+    "---",
+    `iteration_id: ${ITERATION_ID}`,
+    "start_date: 2026-01-01",
+    "status: active",
+    "iteration_base_branch: main",
+    "target_branch: main",
+    `plans: [${plans.map(([id]) => id).join(", ")}]`,
+    "---",
+    "",
+    `# ${ITERATION_ID}`,
+    "",
+    "## Plans",
+    "",
+    "| plan_id | Name | Status | Notes |",
+    "|---|---|---|---|",
+    ...plans.map(([id, status]) => `| ${id} | ${id} title | ${status} | |`),
+    "",
+    "## PR stack",
+    "",
+    "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |",
+    "|---|---|---|---|---|---|---|",
+    ...stack,
+    "",
+  ].join("\n"));
+}
+
+/** One iteration completion request proven end to end on the fixture's repos. */
+async function iterationCompletion(label: string, extraPlanIds: readonly string[]) {
+  const fixture = await workflowFixture(label, extraPlanIds, "iteration");
+  const sourcePath = fixture.planPath;
+  runGit(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "reviewed source"], sourcePath);
+  const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim();
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.integrationPath, encoding: "utf8" }).trim();
+  runGit(["-c", "user.email=t@t", "-c", "user.name=t", "merge", "-q", "--no-ff", sourceSha, "-m", "serial source merge"], fixture.integrationPath);
+  const resultSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: fixture.integrationPath, encoding: "utf8" }).trim();
+  const harness = dirname(storeDbPath(fixture.context));
+  writeText(join(harness, "plans", `${PLAN_ID}.md`), `# ${PLAN_ID}\n`);
+  await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+    operationId: `op-layer-prepare-${label}`, planId: PLAN_ID,
+    operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: SOURCE_BRANCH } },
+  });
+  await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+    operationId: `op-layer-start-${label}`, planId: PLAN_ID,
+    operation: { kind: "progress", progress: { status: "InProgress", summary: "source reviewed and merged", evidence_paths: [] } },
+  });
+  const reports = ["qc.md", "qc-consolidated.md", "qa.md"].map((name) => join(harness, "plans", PLAN_ID, name));
+  reports.forEach((path) => writeText(path, "# Isolated layer fixture\n"));
+  plantMergeClaim(fixture.context, {
+    ownerEpoch: fixture.epoch, holder: COORDINATOR_ID,
+    claimed_at: "2026-01-02T05:00:00.000Z", target_branch: INTEGRATION_BRANCH,
+  });
+  const complete = {
+    operationId: `op-layer-complete-${label}`, planId: PLAN_ID,
+    operation: {
+      kind: "complete" as const,
+      evidence: {
+        source_sha: sourceSha, review_base: baseSha, review_head: sourceSha,
+        qc: { decision: "Approve" as const, reports: [reports[0]!], consolidated: reports[1]! },
+        acceptance: { gate: "pm-acceptance" as const, decision: "pass" as const, report: reports[2]! },
+      },
+      integration: { base_sha: baseSha, result_sha: resultSha },
+    },
+  };
+  return { fixture, complete };
+}
+
+describe("execution-workflow: iteration layer publication on complete", () => {
+  test("an earlier Done plan with no PR stack row refuses the completion, naming that plan", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-missing-row", ["p-earlier"]);
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], []);
+    const before = workflowFootprint(fixture.context);
+    const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
+    expect(refusal.code).toBe("coordination.layer-unpublished");
+    expect(refusal.details).toMatchObject({ plan_id: PLAN_ID, unpublished_plan_ids: ["p-earlier"] });
+    expect(refusal.message).toContain("publish that layer, add the row, and retry the same completion");
+    // A reminder refused before any write: the row, the workflow and the ledger
+    // are exactly as they were.
+    expect(workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("the same completion passes once the earlier plan's PR stack row exists", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-row-present", ["p-earlier"]);
+    writeLayerCompass(
+      fixture,
+      [["p-earlier", "Done"], [PLAN_ID, "InProgress"]],
+      ["| s1 | p-earlier | o/r #6 | layer <- main | a -> b | landed | merged |"],
+    );
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("the completing plan's own missing row never blocks itself", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-own-row", ["p-earlier"]);
+    // The earlier layer is published; this plan's own layer is published after
+    // compound, so its row cannot exist yet.
+    writeLayerCompass(
+      fixture,
+      [["p-earlier", "Done"], [PLAN_ID, "Done"]],
+      ["| s1 | p-earlier | o/r #6 | layer <- main | a -> b | landed | merged |"],
+    );
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("a standalone development completion ignores the compass layer table", async () => {
+    const { fixture, sourcePath, harness } = await claimFixture("layer-development-unaffected");
+    // The plan workflow's own compass names an earlier Done plan of another
+    // iteration with no row: a development plan publishes one PR, so the
+    // iteration reminder has nothing to say about it.
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "Done"]], []);
+    await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-layer-dev-prepare", planId: PLAN_ID,
+      operation: { kind: "prepare", config: { worktreePath: sourcePath, workingBranch: SOURCE_BRANCH } },
+    });
+    await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-layer-dev-start", planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "development reviewed", evidence_paths: [] } },
+    });
+    const sourceSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: sourcePath, encoding: "utf8" }).trim();
+    const reports = ["qc.md", "qc-consolidated.md", "qa.md"].map((name) => join(harness, "plans", PLAN_ID, name));
+    reports.forEach((path) => writeText(path, "# Development fixture evidence\n"));
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-layer-dev-complete", planId: PLAN_ID,
+      operation: {
+        kind: "complete",
+        evidence: {
+          source_sha: sourceSha, review_base: sourceSha, review_head: sourceSha,
+          qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
+          acceptance: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
+        },
+      },
+    });
+    expect(completed.data.plan.status).toBe("Done");
+  });
+});
