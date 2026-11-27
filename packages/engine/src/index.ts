@@ -618,7 +618,6 @@ export {
   lintSpecsTree,
   lintStrategySections,
   planQualityBar,
-  unpublishedCompassPlanIds,
 } from "./lint.js";
 export type {
   DevTrackParam,

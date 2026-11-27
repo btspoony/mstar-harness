@@ -13,6 +13,7 @@ import {
   initializeCollaborationStore,
   initializeStore,
   listIssues,
+  openStore,
   readCollaborationAuthority,
   readExecutionAuthority,
   resolveCollaborationLocation,
@@ -474,5 +475,51 @@ describe("plan residual-add / residual-close composite commands", () => {
       throw new Error("plan.issue-add refusal carries no details.recovery");
     }
     expect(String(details.recovery)).toContain("same --operation id");
+  });
+
+  test("a coordination.layer-unpublished refusal maps to the compass-row repair, not to re-submitted evidence", async () => {
+    const data = await residualFixture("layer-unpublished-recovery");
+    // Register the compass pointer and write a compass whose `## Plans` marks an
+    // EARLIER plan Done with no `## PR stack` row: the completion refuses before
+    // any evidence or Git proof, so this exercises the transport mapping only.
+    const compassRef = "iterations/iter-layer/delivery-compass.md";
+    const compassPath = path.join(data.harness, compassRef);
+    mkdirSync(path.dirname(compassPath), { recursive: true });
+    writeFileSync(compassPath, [
+      "## Plans",
+      "",
+      "| plan_id | Name | Status | Notes |",
+      "|---|---|---|---|",
+      "| p-earlier | Earlier | Done | |",
+      `| ${data.plan} | Plan A | InProgress | |`,
+      "",
+    ].join("\n"));
+    const storeContext = { harnessDir: data.harness };
+    const store = await openStore(storeContext, "write");
+    try {
+      store.db.prepare("update execution_workflows set state_json = json_set(state_json, '$.compass_ref', ?)").run(compassRef);
+    } finally {
+      store.close();
+    }
+    const refused = await definition("plan.complete").execute({
+      workflow: data.workflow,
+      plan: data.plan,
+      harness: data.harness,
+      operation: "layer-unpublished-1",
+      integrationBaseSha: "a".repeat(40),
+      integrationResultSha: "b".repeat(40),
+      evidence: {
+        qc: { decision: "Approve", reports: ["/tmp/qc.md"], consolidated: "/tmp/qc-consolidated.md" },
+        acceptance: { gate: "pm-acceptance", decision: "pass", report: "/tmp/qa.md" },
+      },
+    } as never, data.ctx);
+    expect(refused).toMatchObject({ status: "refused", code: "coordination.layer-unpublished" });
+    const details = refused.status === "refused" ? refused.details : undefined;
+    const recovery = typeof details?.recovery === "string" ? details.recovery : "";
+    expect(recovery).toContain("## PR stack");
+    expect(recovery).toContain("retry mstar plan complete");
+    // The cause is a missing RECORD, so the repair is the row, not more evidence.
+    expect(recovery).not.toContain("Delivery-route evidence");
+    expect(recovery).not.toContain("mstar workflow evidence");
   });
 });

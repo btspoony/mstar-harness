@@ -39,7 +39,7 @@
 
 ## Records
 
-- The primary coordinator alone writes the compass `PR stack` table: order, accountable scope, repo and PR, branch refs, witnessed base and head, readiness and merge evidence. It creates the row when it creates the layer ref, before any push — marked pending, with the head it measured and, when used, the owner's written size exception — and completes it with the PR number, base and head after the PR opens. The table is the record and the engine owns the enforcement: while an earlier `Done` plan has no row, the next `mstar plan complete` is refused with `coordination.layer-unpublished`.
+- The primary coordinator alone writes the compass `PR stack` table: order, accountable scope, repo and PR, branch refs, witnessed base and head, readiness and merge evidence. It creates the row when it creates the layer ref, before any push — marked pending, with the head it measured and, when used, the owner's written size exception — and completes it with the PR number, base and head after the PR opens. The table is the record and the engine owns the enforcement: while an earlier `Done` plan has no row, the next `mstar plan complete` is refused with `coordination.layer-unpublished` — the repair is that row (a real layer PR, `—` for an empty range, or this iteration's already-open aggregate PR reused per plan), never a second merge; and when the completing plan has no `## Plans` row of its own, the body states no order, so the check is skipped.
 - Resume a partly performed publication by reconciling the exact refs and the existing PR; never infer by title or newest PR.
 
 ## Whole-chain proof and close

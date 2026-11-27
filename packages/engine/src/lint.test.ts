@@ -300,7 +300,70 @@ ${COMPASS_STACK_HEAD}`);
     expect(result.violations[0]?.message).toContain("p1-store");
   });
 
-  test("untilPlanId judges only the rows above it, so the named plan never blocks itself", () => {
+  test("an escaped pipe in a Name cell stays cell content, so the Status cell still decides", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status | Notes |
+|---|---|---|---|
+| p-first | Import A \\| B | Done | |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p-later | o/r #7 |
+`);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(result.violations[0]?.message).toContain('"p-first"');
+  });
+
+  test("a PR stack table with no Accountable plan column accounts for nothing", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p-first | Import A | Done |
+
+## PR stack
+
+| Layer | Notes |
+|---|---|
+| s1 | p-first |
+`);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(result.violations[0]?.message).toContain('"p-first"');
+    // The repair is the header, never a cell under a different column name.
+    expect(result.violations[0]?.message).toContain('"Accountable plan" column');
+    expect(result.violations[0]?.fix).toContain("Accountable plan");
+  });
+
+  test("an unclosed fence hides the tail without throwing, and the hidden section reports", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p1-store | Store | Done |
+
+\`\`\`
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p1-store | o/r #6 |
+`);
+    expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-section"]);
+    expect(result.violations[0]?.message).toContain('"p1-store"');
+  });
+
+  test("untilPlanId judges only the rows above it, and an id the table lacks leaves the lint's scan unfiltered", () => {
     const compass = `# Iteration compass
 
 ## Plans
@@ -313,9 +376,10 @@ ${COMPASS_STACK_HEAD}`;
     const earlier = lintIterationCompass(compass, { untilPlanId: "p2-board" });
     expect(earlier.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
     expect(earlier.violations[0]?.message).toContain("p1-store");
-    // Rows at or after the named id are out of the window; an id the table does
-    // not carry falls back to the whole table.
     expect(lintIterationCompass(compass, { untilPlanId: "p1-store" })).toEqual({ ok: true, violations: [] });
+    // The LINT has no anchor to find, so it scans the whole table. That is the
+    // unfiltered rule, not a safe completion window: `plan complete` must not
+    // read this as "everything precedes me" (see execution-workflow.test.ts).
     expect(lintIterationCompass(compass, { untilPlanId: "p9-absent" }).violations).toHaveLength(2);
   });
 

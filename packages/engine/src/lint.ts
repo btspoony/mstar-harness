@@ -1608,12 +1608,22 @@ function compassTable(lines: readonly string[], name: string): CompassTable | nu
       continue;
     }
     started = true;
-    const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+    const cells = rowCells(line);
     if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
     rows.push(cells);
   }
   const [header, ...data] = rows;
   return { header: header ?? [], rows: data };
+}
+
+/** One table row's cells. `\|` is cell CONTENT — a display pipe in a name — not
+ * a column separator, so a name cannot shift a neighbouring column's value. */
+function rowCells(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|$/, "")
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.trim().replace(/\\\|/g, "|"));
 }
 
 /** A cell's comparable text: bold WRAPPING the whole cell is formatting, but a
@@ -1633,11 +1643,11 @@ function cellText(cell: string): string {
   }
 }
 
-/** Index of the named column, or the positional fallback when a compass
- * table carries a reworded header. */
-function columnIndex(header: readonly string[], name: string, fallback: number): number {
-  const index = header.findIndex((cell) => cellText(cell).toLowerCase() === name.toLowerCase());
-  return index >= 0 ? index : fallback;
+/** Index of the named column, or -1. Every consumed column is identified by
+ * NAME: a reworded or missing header is a malformed table, never a licence to
+ * read a neighbouring column's value as this one. */
+function columnIndex(header: readonly string[], name: string): number {
+  return header.findIndex((cell) => cellText(cell).toLowerCase() === name.toLowerCase());
 }
 
 export type IterationCompassOptions = {
@@ -1645,7 +1655,9 @@ export type IterationCompassOptions = {
    * Stop the `## Plans` scan AT this plan id, exclusive: only rows above it are
    * judged. A completion uses this to check the plans completed before it — its
    * own layer is published after compound, so a self-check would deadlock. An
-   * id the table does not carry scans every row, like the unfiltered rule.
+   * id the table does not carry scans every row, like the unfiltered rule; a
+   * completion that needs an anchor must therefore treat an absent one as
+   * "no earlier window" rather than as "everything".
    */
   untilPlanId?: string;
 };
@@ -1656,35 +1668,54 @@ export type IterationCompassOptions = {
  * section is zero rows, never an exemption: the Done plans it should have named
  * are exactly the ids returned, so no caller can mistake "no table" for
  * "nothing to record".
+ *
+ * `headerMissing` says the section exists but its table has no `Accountable
+ * plan` column, so it accounts for nothing: zero rows is the safe reading — a
+ * row under another header proves nothing.
  */
 function unaccountedDonePlans(
   lines: readonly string[],
   options: IterationCompassOptions,
-): { sectionPresent: boolean; plans: string[] } {
+): { sectionPresent: boolean; headerMissing: boolean; anchored: boolean; plans: string[] } {
   const stack = compassTable(lines, "PR stack");
   const plans = compassTable(lines, "Plans");
-  if (plans === null) return { sectionPresent: stack !== null, plans: [] };
-  const idColumn = columnIndex(plans.header, "plan_id", 0);
-  const statusColumn = columnIndex(plans.header, "Status", 2);
-  const accountable = stack === null
-    ? new Set<string>()
-    : new Set(stack.rows.map((row) => cellText(row[columnIndex(stack.header, "Accountable plan", 1)] ?? "")));
+  const accountableColumn = stack === null ? -1 : columnIndex(stack.header, "Accountable plan");
+  const headerMissing = stack !== null && accountableColumn < 0;
+  if (plans === null) return { sectionPresent: stack !== null, headerMissing, anchored: false, plans: [] };
+  const idColumn = columnIndex(plans.header, "plan_id");
+  const statusColumn = columnIndex(plans.header, "Status");
+  const accountable = new Set<string>();
+  if (stack !== null && accountableColumn >= 0) {
+    for (const row of stack.rows) accountable.add(cellText(row[accountableColumn] ?? ""));
+  }
   const unpublished: string[] = [];
+  let anchored = false;
   for (const row of plans.rows) {
-    const planId = cellText(row[idColumn] ?? "");
-    if (options.untilPlanId !== undefined && planId === options.untilPlanId) break;
-    if (planId === "" || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
+    const planId = idColumn < 0 ? "" : cellText(row[idColumn] ?? "");
+    if (options.untilPlanId !== undefined && planId === options.untilPlanId) {
+      anchored = true;
+      break;
+    }
+    if (planId === "" || statusColumn < 0 || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
     if (accountable.has(planId)) continue;
     unpublished.push(planId);
   }
-  return { sectionPresent: stack !== null, plans: unpublished };
+  return { sectionPresent: stack !== null, headerMissing, anchored, plans: unpublished };
 }
 
 /** The Done plan ids no `## PR stack` row accounts for, for callers that
  * refuse with their own code and need the ids rather than the violations. An
- * absent section yields the same ids: it accounts for no plan at all. */
+ * absent section yields the same ids: it accounts for no plan at all.
+ *
+ * A caller that asked for an EARLIER window (`untilPlanId`) gets an empty
+ * answer when the `## Plans` table does not carry that plan: an omitted row
+ * states no order, so nothing is established to precede the completing plan.
+ * Package-local: completion is the only consumer, and a public barrel entry
+ * would invite a second one to reuse a window it has not reasoned about. */
 export function unpublishedCompassPlanIds(text: string, options: IterationCompassOptions = {}): readonly string[] {
-  return unaccountedDonePlans(unfencedLines(text), options).plans;
+  const { anchored, plans } = unaccountedDonePlans(unfencedLines(text), options);
+  if (options.untilPlanId !== undefined && !anchored) return [];
+  return plans;
 }
 
 /**
@@ -1698,7 +1729,7 @@ export function unpublishedCompassPlanIds(text: string, options: IterationCompas
  */
 export function lintIterationCompass(text: string, options: IterationCompassOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
-  const { sectionPresent, plans: found } = unaccountedDonePlans(unfencedLines(text), options);
+  const { sectionPresent, headerMissing, plans: found } = unaccountedDonePlans(unfencedLines(text), options);
   // A compass with no `## Plans` table records no layer obligation either; the
   // registration and compass-shape checks own that absence. The missing section
   // is a layer finding only when a Done plan needs a row it cannot have.
@@ -1713,13 +1744,19 @@ export function lintIterationCompass(text: string, options: IterationCompassOpti
     );
     return { ok: false, violations };
   }
+  // An existing section whose table carries no `Accountable plan` column
+  // accounts for nothing: the repair is the header, not a row under another one.
   for (const planId of found) {
     violations.push(
       violation(
         "medium",
         "lint.iteration.pr-stack-missing-row",
-        `plan "${planId}" is Done but no \`## PR stack\` row names it as the Accountable plan (pr-stack.md \u00a7 Records)`,
-        `add a PR stack row whose Accountable plan cell is "${planId}" and record the layer ref, witnessed base and head`,
+        headerMissing
+          ? `the "## PR stack" table carries no "Accountable plan" column, so no row records a plan layer (pr-stack.md \u00a7 Records); plan "${planId}" is left unrecorded`
+          : `plan "${planId}" is Done but no \`## PR stack\` row names it as the Accountable plan (pr-stack.md \u00a7 Records)`,
+        headerMissing
+          ? "restore the `## PR stack` table's `| # | Accountable plan | Repo / PR | ... |` header, then add one row per plan layer"
+          : `add a PR stack row whose Accountable plan cell is "${planId}" and record the layer ref, witnessed base and head`,
       ),
     );
   }
@@ -1759,16 +1796,18 @@ function fenceLines(text: string): number[] {
 }
 
 /** The document's lines outside fenced code blocks: a `## ` line quoted in a
- * fence is example text, not a section. */
+ * fence is example text, not a section. An unclosed fence hides the tail, and
+ * that tail is bounded by the document itself — never by an unbounded sentinel. */
 function unfencedLines(text: string): string[] {
+  const lines = text.split(/\r?\n/);
   const fenced = new Set<number>();
   const toggles = fenceLines(text);
   for (let index = 0; index < toggles.length; index += 2) {
     const from = toggles[index]!;
-    const to = toggles[index + 1] ?? Number.MAX_SAFE_INTEGER;
+    const to = toggles[index + 1] ?? lines.length + 1;
     for (let line = from + 1; line < to; line++) fenced.add(line);
   }
-  return text.split(/\r?\n/).filter((_, index) => !fenced.has(index + 1));
+  return lines.filter((_, index) => !fenced.has(index + 1));
 }
 
 /** `## <Name>` level-2 headings outside fences, bare names. */

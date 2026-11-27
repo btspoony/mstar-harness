@@ -1809,6 +1809,12 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
  * any plan either, so it refuses the same way while any earlier plan is Done;
  * with no earlier Done plan there is nothing to publish and it does not.
  *
+ * The earlier window is only as wide as the `## Plans` table states it: when
+ * that table carries no row for the completing plan, the body establishes no
+ * order and the check is SKIPPED rather than widened to every row. A missing
+ * row is a compass omission, not evidence that every other Done plan precedes
+ * this one.
+ *
  * `compass_ref` is the workflow's registered harness-relative pointer, resolved
  * against the control harness root exactly as `mstar workflow compass-ref`
  * stores it. An unset pointer or an unreadable file skips the check: locating
@@ -1830,8 +1836,8 @@ function assertEarlierLayersPublished(context: ExecutionContext, snapshot: Workf
   if (unpublished.length === 0) return;
   throw new CoordinationError(
     "coordination.layer-unpublished",
-    "An earlier Done plan of this iteration has no PR stack row, so its layer was never published; publish that layer, add the row, and retry the same completion. " +
-      "The compass PR stack table records one row per accountable plan layer; a compass without that section needs it added first, with one row per Done plan.",
+    "An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass `## PR stack` table and retry the same completion. " +
+      "The row names a real layer PR, or `\u2014` for an empty range, or the iteration's already-open aggregate PR; a compass without that section needs it added first, with one row per Done plan.",
     { plan_id: planId, workflow_id: snapshot.id, unpublished_plan_ids: unpublished, compass_ref: ref },
   );
 }

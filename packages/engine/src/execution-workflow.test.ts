@@ -4941,6 +4941,21 @@ function writeLayerCompass(
   ].join("\n"));
 }
 
+/** The semantic state a refused completion must leave untouched: row statuses,
+ * the merge lease and the receipt ledger — never raw `state_json` bytes, whose
+ * serialized form is a storage detail rather than the guarded fact. */
+function refusalFootprint(context: StoreContext): unknown {
+  return {
+    plans: rows(
+      context,
+      `select plan_id, revision, json_extract(state_json, '$.status') as status, json_extract(coordination_json, '$.completion') as completion ` +
+        `from execution_plans where workflow_id = '${WORKFLOW_ID}' order by plan_id`,
+    ),
+    lease: rows(context, `select revision, lease_json from execution_integration_leases where workflow_id = '${WORKFLOW_ID}'`),
+    receipts: rows(context, `select operation_id from execution_operations where workflow_id = '${WORKFLOW_ID}' order by operation_id`),
+  };
+}
+
 /** One iteration completion request proven end to end on the fixture's repos. */
 async function iterationCompletion(label: string, extraPlanIds: readonly string[]) {
   const fixture = await workflowFixture(label, extraPlanIds, "iteration");
@@ -4985,25 +5000,28 @@ describe("execution-workflow: iteration layer publication on complete", () => {
   test("an earlier Done plan with no PR stack row refuses the completion, naming that plan", async () => {
     const { fixture, complete } = await iterationCompletion("layer-missing-row", ["p-earlier"]);
     writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], []);
-    const before = workflowFootprint(fixture.context);
+    const before = refusalFootprint(fixture.context);
     const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
     expect(refusal.code).toBe("coordination.layer-unpublished");
     expect(refusal.details).toMatchObject({ plan_id: PLAN_ID, unpublished_plan_ids: ["p-earlier"] });
-    expect(refusal.message).toContain("publish that layer, add the row, and retry the same completion");
-    // A reminder refused before any write: the row, the workflow and the ledger
-    // are exactly as they were.
-    expect(workflowFootprint(fixture.context)).toEqual(before);
+    // The repair the refusal names is the compass ROW, and it admits the shapes a
+    // real rollout has: a layer PR, an em dash for an empty range, an aggregate PR.
+    expect(refusal.message).toContain("add that row to the compass");
+    expect(refusal.message).toContain("\u2014");
+    // A reminder refused before any write: every plan keeps its status, the lease
+    // and the receipt ledger are untouched.
+    expect(refusalFootprint(fixture.context)).toEqual(before);
   });
 
   test("a compass with no PR stack section refuses the completion while an earlier plan is Done", async () => {
     const { fixture, complete } = await iterationCompletion("layer-no-section", ["p-earlier"]);
     writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], null);
-    const before = workflowFootprint(fixture.context);
+    const before = refusalFootprint(fixture.context);
     const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
     expect(refusal.code).toBe("coordination.layer-unpublished");
     expect(refusal.details).toMatchObject({ plan_id: PLAN_ID, unpublished_plan_ids: ["p-earlier"] });
     expect(refusal.message).toContain("a compass without that section needs it added first");
-    expect(workflowFootprint(fixture.context)).toEqual(before);
+    expect(refusalFootprint(fixture.context)).toEqual(before);
   });
 
   test("a compass with no PR stack section does not refuse the first plan, which has no earlier Done plan", async () => {
@@ -5011,6 +5029,34 @@ describe("execution-workflow: iteration layer publication on complete", () => {
     writeLayerCompass(fixture, [[PLAN_ID, "InProgress"]], null);
     const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
     expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("an earlier Done plan whose body row is absent from ## Plans does not refuse the completion", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-absent-anchor", ["p-later"]);
+    // The completing plan carries no `## Plans` row at all, so the body states no
+    // order between it and `p-later`. A missing row is an omission in the
+    // document, not proof that every other Done plan came first.
+    writeLayerCompass(fixture, [["p-later", "Done"]], []);
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("a PR stack table with no Accountable plan column refuses rather than crediting another column", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-no-accountable-column", ["p-earlier"]);
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], []);
+    // Replace the stack table with a two-column one whose second cell happens to
+    // name the plan: only the named `Accountable plan` column may account for it.
+    const text = readFileSync(fixture.compassPath, "utf8");
+    writeFileSync(
+      fixture.compassPath,
+      text.replace(
+        "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |\n|---|---|---|---|---|---|---|",
+        "| Layer | Notes |\n|---|---|",
+      ) + "| s1 | p-earlier |\n",
+    );
+    const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
+    expect(refusal.code).toBe("coordination.layer-unpublished");
+    expect(refusal.details).toMatchObject({ unpublished_plan_ids: ["p-earlier"] });
   });
 
   test("the same completion passes once the earlier plan's PR stack row exists", async () => {
@@ -5034,6 +5080,59 @@ describe("execution-workflow: iteration layer publication on complete", () => {
       ["| s1 | p-earlier | o/r #6 | layer <- main | a -> b | landed | merged |"],
     );
     const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("an unset compass_ref skips the layer reminder instead of refusing", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-unset-ref", ["p-earlier"]);
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], []);
+    // No registered pointer: locating the compass belongs to the registration and
+    // compass checks, so this reminder has no document and says nothing.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_remove(state_json, '$.compass_ref') where workflow_id = ?").run(WORKFLOW_ID);
+    });
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("an unreadable compass skips the layer reminder instead of refusing", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-unreadable-ref", ["p-earlier"]);
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], []);
+    // A pointer to a path that cannot be read (here: absent) is not this
+    // reminder's refusal; it never invents a second cause for its own read.
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_set(state_json, '$.compass_ref', ?) where workflow_id = ?")
+        .run("iterations/iter-gone/delivery-compass.md", WORKFLOW_ID);
+    });
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
+  });
+
+  test("a report-only workflow completion is unaffected by the compass layer table", async () => {
+    const { fixture, harness } = await claimFixture("layer-report-only-unaffected");
+    // A standalone report-only row publishes no PR at all: the layer reminder
+    // is the iteration route's, so the same unrecorded Done plan says nothing.
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], []);
+    withRaw(fixture.context, (db) => {
+      db.prepare("update execution_workflows set state_json = json_set(json_remove(state_json, '$.branch'), '$.delivery_kind', ?, '$.completion_policy', ?) where workflow_id = ?")
+        .run("verification/report-only", "acceptance report", WORKFLOW_ID);
+    });
+    const reports = ["qc.md", "qc-consolidated.md", "qa.md"].map((name) => join(harness, "plans", PLAN_ID, name));
+    reports.forEach((path) => writeText(path, "# Report-only fixture evidence\n"));
+    await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-layer-report-only-start", planId: PLAN_ID,
+      operation: { kind: "progress", progress: { status: "InProgress", summary: "report reviewed", evidence_paths: [] } },
+    });
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), {
+      operationId: "op-layer-report-only-complete", planId: PLAN_ID,
+      operation: {
+        kind: "complete",
+        evidence: {
+          qc: { decision: "Approve", reports: [reports[0]!], consolidated: reports[1]! },
+          acceptance: { gate: "pm-acceptance", decision: "pass", report: reports[2]! },
+        },
+      },
+    });
     expect(completed.data.plan.status).toBe("Done");
   });
 

@@ -529,7 +529,7 @@ plans:
     }
   });
 
-  test("a complete PR stack passes both windows", async () => {
+  test("a complete PR stack passes the phase-3 window", async () => {
     const cwd = tempRoot();
     const { harness, planId } = await activeWorkflow(cwd, "wf-layers-complete", true);
     const compass = path.join(cwd, "delivery-compass.md");
