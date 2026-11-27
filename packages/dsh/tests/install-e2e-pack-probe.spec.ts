@@ -29,33 +29,35 @@ const envFor = (probeHome: string): Record<string, string> => ({ ...process.env,
 describe('packAndProbe skip reasons', () => {
   test('a missing npm binary throws from spawn — the same named pack skip, pack root removed', async () => {
     const result = await packAndProbe({ packageRoot, repoVersion: REPO_VERSION, profile: 'web', env: envFor, npmBin: NPM_MISSING })
-    expect(result.ok).toBe(false)
-    if (!result.ok) {
-      try {
+    try {
+      expect(result.ok).toBe(false)
+      // why: the absence assertion runs BEFORE the finally cleanup, so it
+      // detects a helper leak rather than the spec's own removal.
+      expect(existsSync(result.packRoot)).toBe(false)
+      if (!result.ok) {
         expect(result.reason).toContain('local artifact pack failed (npm pack --json --pack-destination <dir>')
         expect(result.reason).toContain(NPM_MISSING)
         expect(result.reason).toContain(PUBLISH_NOTE)
-      } finally {
-        // why: cleanup is registered before the reason assertions so a
-        // failing assertion cannot leak the owned root.
-        await rm(result.packRoot, { recursive: true, force: true })
       }
-      expect(existsSync(result.packRoot)).toBe(false)
+    } finally {
+      // why: force-remove the owned root regardless of outcome, so an
+      // unexpected success or an early assertion failure cannot leak it.
+      await rm(result.packRoot, { recursive: true, force: true })
     }
   })
 
   test('a missing dsh binary throws from the probe spawn — the same named install skip, pack root removed', async () => {
     const result = await packAndProbe({ packageRoot, repoVersion: REPO_VERSION, profile: 'web', env: envFor, dshBin: DSH_MISSING })
-    expect(result.ok).toBe(false)
-    if (!result.ok) {
-      try {
+    try {
+      expect(result.ok).toBe(false)
+      expect(existsSync(result.packRoot)).toBe(false)
+      if (!result.ok) {
         expect(result.reason).toContain('local artifact install failed (dsh plugin --profile web add file:<tarball>')
         expect(result.reason).toContain(DSH_MISSING)
         expect(result.reason).toContain(PUBLISH_NOTE)
-      } finally {
-        await rm(result.packRoot, { recursive: true, force: true })
       }
-      expect(existsSync(result.packRoot)).toBe(false)
+    } finally {
+      await rm(result.packRoot, { recursive: true, force: true })
     }
   }, { timeout: 120_000 })
 
