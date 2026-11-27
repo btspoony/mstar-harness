@@ -32,12 +32,18 @@ export interface PackProbeArgs {
   dshBin?: string
 }
 
-/** One spawn failure description: `exit <n>` plus the first stderr line for
- * a finished process, the error message for a spawn that never started. */
-function spawnDetail(exitCode: number | null | undefined, stderr: string | undefined, error: unknown): string {
+/** One failure detail: `exit <n>` for a finished process, the error message
+ * for a spawn that never started (its exit is unavailable). The first
+ * non-empty stderr line is appended after the closing paren of the reason —
+ * the caller composes `(<command>, <detail>): <stderr line> — <note>`. */
+function spawnDetail(exitCode: number | null | undefined, error: unknown): string {
   if (error !== undefined) return error instanceof Error ? error.message : String(error)
-  const stderrLine = (stderr?.split('\n').find((line) => line.trim() !== '') ?? '').trim()
-  return `exit ${exitCode}${stderrLine === '' ? '' : `: ${stderrLine}`}`
+  return `exit ${exitCode}`
+}
+
+/** The first non-empty stderr line of a finished process, or ''. */
+function stderrLineOf(stderr: string | undefined): string {
+  return (stderr?.split('\n').find((line) => line.trim() !== '') ?? '').trim()
 }
 
 /** Pack the workspace artifact and probe-install it by `file:`; never
@@ -62,14 +68,16 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
       packError = error
     }
     if (packProc === undefined || packProc.exitCode !== 0) {
-      return { ok: false, reason: `local artifact pack failed (npm pack --json --pack-destination <dir>, ${spawnDetail(packProc?.exitCode, packProc?.stderr, packError)}) — ${publishNote}` }
+      const stderrLine = stderrLineOf(packProc?.stderr)
+      const stderrSuffix = stderrLine === '' ? '' : `: ${stderrLine}`
+      return { ok: false, reason: `local artifact pack failed (npm pack --json --pack-destination <dir>, ${spawnDetail(packProc?.exitCode, packError)})${stderrSuffix} — ${publishNote}` }
     }
     let packFilename: string | undefined
     try {
       const packReport: unknown = JSON.parse(packProc.stdout)
       if (Array.isArray(packReport)) {
         const entry: unknown = packReport[0]
-        if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string') {
+        if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string' && entry.filename !== '') {
           packFilename = entry.filename
         }
       }
@@ -96,7 +104,9 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
         probeError = error
       }
       if (probe === undefined || probe.exitCode !== 0) {
-        return { ok: false, reason: `local artifact install failed (dsh plugin --profile web add file:<tarball>, ${spawnDetail(probe?.exitCode, probe?.stderr, probeError)}) — ${publishNote}` }
+        const stderrLine = stderrLineOf(probe?.stderr)
+        const stderrSuffix = stderrLine === '' ? '' : `: ${stderrLine}`
+        return { ok: false, reason: `local artifact install failed (dsh plugin --profile web add file:<tarball>, ${spawnDetail(probe?.exitCode, probeError)})${stderrSuffix} — ${publishNote}` }
       }
     } finally {
       await rm(probeHome, { recursive: true, force: true })
