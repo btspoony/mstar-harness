@@ -2046,9 +2046,11 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
   }
 
   if (bucket === "implemented") {
-    // see packages/engine/src/lint.ts - // `implemented/` is the live bucket: a record carrying `Superseded-by:`
-    // is already demoted and must move to `archived/`, whatever the state of
-    // its replacement. Single-file rule - no cross-file lookup.
+    // see docs/adr/README.md - `implemented/` is the live bucket: a record carrying a
+    // demoted `Superseded-by:` marker has one of two valid operations, both stated in
+    // the recovery below: move it to `archived/` when its replacement is implemented
+    // or promoted in this change, or remove the marker when the replacement is
+    // still proposed. Single-file rule - no cross-file lookup.
     const demoted = header.map((line) => line.match(ADR_SUPERSEDED_BY)).find((match) => match !== null);
     if (demoted != null) {
       const value = demoted[1]!.trim().replace(/(?:\*+|_+)$/, "");
