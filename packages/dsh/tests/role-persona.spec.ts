@@ -271,6 +271,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     const { app, provider } = await bootWithProvider('fake-spawn')
     const loader = app.ctx.get('loader') as FakeLoaderRegistry
     loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
     const request: RecordedRequest = { ...textPrompt(ASSIGNMENT_PROMPT), agentPreset: PRESET_ID }
 
     await startActivationViaNativeChannel(app, specFor('fake-spawn', request))
@@ -282,8 +283,9 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     const { app, provider } = await bootWithProvider('fake-spawn', {}, { roleGate: 'off' })
     const loader = app.ctx.get('loader') as FakeLoaderRegistry
     loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
 
-    await startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(ASSIGNMENT_PROMPT)))
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: app.root }))
 
     expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
   })
@@ -292,6 +294,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     const { app, provider } = await bootWithProvider('fake-spawn')
     const loader = app.ctx.get('loader') as FakeLoaderRegistry
     loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
     const outside = await mkdtemp(join(tmpdir(), 'dsh-non-harness-'))
     try {
       await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: outside }))
