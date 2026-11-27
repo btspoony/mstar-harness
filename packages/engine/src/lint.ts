@@ -1617,15 +1617,16 @@ function compassTable(lines: readonly string[], name: string): CompassTable | nu
 }
 
 /** A cell's comparable text: bold WRAPPING the whole cell is formatting, but a
- * code span's contents are literal once its backticks are gone, so `_p1_`,
- * `**p1**` and `p1` stay distinct ids. */
+ * code span's contents are literal once its backticks are gone (CommonMark
+ * keeps them verbatim, spaces included), so `_p1_`, `**p1**` and `p1` stay
+ * distinct ids. */
 function cellText(cell: string): string {
   let text = cell.trim();
   const code = /^(`+)(.*)\1$/s;
   const bold = /^\*\*(.*)\*\*$/s;
   for (;;) {
     const codeMatch = code.exec(text);
-    if (codeMatch !== null) return codeMatch[2]!.trim();
+    if (codeMatch !== null) return codeMatch[2]!;
     const boldMatch = bold.exec(text);
     if (boldMatch === null) return text;
     text = boldMatch[1]!.trim();

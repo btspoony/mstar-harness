@@ -242,6 +242,30 @@ ${COMPASS_STACK_HEAD}| s1 | p2-board | o/r #7 | layer <- main | a -> b | reviewi
     expect(result).toEqual({ ok: true, violations: [] });
   });
 
+  test("a code span keeps leading and trailing spaces, so a padded id is another id", () => {
+    const paddedStack = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | \` p1-store \` | o/r #6 | layer <- main | a -> b | ready | pending |\n`);
+    expect(paddedStack.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
+    expect(paddedStack.violations[0]?.message).toContain('plan "p1-store"');
+
+    const paddedPlan = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| \` p1 \` | Padded | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p1 | o/r #1 |
+`);
+    expect(paddedPlan.violations).toHaveLength(1);
+    expect(paddedPlan.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(paddedPlan.violations[0]?.message).toContain('plan " p1 "');
+  });
+
   test("an empty Plans table reports nothing", () => {
     const result = lintIterationCompass(`# Iteration compass
 
