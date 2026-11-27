@@ -83,7 +83,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
       if (probe === undefined || probe.exitCode !== 0) {
         const stderrLine = stderrLineOf(probe?.stderr)
         const stderrSuffix = stderrLine === '' ? '' : `: ${stderrLine}`
-        return { ok: false, reason: `local artifact install failed (dsh plugin --profile web add file:<tarball>, ${spawnDetail(probe?.exitCode, probeError)})${stderrSuffix} — ${publishNote}`, packRoot }
+        return { ok: false, reason: `local artifact install failed (dsh plugin --profile ${args.profile} add file:<tarball>, ${spawnDetail(probe?.exitCode, probeError)})${stderrSuffix} — ${publishNote}`, packRoot }
       }
     } finally {
       await rm(probeHome, { recursive: true, force: true })

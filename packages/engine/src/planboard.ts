@@ -278,9 +278,10 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
   }
   if (mode === "remote") {
     // see packages/engine/src/planboard.ts - // invariant: ONE admitted view answers the whole board: the cache is opened
-    // once, and each id is resolved against the snapshot it already holds. A
-    // lane-level refusal answers every remaining line and never reopens; only a
-    // per-id answer (not-found, scope-refused) is decided line by line.
+    // once, and each id is resolved against the snapshot it already holds. Every
+    // code `refusalOf` classifies as `refusal` answers its own line and the next
+    // id still reads; a `laneRefusal` answers every remaining line and never
+    // reopens.
     let view: RemoteReadView;
     let remoteIssueRead: (view: RemoteReadView, id: string) => RemoteIssueRead;
     try {
