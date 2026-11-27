@@ -49,8 +49,10 @@
  *       (`probeRolePersonaSeam`'s branded-`ok` inputs) proven ON the
  *       installed deployment. The artifact bundle keeps the entry's frozen
  *       export surface (no probe symbol exported), so the pin observes the
- *       probe's contract structurally: canary dispatch + brand stamp +
- *       unchanged wrapper key surface.
+ *       probe's contract structurally — see
+ *       packages/dsh/src/gates/role-persona.ts `evaluateSeamProbe` — the
+ *       outcome table this pin's canary dispatch + brand stamp + wrapper
+ *       key-surface assertions classify on the installed deployment.
  *   6. The HOST config-stack re-composition is modeled (the real app's
  *      HMR/typert path): the fallbacks effective readback reads the row
  *      config captured at apply time, so after the seed write the host
