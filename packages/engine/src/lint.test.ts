@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { findCommentPointers, findUnclassifiedComments } from "./lint.js";
+import { findCommentPointers, findUnclassifiedComments, lintIterationCompass } from "./lint.js";
 
 describe("findCommentPointers", () => {
   test("returns path targets with the comment span", () => {
@@ -63,5 +63,48 @@ describe("findCommentPointers", () => {
     expect(findCommentPointers("# see scripts/comment-gate-select.sh\n", "hash")).toEqual([
       { line: 1, startLine: 1, endLine: 1, target: "scripts/comment-gate-select.sh" },
     ]);
+  });
+});
+
+const COMPASS_HEAD = `# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status | Notes |
+|---------|------|--------|-------|
+| p1-store | Store authority | Done | |
+| p2-board | Planboard | InProgress | depends on p1 |
+`;
+
+const COMPASS_STACK_HEAD = `
+## PR stack
+
+| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |
+|---|---|---|---|---|---|---|
+`;
+
+describe("lintIterationCompass", () => {
+  test("a Done plan with no PR stack row is reported, naming the plan", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | p2-board | o/r #7 | layer <- main | a -> b | reviewing | pending |\n`);
+    expect(result.ok).toBe(false);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(result.violations[0]?.message).toContain("p1-store");
+  });
+
+  test("every Done plan carrying a row passes", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | p1-store | o/r #6 | layer <- main | a -> b | ready | pending |\n| s2 | p2-board | o/r #7 | layer <- s1 | b -> c | reviewing | pending |\n`);
+    expect(result).toEqual({ ok: true, violations: [] });
+  });
+
+  test("an em-dash PR cell still counts as a row", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | p1-store | \u2014 | layer <- main | a -> b | landed | empty range |\n`);
+    expect(result).toEqual({ ok: true, violations: [] });
+  });
+
+  test("a compass without a PR stack section is reported once", () => {
+    const result = lintIterationCompass(COMPASS_HEAD);
+    expect(result.ok).toBe(false);
+    expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-section"]);
   });
 });

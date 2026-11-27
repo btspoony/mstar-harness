@@ -611,6 +611,7 @@ export {
   findUntrackedTodos,
   sourceDialect,
   lintAdrTree,
+  lintIterationCompass,
   lintSkillFrontmatter,
   lintSpecsDoc,
   lintSpecsTree,

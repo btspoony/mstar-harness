@@ -1586,6 +1586,87 @@ export function lintStrategySections(docText: string): GateResult {
   return { ok: violations.length === 0, violations };
 }
 
+/** One compass table: its header cells and data rows, in document order. A
+ * separator row (`|---|---|`) is formatting, not a row. */
+type CompassTable = { header: string[]; rows: string[][] };
+
+/** The Markdown table under the level-2 `## <name>` heading, or `null` when
+ * the document carries no such section. Scanning stops at the next level-2
+ * heading, so a later table never joins this one. */
+function compassTable(lines: readonly string[], name: string): CompassTable | null {
+  const start = lines.findIndex((line) => line.trim().startsWith("## ") && hasSectionName([line.trim().slice(3).trim()], name));
+  if (start < 0) return null;
+  const rows: string[][] = [];
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index]!.trim();
+    if (line.startsWith("## ")) break;
+    if (!line.startsWith("|")) continue;
+    const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
+    rows.push(cells);
+  }
+  const [header, ...data] = rows;
+  return { header: header ?? [], rows: data };
+}
+
+/** A cell's comparable text: emphasis and code marks are formatting. */
+function cellText(cell: string): string {
+  return cell.replace(/[`*_]/g, "").trim();
+}
+
+/** Index of the named column, or the positional fallback when a compass
+ * table carries a reworded header. */
+function columnIndex(header: readonly string[], name: string, fallback: number): number {
+  const index = header.findIndex((cell) => cellText(cell).toLowerCase() === name.toLowerCase());
+  return index >= 0 ? index : fallback;
+}
+
+/**
+ * Lint an iteration delivery compass (`skills/mstar-iteration/references/
+ * pr-stack.md` § Records): every plan whose `## Plans` status is `Done` has a
+ * `## PR stack` row whose `Accountable plan` cell names it. Nothing else is
+ * inspected — not readiness, not the PR column's shape, not repo columns, not
+ * row order. A `—` PR cell still counts as a row (an empty integration range
+ * needs no PR).
+ * see docs/adr/proposed/process/2026-11-27-iteration-layer-publication-lint.md
+ */
+export function lintIterationCompass(text: string): GateResult {
+  const violations: ValidationResult[] = [];
+  const lines = unfencedLines(text);
+  const stack = compassTable(lines, "PR stack");
+  if (stack === null) {
+    violations.push(
+      violation(
+        "medium",
+        "lint.iteration.pr-stack-missing-section",
+        'the compass carries no "## PR stack" section, so no plan layer can be recorded (pr-stack.md \u00a7 Records)',
+        "restore the `## PR stack` table with its `Accountable plan` column, then add one row per plan layer",
+      ),
+    );
+    return { ok: false, violations };
+  }
+  const plans = compassTable(lines, "Plans");
+  if (plans === null) return { ok: true, violations };
+  const idColumn = columnIndex(plans.header, "plan_id", 0);
+  const statusColumn = columnIndex(plans.header, "Status", 2);
+  const accountableColumn = columnIndex(stack.header, "Accountable plan", 1);
+  const accounted = new Set(stack.rows.map((row) => cellText(row[accountableColumn] ?? "")));
+  for (const row of plans.rows) {
+    const planId = cellText(row[idColumn] ?? "");
+    if (planId === "" || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
+    if (accounted.has(planId)) continue;
+    violations.push(
+      violation(
+        "medium",
+        "lint.iteration.pr-stack-missing-row",
+        `plan "${planId}" is Done but no \`## PR stack\` row names it as the Accountable plan (pr-stack.md \u00a7 Records)`,
+        `add a PR stack row whose Accountable plan cell is "${planId}" and record the layer ref, witnessed base and head`,
+      ),
+    );
+  }
+  return { ok: violations.length === 0, violations };
+}
+
 /* ------------------------------------------------------------------ */
 /* Document layers: {SPECS_DIR} and {ADR_DIR}                          */
 /* ------------------------------------------------------------------ */

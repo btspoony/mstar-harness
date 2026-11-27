@@ -43,6 +43,7 @@ import {
   probeCheckoutRoot,
   resolveHarnessDir,
   lintAdrTree,
+  lintIterationCompass,
   lintFiveQuestion,
   lintFrontmatter,
   lintLoadOrder,
@@ -242,15 +243,22 @@ function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, con
 /** why: one extension source — the engine list the CI selector is asserted against, never a second literal. */
 const codeExtensions: Record<string, true> = Object.fromEntries(CODE_FILE_EXTENSIONS.map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
-/** why: a forced type selects files by extension, so a directory walk under
- * `--type code` must collect only code - a SKILL.md the same walk sees carries
+/** why: a forced type selects its files — an extension set for the
+ * dialect-shaped types, and the compass filename for `iteration`, whose
+ * subject is one known document rather than every Markdown file a walk sees.
+ * `--type code` must collect only code: a SKILL.md the same walk sees carries
  * fixtures and prose the code rules do not describe. */
-const typeExtensions: Partial<Record<LintType, Record<string, true>>> = { code: codeExtensions, provenance: provenanceExtensions };
+const typeAccept: Partial<Record<LintType, (file: string) => boolean>> = {
+  code: (file) => codeExtensions[path.extname(file).toLowerCase()] === true,
+  provenance: (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true,
+  iteration: (file) => path.basename(file) === "delivery-compass.md",
+};
 /** why: `fixtures` is pruned from EVERY walk this collector feeds (comment, provenance, any `--type`), not just the comment one: those trees hold deliberately broken artifacts (a `broken-skill` SKILL.md among them), so walking them would report the fixtures' own defects as the tree's, and a narrower prune would only add that noise. Other entries are build output no walk reads. The provenance guard in `scripts/drift-lint.ts` keeps its own exempt set for its own walk. */
 const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true, fixtures: true };
-type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr" | "acceptance";
+type LintType = "plan" | "skill" | "strategy" | "report" | "code" | "finding" | "provenance" | "specs" | "adr" | "acceptance" | "iteration";
 function lintType(file: string): LintType | null {
   const base = path.basename(file);
+  if (base === "delivery-compass.md") return "iteration";
   if (base === "STRATEGY.md") return "strategy";
   if (base === "SKILL.md") return "skill";
   if (/^task-\d+-report\.md$/i.test(base)) return "report";
@@ -527,6 +535,7 @@ function lintOne(file: string, cwd: string, pointerCache: Map<string, boolean>, 
       }
       break;
     case "finding": violations.push(...validateFindingDoc(text, prVariant ? { prVariant: true } : {}).violations); break;
+    case "iteration": violations.push(...lintIterationCompass(text).violations); break;
     case "provenance":
       for (const citation of findProvenanceCitations(text)) violations.push({ ok: false, severity: "medium", code: `lint.provenance.${citation.kind}`, message: `provenance ${citation.kind} citation at line ${citation.line}: "${citation.match}" — tracked content must not disclose local plan/iteration ids or dated harness deep paths`, fix: `rewrite "${citation.match}" as a placeholder form (e.g. task-N-report, <plan-id>) or a synthetic example slug (any -example- segment)` });
       break;
@@ -839,7 +848,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
       case "lint": {
         const target = required(input.target, "usage: lint <target> (file or dir)");
         const forced = input.type?.trim().toLowerCase();
-        const known = ["plan", "skill", "strategy", "report", "code", "finding", "provenance", "specs", "adr", "acceptance"];
+        const known = ["plan", "skill", "strategy", "report", "code", "finding", "provenance", "specs", "adr", "acceptance", "iteration"];
         if (forced !== undefined && !known.includes(forced)) throw new SddScriptError(`usage: lint --type must be one of ${known.join(" | ")}, got ${JSON.stringify(input.type)}`, 2);
         const abs = absolute(context.cwd, target);
         if (!existsSync(abs)) throw new Error(`lint target not found: ${abs}`);
@@ -865,12 +874,8 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           const results = [{ file: abs, violations: lintDocLayer(forced, abs, isDir), markers: [] as string[] }];
           return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, rerun) : ok(id, { results });
         }
-        const extensions = forced === undefined ? undefined : typeExtensions[forced as LintType];
-        const targets = !isDir
-          ? [abs]
-          : extensions === undefined
-            ? collectTargets(abs)
-            : collectTargets(abs, (file) => extensions[path.extname(file).toLowerCase()] === true);
+        const accept = forced === undefined ? undefined : typeAccept[forced as LintType];
+        const targets = !isDir ? [abs] : accept === undefined ? collectTargets(abs) : collectTargets(abs, accept);
         // why: `--diff-base` is the ratchet - a finding is reported only when
         // the change adds or modifies a line of it, and a file the diff does
         // not mention keeps an empty range list so it reports none.
@@ -1142,7 +1147,7 @@ const contract: Record<(typeof verbs)[number], { path: string[]; args: { key: st
   "worktree.check": { path: ["worktree", "check"], args: [{ key: "planId", required: false, variadic: false }], options: [{ key: "plan", flags: "--plan <plan-id>" }, { key: "workflow", flags: "--workflow <id>" }, { key: "entry", flags: "--entry" }, { key: "harness", flags: "--harness <path>" }, { key: "integration", flags: "--integration <path>" }, { key: "mainBranch", flags: "--main-branch <branch>" }, { key: "control", flags: "--control <path>" }, { key: "l2", flags: "--l2" }, { key: "controlClean", flags: "--control-clean" }, { key: "tracks", flags: "--tracks <json>" }], effects: ["read", "validate", "process"], description: "Check engine-enforced workflow-entry facts, the L1/L2 worktree pre-dispatch gate, or the control root tracked-change gate (--control-clean: refuses while the Git main worktree carries committable changes; a repository without .mstar/ or .mstarc has no control-root contract and skips)." },
   "worktree.qc-alignment": { path: ["worktree", "qc-alignment"], args: [{ key: "files", required: true, variadic: true }], options: [], effects: ["read", "validate"], description: "Assert QC/QA Assignment alignment." },
   "review.seats": { path: ["review", "seats"], args: [{ key: "assignmentFile", required: true, variadic: false }], options: [{ key: "mode", flags: "--mode <mode>" }, { key: "reviewers", flags: "--reviewers <list>" }], effects: ["read", "validate"], description: "Map execution mode to QC seat count and assert tri identity." },
-  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr | acceptance). A directory is walked; only `code` and `provenance` define an extension set, so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. `--type acceptance` validates ONE PM acceptance report's front matter (plan_id, gate, verdict, generated_at) against the shared `pm-acceptance` document schema and refuses a directory target, naming the report file. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
+  lint: { path: ["lint"], args: [{ key: "target", required: true, variadic: false }], options: [{ key: "type", flags: "--type <type>" }, { key: "prVariant", flags: "--pr-variant" }, { key: "diffBase", flags: "--diff-base <ref>" }], effects: ["read", "validate", "process"], description: "Lint harness artifacts by content type (plan | skill | strategy | report | code | finding | provenance | specs | adr | acceptance | iteration). A directory is walked; only `code`, `provenance` and `iteration` define a file selector (an extension set, and the `delivery-compass.md` name), so `--type` narrows that walk only for them (`--type code` is the form the comment gate runs), while every other type walks every collected file - except `specs` and `adr`, which run their own document-layer tree check instead. `--type acceptance` validates ONE PM acceptance report's front matter (plan_id, gate, verdict, generated_at) against the shared `pm-acceptance` document schema and refuses a directory target, naming the report file. An unclassified comment without `--diff-base` is an advisory marker, with one `unclassified comments: <n>` summary line on stderr; `--diff-base <ref>` turns it into a violation on any comment line the change adds or modifies (any line of a block counts), which refuses the run and exits 1." },
   "design-md.validate": { path: ["design-md", "validate"], args: [{ key: "dir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Validate DESIGN.md token frontmatter, parity and completeness." },
   "compound.validate": { path: ["compound", "validate"], args: [{ key: "docPath", required: true, variadic: false }], options: [{ key: "knowledgeDir", flags: "--knowledge-dir <dir>" }], effects: ["read", "validate"], description: "Validate a knowledge document and optional index scope." },
   "skill.lint": { path: ["skill", "lint"], args: [{ key: "skillDir", required: true, variadic: false }], options: [], effects: ["read", "validate"], description: "Lint a skill directory." },
