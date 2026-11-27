@@ -1694,7 +1694,7 @@ export function unpublishedCompassPlanIds(text: string, options: IterationCompas
  * inspected — not readiness, not the PR column's shape, not repo columns, not
  * row order. A `—` PR cell still counts as a row (an empty integration range
  * needs no PR).
- * see docs/adr/proposed/process/2026-11-27-iteration-layer-publication-lint.md
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
  */
 export function lintIterationCompass(text: string, options: IterationCompassOptions = {}): GateResult {
   const violations: ValidationResult[] = [];

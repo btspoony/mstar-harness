@@ -4901,7 +4901,7 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
 
 /* ------------------------------------------------------------------------ *
  * The iteration layer-publication reminder on `complete`
- * (docs/adr/proposed/process/2026-11-27-iteration-layer-publication-lint.md)
+ * (docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md)
  * ------------------------------------------------------------------------ */
 
 /** The fixture's compass with a real `## Plans` / `## PR stack` body. A `null`
