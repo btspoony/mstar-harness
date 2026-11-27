@@ -107,4 +107,77 @@ describe("lintIterationCompass", () => {
     expect(result.ok).toBe(false);
     expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-section"]);
   });
+
+  test("a later table under the PR stack heading is not a row of the stack", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}
+Prose between the real table and an example table.
+
+| name | Accountable plan |
+|---|---|
+| example | p1-store |
+`);
+    expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
+    expect(result.violations[0]?.message).toContain("p1-store");
+  });
+
+  test("plan ids compare exactly, so p1 does not account for p_1", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p_1 | Underscored | Done |
+| p1 | Plain | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p1 | o/r #1 |
+`);
+    expect(result.violations).toHaveLength(1);
+    expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
+    expect(result.violations[0]?.message).toContain('"p_1"');
+  });
+
+  test("marks wrapping a cell are formatting, not part of the id", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}| s1 | \`**p1-store**\` | \u2014 | layer <- main | a -> b | landed | empty range |
+`);
+    expect(result).toEqual({ ok: true, violations: [] });
+  });
+
+  test("an empty Plans table reports nothing", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+${COMPASS_STACK_HEAD}`);
+    expect(result).toEqual({ ok: true, violations: [] });
+  });
+
+  test("a plan that is not Done needs no PR stack row", () => {
+    const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p2-board | Planboard | InProgress |
+${COMPASS_STACK_HEAD}`);
+    expect(result.ok).toBe(true);
+    expect(result.violations).toEqual([]);
+  });
+
+  test("a fenced example table is not a row of the stack", () => {
+    const result = lintIterationCompass(`${COMPASS_HEAD}${COMPASS_STACK_HEAD}
+~~~
+| s1 | p1-store | o/r #6 | layer <- main | a -> b | landed | merged |
+~~~
+`);
+    expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-row"]);
+    expect(result.violations[0]?.message).toContain("p1-store");
+  });
 });

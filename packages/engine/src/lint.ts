@@ -1590,17 +1590,21 @@ export function lintStrategySections(docText: string): GateResult {
  * separator row (`|---|---|`) is formatting, not a row. */
 type CompassTable = { header: string[]; rows: string[][] };
 
-/** The Markdown table under the level-2 `## <name>` heading, or `null` when
- * the document carries no such section. Scanning stops at the next level-2
- * heading, so a later table never joins this one. */
+/** why: the table under the heading, not every pipe row until the next
+ * heading — a later table in the same section is another document's example,
+ * never a row of this one. Leading blank lines are allowed; the table ends at
+ * the first blank line or non-row line once it has started. */
 function compassTable(lines: readonly string[], name: string): CompassTable | null {
   const start = lines.findIndex((line) => line.trim().startsWith("## ") && hasSectionName([line.trim().slice(3).trim()], name));
   if (start < 0) return null;
   const rows: string[][] = [];
   for (let index = start + 1; index < lines.length; index++) {
     const line = lines[index]!.trim();
-    if (line.startsWith("## ")) break;
-    if (!line.startsWith("|")) continue;
+    if (line === "") {
+      if (rows.length > 0) break;
+      continue;
+    }
+    if (!line.startsWith("|")) break;
     const cells = line.replace(/^\|/, "").replace(/\|$/, "").split("|").map((cell) => cell.trim());
     if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
     rows.push(cells);
@@ -1609,9 +1613,14 @@ function compassTable(lines: readonly string[], name: string): CompassTable | nu
   return { header: header ?? [], rows: data };
 }
 
-/** A cell's comparable text: emphasis and code marks are formatting. */
+/** A cell's comparable text: emphasis and code marks WRAPPING the whole cell
+ * are formatting; a mark inside it is part of the value, so `p_1` and `p1`
+ * stay distinct ids. */
 function cellText(cell: string): string {
-  return cell.replace(/[`*_]/g, "").trim();
+  let text = cell.trim();
+  const wrapper = /^([`*_]+)(.*)\1$/s;
+  for (let match = wrapper.exec(text); match !== null; match = wrapper.exec(text)) text = match[2]!.trim();
+  return text;
 }
 
 /** Index of the named column, or the positional fallback when a compass

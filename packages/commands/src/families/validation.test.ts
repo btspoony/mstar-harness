@@ -539,4 +539,12 @@ describe("lint --type iteration", () => {
     if (result.status !== "ok") throw new Error(`expected an ok envelope, got ${result.status}`);
     expect((result.data as { results: unknown[] }).results).toEqual([]);
   });
+
+  test("an unrelated file named explicitly is not treated as a compass", async () => {
+    const result = await withTree(
+      { "notes/readme.md": "# Notes\n\n## Plans\n\n| plan_id | Status |\n|---|---|\n| p1 | Done |\n" },
+      (dir) => runLint(dir, { target: "notes/readme.md", type: "iteration" }),
+    );
+    expect(result).toMatchObject({ status: "ok", exitCode: 0, data: { results: [] } });
+  });
 });

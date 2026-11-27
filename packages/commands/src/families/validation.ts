@@ -243,6 +243,9 @@ function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, con
 /** why: one extension source — the engine list the CI selector is asserted against, never a second literal. */
 const codeExtensions: Record<string, true> = Object.fromEntries(CODE_FILE_EXTENSIONS.map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
+/** why: `iteration` names ONE document — the iteration's own compass — so its
+ * selector is that filename, and it governs a named file as much as a walk. */
+const isCompass = (file: string): boolean => path.basename(file) === "delivery-compass.md";
 /** why: a forced type selects its files — an extension set for the
  * dialect-shaped types, and the compass filename for `iteration`, whose
  * subject is one known document rather than every Markdown file a walk sees.
@@ -251,7 +254,7 @@ const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
 const typeAccept: Partial<Record<LintType, (file: string) => boolean>> = {
   code: (file) => codeExtensions[path.extname(file).toLowerCase()] === true,
   provenance: (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true,
-  iteration: (file) => path.basename(file) === "delivery-compass.md",
+  iteration: isCompass,
 };
 /** why: `fixtures` is pruned from EVERY walk this collector feeds (comment, provenance, any `--type`), not just the comment one: those trees hold deliberately broken artifacts (a `broken-skill` SKILL.md among them), so walking them would report the fixtures' own defects as the tree's, and a narrower prune would only add that noise. Other entries are build output no walk reads. The provenance guard in `scripts/drift-lint.ts` keeps its own exempt set for its own walk. */
 const skipDirs: Record<string, true> = { node_modules: true, ".git": true, dist: true, coverage: true, ".turbo": true, fixtures: true };
@@ -875,7 +878,11 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
           return results.some((result) => result.violations.length) ? refusal(id, results[0]!.violations[0]?.code ?? "lint.violations", "lint violations found", { results }, rerun) : ok(id, { results });
         }
         const accept = forced === undefined ? undefined : typeAccept[forced as LintType];
-        const targets = !isDir ? [abs] : accept === undefined ? collectTargets(abs) : collectTargets(abs, accept);
+        // why: `iteration` names ONE document, so a file the caller names is
+        // no more a compass than one a walk sees — `--type iteration` on a
+        // note must check nothing, never run the compass rule over prose.
+        const selected = !isDir && forced === "iteration" && !isCompass(abs) ? [] : undefined;
+        const targets = selected ?? (!isDir ? [abs] : accept === undefined ? collectTargets(abs) : collectTargets(abs, accept));
         // why: `--diff-base` is the ratchet - a finding is reported only when
         // the change adds or modifies a line of it, and a file the diff does
         // not mention keeps an empty range list so it reports none.
