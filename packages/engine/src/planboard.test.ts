@@ -21,10 +21,20 @@ import {
   createRemoteScope,
   positiveCheck,
   REMOTE_IDS,
+  SECOND_IDS,
+  secondCheck,
+  secondSnapshot,
   submission,
 } from "./remote-scope.fixture.js";
-import { captureIssue, closeIssue, type CaptureInput, type MutationContext } from "./issue.js";
-import { PLANBOARD_FILE, checkPlanboard, parsePlanboard, type PlanboardFinding } from "./planboard.js";
+import { IssueError, captureIssue, closeIssue, type CaptureInput, type MutationContext } from "./issue.js";
+import { remoteIssueRead } from "./collaboration-remote-read.js";
+import {
+  PLANBOARD_FILE,
+  checkPlanboard,
+  parsePlanboard,
+  setRemoteIssueReadForTest,
+  type PlanboardFinding,
+} from "./planboard.js";
 import type { StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-planboard-test-"));
@@ -480,6 +490,148 @@ describe("planboard findings against a store", () => {
     const findings = (await checkPlanboard(context)).findings;
     expect(pairs(findings)).toEqual([{ code: "stale", line: 3 }]);
     expect(findings[0]!.issueId).toBe(REMOTE_IDS.issueRef);
+  });
+
+  test("a remote per-id refusal answers only its own line and the loop keeps resolving", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-remote-per-id");
+    const commit = fixture.publish({
+      projects: [
+        {
+          localProjectId: REMOTE_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: REMOTE_IDS.providerProjectId,
+          journalIssueId: REMOTE_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+        {
+          localProjectId: SECOND_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: SECOND_IDS.providerProjectId,
+          journalIssueId: SECOND_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+      ],
+    });
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit, 3, [secondCheck()]));
+    const checkA = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, checkA, completeSnapshot(checkA), 0));
+    // see packages/engine/src/planboard.test.ts - // note: Project B declares a stream gap, so a reference that must read every
+    // selected project refuses for its own line only; a display id refuses on its own rule.
+    const checkB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, checkB, secondSnapshot(checkB, "partial"), 0));
+
+    board(
+      context.harnessDir,
+      [
+        "review_after: 2099-01-01",
+        "## Captured",
+        `- ${REMOTE_IDS.issueRef} \u2014 blocks on the second project's declared gap`,
+        "- I-000001 \u2014 a display id no remote snapshot addresses",
+      ].join("\n"),
+    );
+    const findings = (await checkPlanboard(context)).findings;
+    // see packages/engine/src/planboard.test.ts - // invariant: A per-id refusal is that line's own answer; the loop keeps going,
+    // so the next line reports the cause it actually hit rather than the previous line's.
+    expect(findings.map(({ code, line, issueId, storeCode }) => ({ code, line, issueId, storeCode }))).toEqual([
+      { code: "unverified", line: 3, issueId: REMOTE_IDS.issueRef, storeCode: "collaboration.observation-incomplete" },
+      { code: "unverified", line: 4, issueId: "I-000001", storeCode: "issue.scope-refused" },
+    ]);
+  });
+
+  test("a per-id refusal is followed by lines the admitted snapshot does resolve", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-remote-after-refusal");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+    // see packages/engine/src/planboard.test.ts - // note: TEST-ONLY seam: `issue.ambiguous-identity` is a per-id refusal the public
+    // fixture cannot stage after a resolvable line, so only the first line's read is replaced;
+    // the second and third lines read the real admitted snapshot.
+    const refusal = new IssueError("issue.ambiguous-identity", "the observer's identity does not own this issue");
+    setRemoteIssueReadForTest((view, id) => {
+      if (id === "I-000001") throw refusal;
+      return remoteIssueRead(view, id);
+    });
+    try {
+      board(
+        context.harnessDir,
+        [
+          "review_after: 2099-01-01",
+          "## Captured",
+          "- I-000001 \u2014 a per-id refusal no later line may inherit",
+          `- ${REMOTE_IDS.issueRef} \u2014 open in the admitted snapshot`,
+          "- mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc \u2014 a reference the snapshot lacks",
+        ].join("\n"),
+      );
+      const findings = (await checkPlanboard(context)).findings;
+      // see packages/engine/src/planboard.test.ts - // invariant: The refusal decides one line only: the open line resolves to no
+      // finding and the absent line reports its own completed answer, never the refusal above them.
+      expect(findings.map(({ code, line, issueId, storeCode }) => ({ code, line, issueId, storeCode }))).toEqual([
+        { code: "unverified", line: 3, issueId: "I-000001", storeCode: "issue.ambiguous-identity" },
+        { code: "missing", line: 5, issueId: "mstar:issue:cccccccc-cccc-4ccc-8ccc-cccccccccccc", storeCode: undefined },
+      ]);
+    } finally {
+      setRemoteIssueReadForTest(undefined);
+    }
+  });
+
+  test("a lane-level refusal raised inside the per-id loop answers the remaining lines", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-remote-lane-in-loop");
+    const commit = fixture.publish({
+      projects: [
+        {
+          localProjectId: REMOTE_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: REMOTE_IDS.providerProjectId,
+          journalIssueId: REMOTE_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+        {
+          localProjectId: SECOND_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: SECOND_IDS.providerProjectId,
+          journalIssueId: SECOND_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+      ],
+    });
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit, 3, [secondCheck()]));
+    const checkA = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, checkA, completeSnapshot(checkA), 0));
+    // see packages/engine/src/planboard.test.ts - // note: The second selected project is bound but no observation was ever
+    // admitted for it, so the view opens and a reference read refuses the whole lane from
+    // inside the loop (that read spans every selected project, and one has no snapshot).
+    board(
+      context.harnessDir,
+      [
+        "review_after: 2099-01-01",
+        "## Captured",
+        "- I-000001 \u2014 a display id, answered on its own line before the lane refusal",
+        `- ${REMOTE_IDS.issueRef} \u2014 spans both selected projects`,
+        "- I-000002 \u2014 a display id, which would refuse on its own rule if it were read",
+      ].join("\n"),
+    );
+    const findings = (await checkPlanboard(context)).findings;
+    // see packages/engine/src/planboard.test.ts - // invariant: Line 3 answers per-id, so the loop ran and the view was open;
+    // the lane refusal raised on line 4 then answers the remaining line with the same cause
+    // and without reading it again — a further read of a display id would answer
+    // `issue.scope-refused` instead.
+    expect(findings.map(({ code, line, issueId, storeCode }) => ({ code, line, issueId, storeCode }))).toEqual([
+      { code: "unverified", line: 3, issueId: "I-000001", storeCode: "issue.scope-refused" },
+      { code: "unverified", line: 4, issueId: REMOTE_IDS.issueRef, storeCode: "remote.unavailable" },
+      { code: "unverified", line: 5, issueId: "I-000002", storeCode: "remote.unavailable" },
+    ]);
   });
 });
 
