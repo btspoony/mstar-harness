@@ -1940,8 +1940,9 @@ const ADR_ARCHIVED_LINE = /^Archived: \d{4}-\d{2}-\d{2} \u2014 .+$/;
 
 /** see docs/adr/README.md - a demoted marker in any list-marker or emphasis
  * spelling; the label is case-insensitive, and its emphasis pair may close
- * before the colon or after it. */
-const ADR_SUPERSEDED_BY = /^\s*(?:[-*+]\s+)?(?:\*+|_+)?superseded-by(?:\*+|_+)?:(?:\*+|_+)?\s*(.*)$/i;
+ * before the colon or after it. The one list marker is a bullet or an ordered
+ * `1.`/`1)` form, never a nested level. */
+const ADR_SUPERSEDED_BY = /^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(?:\*+|_+)?superseded-by(?:\*+|_+)?:(?:\*+|_+)?\s*(.*)$/i;
 
 /** Required and banned sections per bucket. `archived` reuses the implemented
  * shape: it accepts implemented records only. */

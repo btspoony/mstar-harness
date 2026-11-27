@@ -160,7 +160,7 @@ A bound checkout admits only the generation it recorded: a different repository 
 
 ## A worked cutover
 
-The receipts below follow the shape of this repository's own cutover, with every identifier, digest and timestamp replaced by a synthetic placeholder of the same form and the row counts made illustrative. The real receipts are the PM acceptance record for that cutover and are not tracked here. They are not a second cutover and not a template to replay: each document is what the corresponding rung returned, so you can compare your own run against a known shape.
+The receipts below follow the shape of this repository's own cutover, with every identifier, digest and timestamp replaced by a synthetic placeholder of the same form and the row counts made illustrative and abbreviated. The real receipts are the PM acceptance record for that cutover and are not tracked here. They are not a second cutover and not a template to replay: each document is what the corresponding rung returned, so you can compare your own run against a known shape.
 
 **Rung 1 refused with `collaboration.cutover-required` after advancing the execution schema.** That refusal is the expected progress marker, not a failure: the collaboration rows still belonged to `store.db`, and no cutover verb had run yet.
 
@@ -180,7 +180,7 @@ The receipts below follow the shape of this repository's own cutover, with every
   "repoKey": "github.com/btspoony/mstar-harness",
   "mode": "local",
   "sourceDigest": "5c0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8",
-  "counts": { "issues": 96, "occurrences": 128, "relations": 4, "project_milestones": 2, "project_roadmaps": 1 },
+  "counts": { "issues": 96, "occurrences": 128, "relations": 4, "project_milestones": 2 },
   "blockers": []
 }
 ```
@@ -370,7 +370,7 @@ Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and
 
 ## Limits you must plan around
 
-**Cross-authority project moves and relations are not in 5.0.** Moving an issue between projects whose authorities differ — the staged move, interruption recovery before membership switches, and `IssueRef`/history preservation across authorities — is unproven and not implemented. `moveIssue` refuses a `remote` checkout with `collaboration.mode-unavailable`, and no verb stages or completes a cross-authority move, so nothing on this page depends on one. Cross-authority relation resolution is likewise absent: the ADR requires that a relation whose target cannot be resolved across authorities stay visible as unresolved rather than absent, but that behaviour is a requirement for the deferred iteration, not an observable you can rely on in this build. Only the refusal boundary is asserted — the observed issue, selector, and binding are unchanged and no intent is recorded — and this is tracked as open issue `I-001235`.
+**Cross-authority project moves work on every path except remote to remote.** `mstar issue move --id <issue-id> --to-authority <repo-key> --payload '{"projectId":"<target>","reason":"<text>"}' --expect <issue-revision> --expect-store <store-revision>` carries one record — with its occurrence, transition, provenance and relation history — to a project another authority owns. The move is a per-record ledger, not one transaction: the source row is a fence, so a staged record keeps its `IssueRef` and refuses every write until the move publishes or is discarded, and reissuing the same command resumes from whatever phase the ledger holds. Local to local runs as one checkout writing both lanes and needs no handoff. A `local`/`remote` boundary is a two-checkout exchange: the side that stages emits the handoff with `--out <path>`, the other continues it with `--input <path>`, and each half writes only the lane its own mode selects. Remote to remote stays unsupported: `mstar issue move` refuses it with `collaboration.mode-unavailable` before staging anything, because the two provider records would have to be rewritten into each other's selector generation as one event, which no admitted transition expresses. A relation whose target cannot be resolved across authorities stays visible as unresolved (`to_ref` set, `to_issue` empty) rather than absent, and localises to the destination's display id when the record arrives. Proven on one checkout and across the two-checkout exchange inside the controlled-host boundary; live provider behaviour is unverified, as stated below. Tracked under `I-001235`.
 
 **Live provider behaviour is unverified.** The remote lane, the private cache, the outbox, and the sandbox handoff are proven against a controlled host fixture — two sandboxes with separate `HOME` and workspace, a local bare Git origin, and in-process provider state. Live Linear permissions, field-fidelity and privacy limits, exact event round-tripping, Git server protection of the selector ref, and operational sender exclusion remain unverified until a separately authorized release or operational acceptance. Do not treat this page as a claim about a specific workspace.
 

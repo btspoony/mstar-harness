@@ -2105,6 +2105,8 @@ describe("lintAdrTree", () => {
     "SUPERSEDED-BY: 2026-02-01-replacement.md",
     "**Superseded-by**: 2026-02-01-replacement.md",
     "- **Superseded-by:** **2026-02-01-replacement.md**",
+    "1. **Superseded-by:** 2026-02-01-replacement.md",
+    "2) __Superseded-by__: 2026-02-01-replacement.md",
   ])('a record carrying "%s" under implemented/ fails as implemented-superseded', (line) => {
     const result = withTree(
       { "implemented/architecture/2026-01-14-demoted.md": demotedRecord(line) },
@@ -2114,7 +2116,7 @@ describe("lintAdrTree", () => {
     expect(result.failures[0]!.file).toBe("implemented/architecture/2026-01-14-demoted.md");
     expect(result.failures[0]!.message).toContain('"Superseded-by: 2026-02-01-replacement.md"');
     expect(result.failures[0]!.recovery).toContain("superseded by 2026-02-01-replacement.md");
-    // The closing quote pins the bare name: a wrapped value must not leak its emphasis into the recovery.
+    // see packages/engine/src/lint.ts - the emphasis strip covers the value too, so a wrapped replacement name reaches the recovery bare.
     expect(result.failures[0]!.recovery).toContain('superseded by 2026-02-01-replacement.md" right after');
     expect(result.failures[0]!.recovery).toContain("remove the Superseded-by: line");
   });

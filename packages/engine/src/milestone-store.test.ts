@@ -258,7 +258,7 @@ describe("milestone store", () => {
     try {
       // see packages/engine/src/store-read.ts - issue-only project, no milestones: the per-project read this names read replaces refused `milestone.project-not-found`, so the joined read refuses instead of answering with an empty list.
       await expect(withStoreRead(context, queryMilestoneNames())).rejects.toMatchObject({ code: "milestone.project-not-found", message: `[milestone.project-not-found] Project ${absent} does not exist.` });
-      // note: enforcement only lives on store-opened connections, so this legacy-shape row is staged with FKs off — it is the residue an older store can already hold.
+      // see packages/engine/src/store-db.ts - foreign_keys=ON is applied by the opener, so staging this legacy row needs the pragma off on this raw connection.
       db.exec("pragma foreign_keys=OFF");
       db.prepare("insert into project_milestones(milestone_id,project_id,name,ordinal,created_at,updated_at) values('M-NAMES-ABSENT',?,'Absent milestone',0,'now','now')").run(absent);
       db.exec("pragma foreign_keys=ON");
