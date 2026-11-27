@@ -1165,14 +1165,7 @@ export type Migration = {
   requiresTable?: string;
 };
 
-/**
- * invariant: Refuse a schema advance that would strand an open mirror run in a combined store.
- *
- * `sync_runs` is settlement state the 4.9.x mirror lane owns, and it settles the
- * run only in the combined store - the split lane (and so every 5.0 build's
- * `issue-sync`) refuses that mode. The fence migration is the last version that
- * build admits, so the batch stops here while the store is still readable by it.
- */
+/** See docs/specs/architecture/collaboration-authority.md — a fenced combined store cannot settle an open mirror run. */
 function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
   const runs = openMirrorRuns(db);
   if (runs.length === 0) return;

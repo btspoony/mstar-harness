@@ -403,10 +403,6 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
             operator,
             attestation: attestation === undefined ? undefined : validateActivationAttestation(attestation),
           });
-          // invariant: The refusal must disclose what it changed: the schema now stands past the
-          // last released 4.9.x build's ceiling, and nothing lowers it, so that build refuses
-          // this store as `store.schema-unsupported` even after the cutover. The ladder is
-          // therefore this newer build's to complete — the original cause stays verbatim.
           throw new StoreError(
             "collaboration.cutover-required",
             `${error.message.replace(/^\[[^\]]+\]\s*/, "")} ` +
