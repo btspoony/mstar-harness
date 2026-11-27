@@ -16,7 +16,8 @@
  * Nothing here is a public surface: the package index publishes only
  * `mutateExecutionPlan`.
  */
-import { dirname, isAbsolute } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, isAbsolute, join } from "node:path";
 import {
   assertCatalogExecutionCommittedOn,
   openSplitJournal,
@@ -37,6 +38,7 @@ import {
   type PlanPrepareConfig,
   type PreparedCoordination,
 } from "./coordination-write.js";
+import { earlierLayerObligation } from "./lint.js";
 import {
   ExecutionPinConflictError,
   assertEvidenceInsidePlanArea,
@@ -1799,6 +1801,85 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
 }
 
 /**
+ * The iteration layer-publication reminder (`pr-stack.md` § Records): the
+ * plans registered EARLIER in this workflow and already `Done` with no
+ * `## PR stack` row refuse the completion. The completing plan is never judged —
+ * its own layer is published after compound, so a self-check would deadlock.
+ *
+ * The earlier window comes from the workflow snapshot's plan rows — their
+ * registration order and stored status — because that is the execution
+ * authority: a publication held by a size stop stays visible while the compass
+ * `Status` cell still lags, and reading that cell would let the lagging document
+ * hide an unpaid obligation. The compass therefore supplies row existence only:
+ * a `## PR stack` section or `Accountable plan` column this check cannot read
+ * records no plan layer, so it refuses as unverifiable instead of crediting a
+ * neighbouring column.
+ *
+ * `compass_ref` is the workflow's registered harness-relative pointer, resolved
+ * against the control harness root exactly as `mstar workflow compass-ref`
+ * stores it. An unset pointer or an unreadable file skips the check: locating
+ * the compass is the registration/compass checks' business, and this reminder
+ * never invents a second refusal for a document it cannot read.
+ *
+ * Every refusal names the store-derived plans it blocks on, so the transport's
+ * "each plan named by the refusal" recovery is true for all three reasons.
+ * see skills/mstar-iteration/references/pr-stack.md
+ */
+function assertEarlierLayersPublished(context: ExecutionContext, snapshot: WorkflowSnapshot, planId: string): void {
+  const ref = snapshot.compass_ref;
+  if (!isNonEmptyString(ref)) return;
+  const path = join(controlHarnessRoot(context), ref);
+  if (!existsSync(path)) return;
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return;
+  }
+  const earlierPlanIds: string[] = [];
+  for (const row of snapshot.plans) {
+    const id = typeof row.id === "string" ? row.id : row.plan_id;
+    if (id === planId) break;
+    if (typeof id === "string" && id !== "" && row.status === "Done") earlierPlanIds.push(id);
+  }
+  const obligation = earlierLayerObligation(text, { earlierPlanIds });
+  if (obligation.ok) return;
+  const details = {
+    plan_id: planId,
+    workflow_id: snapshot.id,
+    compass_ref: ref,
+    reason: obligation.reason,
+    unpublished_plan_ids: earlierPlanIds,
+  };
+  const blocking = earlierPlanIds.map((id) => `"${id}"`).join(", ");
+  if (obligation.reason === "header-missing") {
+    // reachability: manual — the message names the runtime block ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
+    throw new CoordinationError(
+      "coordination.layer-unpublished",
+      `The compass \`## PR stack\` table carries no \`Accountable plan\` column, so no row records a plan layer and rows added under another header are ignored; the earlier Done plans left unrecorded are ${blocking}. Add that column and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --integration-base-sha <base> --integration-result-sha <result> (same --operation id).`,
+      details,
+    );
+  }
+  if (obligation.reason === "section-missing") {
+    // reachability: manual — the message names the runtime block ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
+    throw new CoordinationError(
+      "coordination.layer-unpublished",
+      `The compass carries no \`## PR stack\` section, so no layer record names any plan's publication; the earlier Done plans left unrecorded are ${blocking}. Add that section and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --integration-base-sha <base> --integration-result-sha <result> (same --operation id).`,
+      details,
+    );
+  }
+  // Only the plans this reason leaves unrecorded; see skills/mstar-iteration/references/pr-stack.md
+  const unrecorded = obligation.planIds.map((id) => `"${id}"`).join(", ");
+  // reachability: manual — the message names the runtime unrecorded plan ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
+  throw new CoordinationError(
+    "coordination.layer-unpublished",
+    `An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass \`## PR stack\` table, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --integration-base-sha <base> --integration-result-sha <result> (same --operation id). The unrecorded plans are ${unrecorded}. ` +
+      "The row names a real layer PR, or `\u2014` for an empty range, or the iteration's already-open aggregate PR; a compass without that section needs it added first, with one row per Done plan.",
+    { ...details, unpublished_plan_ids: obligation.planIds },
+  );
+}
+
+/**
  * §D/§E one plan's own scope as the addressed ROW records it: the plan worktree
  * and branch an authorized `prepare` recorded into `metadata`. The DB route has
  * no resolved file scope — the row IS the scope — so every Git proof below is
@@ -2246,6 +2327,10 @@ async function captureCompletionWitnesses(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId: read.planId, integration: operation.integration, what: "complete" });
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+  if (snapshot.type === "iteration" && route === "integration") {
+    assertEarlierLayersPublished(context, snapshot, read.planId);
+  }
   const evidence = readCompletionEvidence(operation.evidence);
   const prepared = effectivePrepareConfig(before.data);
   assertCompletionReviewDecision(evidence, read.planId, prepared.qa_gate);

@@ -89,6 +89,11 @@ export const COORDINATION_ERROR_CODES = [
   // read as a v2 register, so its entry could not be removed — an explicit
   // PARTIAL close the caller resolves by migrating the register and retrying.
   "coordination.root-register-unwritable",
+  // The iteration layer-publication reminder (`pr-stack.md` § Records): an
+  // earlier Done plan of this workflow has no `## PR stack` row, so the layer
+  // that plan owns was never published and its review landed elsewhere.
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+  "coordination.layer-unpublished",
 ] as const;
 
 export type CoordinationErrorCode = (typeof COORDINATION_ERROR_CODES)[number];

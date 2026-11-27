@@ -29,7 +29,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { executeCommand } from "@mstar-harness/commands";
@@ -2104,7 +2104,14 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
       "plans:\n" +
       `  - ${CONTINUATION_PLAN_A}\n` +
       `  - ${CONTINUATION_PLAN_B}\n` +
-      "---\n",
+      "---\n" +
+      // Completion refuses while an EARLIER Done plan has no layer row, so the
+      // table ships empty and the loop records each plan's row as it completes.
+      // see skills/mstar-iteration/references/pr-stack.md
+      "## PR stack\n" +
+      "\n" +
+      "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |\n" +
+      "|---|---|---|---|---|---|---|\n",
   );
 
   const integrationPath = join(root, "wt-integration");
@@ -2308,6 +2315,16 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
         `${label} complete`,
       );
       expect(jsonOf(completed).command).toBe("plan.complete");
+
+      // The plan's layer row lands right after its completion, because the next
+      // plan's completion refuses while an earlier Done plan has no row. The row
+      // is a record, so an empty integration range takes the em dash.
+      // see skills/mstar-iteration/references/pr-stack.md
+      appendFileSync(
+        join(fixture.harnessDir, CONTINUATION_COMPASS_REF),
+        `| s${index + 1} | ${plan.id} | \u2014 | ${plan.branch} | ${plan.mergeBase} -> ${plan.mergeResult} | landed | merged |\n`,
+        "utf8",
+      );
 
       // The very same session id is what the store records against the row.
       const row = await continuationPlanRow(fixture, plan.id);

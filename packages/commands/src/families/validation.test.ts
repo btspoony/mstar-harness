@@ -489,3 +489,62 @@ describe("lint --type adr", () => {
     expect(bucketRoot.status).toBe("usage");
   });
 });
+
+const COMPASS = `# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status | Notes |
+|---------|------|--------|-------|
+| p1-store | Store authority | Done | |
+| p2-board | Planboard | Done | depends on p1 |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |
+|---|---|---|---|---|---|---|
+| s1 | p1-store | o/r #6 | layer <- main | a -> b | landed | merged |
+`;
+
+describe("lint --type iteration", () => {
+  test("a Done plan with no PR stack row is refused, naming the plan", async () => {
+    const result = await withTree(
+      { "iterations/iter-1/delivery-compass.md": COMPASS },
+      (dir) => runLint(dir, { target: "iterations/iter-1/delivery-compass.md", type: "iteration" }),
+    );
+    expect(result.status).toBe("refused");
+    const details = JSON.stringify(result.details);
+    expect(details).toContain("lint.iteration.pr-stack-missing-row");
+    expect(details).toContain("p2-board");
+    expect(details).not.toContain("p1-store");
+  });
+
+  test("a walk over the iteration directory lands on the compass only", async () => {
+    const result = await withTree(
+      { "iterations/iter-1/delivery-compass.md": COMPASS, "iterations/iter-1/notes.md": "# Notes\n\nFree prose, no tables.\n" },
+      (dir) => runLint(dir, { target: "iterations", type: "iteration" }),
+    );
+    expect(result.status).toBe("refused");
+    const details = result.details as { results?: { file: string }[] };
+    expect(details.results?.map(({ file }) => file.replace(/\\/g, "/"))).toEqual([
+      expect.stringContaining("delivery-compass.md"),
+    ]);
+  });
+
+  test("an unrelated markdown file is not treated as a compass", async () => {
+    const result = await withTree(
+      { "notes/readme.md": "# Notes\n\n## Plans\n\n| plan_id | Status |\n|---|---|\n| p1 | Done |\n" },
+      (dir) => runLint(dir, { target: "notes", type: "iteration" }),
+    );
+    if (result.status !== "ok") throw new Error(`expected an ok envelope, got ${result.status}`);
+    expect((result.data as { results: unknown[] }).results).toEqual([]);
+  });
+
+  test("an unrelated file named explicitly is not treated as a compass", async () => {
+    const result = await withTree(
+      { "notes/readme.md": "# Notes\n\n## Plans\n\n| plan_id | Status |\n|---|---|\n| p1 | Done |\n" },
+      (dir) => runLint(dir, { target: "notes/readme.md", type: "iteration" }),
+    );
+    expect(result).toMatchObject({ status: "ok", exitCode: 0, data: { results: [] } });
+  });
+});
