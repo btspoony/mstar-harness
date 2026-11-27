@@ -168,16 +168,16 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 ## /codebase-arch-governance
 
 ```text
-/codebase-arch-governance [path|subsystem] [dry-run]
+/codebase-arch-governance [path|subsystem] [dry-run] [rounds N]
 ```
 
 **Purpose** — converge the codebase toward the shape its current requirements would have produced, one closed batch at a time. A batch takes the move with the lowest total complexity, migrates every caller, deletes the replaced path, proves behaviour preserved against a baseline, and lands the settled rule on the strongest available constraint. An abstraction added without migrating its callers is rejected at Acceptance, never counted as progress.
 
 **When** — the shape itself is the problem: one semantic implemented several ways, a concept scattered across callers, forwarding layers, or a convention held only by prose. `/codebase-audit` reports the same surfaces read-only and produces plans; this entry executes those batches under the normal plan gates. `/codebase-comment-cleanup` is the same idea for comments alone.
 
-**Args** — a `path|subsystem` token narrows the round; `dry-run` is a read-only exit that returns the ranked candidates and their already-observed baseline in the response — no audit run directory, report or evidence file, scout dispatch, issue capture, ADR write or edit — and claims no net-complexity figure.
+**Args** — a `path|subsystem` token narrows the round; `dry-run` is a read-only exit that returns the ranked candidates and their already-observed baseline in the response — no audit run directory, report or evidence file, scout dispatch, issue capture, ADR write or edit — and claims no net-complexity figure; `rounds N` sets the run budget, the number of closed batches one invocation may complete, and defaults to one.
 
-**Stop conditions** — no candidate survives the rejected-move list with a proven net reduction; the run budget is reached; or the next move needs a product or architecture decision or a destructive migration (captured as an issue, then the round ends, and a later run needs that decision plus the captured issue). A candidate with no behaviour baseline is skipped with its missing evidence named and stays in the pool; the round then ends under one of those conditions.
+**Stop conditions** — the budget (`rounds N`, one batch by default) is spent; no candidate survives the rejected-move list with a proven net reduction; or the next move needs a product or architecture decision or a destructive migration (captured as an issue, then the round ends, and a later run needs that decision plus the captured issue). A candidate with no behaviour baseline is skipped with its missing evidence named and stays in the pool; the round then ends under one of those conditions.
 
 **Defined in** — [`commands/codebase-arch-governance.md`](../commands/codebase-arch-governance.md); semantics → `mstar-coding-behavior` (`references/architecture-governance.md`); structural decisions → `mstar-doc-corpus` → `references/adr.md`.
 
