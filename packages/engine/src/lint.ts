@@ -1938,6 +1938,12 @@ const ADR_STATUS_LINE = /^Status: (proposed|implemented|rejected) \u2014 .+$/;
  * into a frozen snapshot. */
 const ADR_ARCHIVED_LINE = /^Archived: \d{4}-\d{2}-\d{2} \u2014 .+$/;
 
+/** see docs/adr/README.md - a demoted marker in any list-marker or emphasis
+ * spelling; the label is case-insensitive, and its emphasis pair may close
+ * before the colon or after it. The one list marker is a bullet or an ordered
+ * `1.`/`1)` form, never a nested level. */
+const ADR_SUPERSEDED_BY = /^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(?:\*+|_+)?superseded-by(?:\*+|_+)?:(?:\*+|_+)?\s*(.*)$/i;
+
 /** Required and banned sections per bucket. `archived` reuses the implemented
  * shape: it accepts implemented records only. */
 const ADR_SECTIONS: Record<AdrBucket, { required: readonly string[]; banned: readonly string[] }> = {
@@ -2042,11 +2048,17 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
   }
 
   if (bucket === "implemented") {
-    // see packages/engine/src/lint.ts - // `implemented/` is the live bucket: a record carrying `Superseded-by:`
-    // is already demoted and must move to `archived/`, whatever the state of
-    // its replacement. Single-file rule - no cross-file lookup.
-    const supersededBy = header.find((line) => line.startsWith("Superseded-by:"));
-    if (supersededBy !== undefined) {
+    // see docs/adr/README.md - `implemented/` is the live bucket: a record carrying a
+    // demoted `Superseded-by:` marker has one of two valid operations, both stated in
+    // the recovery below: move it to `archived/` when its replacement is implemented
+    // or promoted in this change, or remove the marker when the replacement is
+    // still proposed. Single-file rule - no cross-file lookup.
+    const demoted = header.map((line) => line.match(ADR_SUPERSEDED_BY)).find((match) => match !== null);
+    if (demoted != null) {
+      // see docs/adr/README.md - the emphasis limit covers the label and, in a
+      // wrapped value, the value's own pair; both are markup, not part of the name.
+      const value = demoted[1]!.trim().replace(/^(?:\*+|_+)|(?:\*+|_+)$/g, "");
+      const supersededBy = `Superseded-by: ${value}`;
       const cls = relPath.split("/").at(-2);
       const filename = basename(relPath);
       push({

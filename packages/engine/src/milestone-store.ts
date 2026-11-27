@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import type { RemoteEvent, RemoteIntent, RemoteIssue, RemoteWriteOrigin } from "./collaboration-remote.js";
 import { withCollaborationWrite } from "./collaboration-store.js";
-import { remoteMilestones } from "./collaboration-remote-read.js";
+import { remoteMilestoneNames, remoteMilestones } from "./collaboration-remote-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 import { TERMINAL_DISPOSITIONS, type Disposition } from "./issue.js";
 import type { StoreReadQuery } from "./store-read.js";
@@ -375,3 +375,43 @@ export function readMilestonesOn(db: StoreDb, projectId: string, milestoneId?: s
   return { projectId, milestones, issues, unassignedIssues: unassigned.count };
 }
 export function queryMilestones(projectId: string, milestoneId?: string): StoreReadQuery<MilestoneRead> { return { view: milestoneId ? "milestone-status" : "milestones", needsProjection: false, collaboration: { scope: { kind: "milestone", key: milestoneId === undefined ? projectId : `${projectId}:${milestoneId}` }, required: true, projectIds: [projectId] }, execution: "not-requested", run: sources => { if (sources.remote !== null) return { data: remoteMilestones(sources.remote, projectId, milestoneId) }; if (sources.collaboration === null) throw new MilestoneError("store.not-active","This milestone read requires the collaboration authority, which was not opened for this request."); return { data: readMilestonesOn(sources.collaboration.db,projectId,milestoneId) }; } }; }
+
+/** see packages/engine/src/store-read.ts - one read answers every project's milestone names in the order the `projects` view lists projects, then by `ordinal`, then by `milestone_id`. */
+export type MilestoneNamesRead = { milestones: Array<{ projectId: string; name: string }> };
+
+/** see packages/engine/src/store-read.ts - the local statement keeps the `projects` view's project set (catalog projects plus projects that hold issues) and its order; an issue-only project the catalog never registered refuses with `milestone.project-not-found`, exactly as the per-project read this names read replaces did, instead of answering with an empty or truncated list. */
+export function readMilestoneNamesOn(db: StoreDb): MilestoneNamesRead {
+  guard(db);
+  const absent = db.prepare(
+    `select distinct i.project_id as id from issues i
+     where not exists (select 1 from catalog_entities c where c.kind = 'project' and c.id = i.project_id)
+     order by i.project_id asc`,
+  ).get() as { id: unknown } | undefined;
+  if (absent !== undefined) project(db, String(absent.id));
+  const rows = db.prepare(
+    `with project_ids as (
+       select id from catalog_entities where kind = 'project'
+       union select project_id from issues
+     )
+     select m.project_id as project_id, m.name as name
+     from project_milestones m
+     join project_ids on project_ids.id = m.project_id
+     left join catalog_entities catalog on catalog.kind = 'project' and catalog.id = project_ids.id
+     order by coalesce(catalog.title, project_ids.id) asc, project_ids.id asc, m.ordinal asc, m.milestone_id asc`,
+  ).all() as Array<{ project_id: unknown; name: unknown }>;
+  return { milestones: rows.map((row) => ({ projectId: String(row.project_id), name: String(row.name) })) };
+}
+
+export function queryMilestoneNames(): StoreReadQuery<MilestoneNamesRead> {
+  return {
+    view: "milestone-names",
+    needsProjection: false,
+    collaboration: { scope: { kind: "repository", key: "milestone-names:repository" }, required: true },
+    execution: "not-requested",
+    run: (sources) => {
+      if (sources.remote !== null) return { data: remoteMilestoneNames(sources.remote) };
+      if (sources.collaboration === null) throw new MilestoneError("store.not-active", "This milestone read requires the collaboration authority, which was not opened for this request.");
+      return { data: readMilestoneNamesOn(sources.collaboration.db) };
+    },
+  };
+}

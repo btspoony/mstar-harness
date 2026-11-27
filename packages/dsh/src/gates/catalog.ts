@@ -6,14 +6,13 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
-  queryDashboard,
-  queryMilestones,
+  queryMilestoneNames,
   queryOpenIssueRollup,
   resolveRepoEnforcement,
   withStoreRead,
 } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
-import type { ProjectListDTO, ReadProjection, StoreContext } from '@mstar-harness/engine'
+import type { ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -923,23 +922,12 @@ const UNREAD_STORE_FACTS: StoreFacts = {
 }
 
 /**
- * Read the store-backed milestone rollup once, retaining project then ordinal order.
- *
- * see packages/engine/src/store-read.ts - the project set comes from the `projects` view, not
- * `listCatalog`, whose rows carry checkout-relative locations a remote observation does
- * not have, so `listCatalog` refuses in remote mode and the gate would report milestones
- * unavailable on every remote checkout. The view answers both modes, and each project's
- * milestones then come from the one milestone read, which is execution-free.
+ * see packages/engine/src/milestone-store.ts - one read answers every project's milestone names in project-then-ordinal order; the read is execution-free and never paged.
  */
 async function readProjectMilestoneFacts(context: StoreContext): Promise<ProjectMilestoneFacts> {
   try {
-    const names: string[] = []
-    const projects = await withStoreRead(context, queryDashboard('projects'))
-    for (const item of (projects.data as ProjectListDTO).items) {
-      const envelope = await withStoreRead(context, queryMilestones(item.project.id))
-      names.push(...envelope.data.milestones.map((milestone) => milestone.name))
-    }
-    return { names, source: { kind: 'present', diagnostic: null } }
+    const envelope = await withStoreRead(context, queryMilestoneNames())
+    return { names: envelope.data.milestones.map((milestone) => milestone.name), source: { kind: 'present', diagnostic: null } }
   } catch (error) {
     return {
       names: [],

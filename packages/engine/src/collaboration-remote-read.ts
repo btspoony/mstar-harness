@@ -44,7 +44,7 @@ import {
   type Severity,
 } from "./issue.js";
 import type { CatalogDocumentKind } from "./catalog.js";
-import { MilestoneError, type MilestoneRead, type ProjectMilestoneDTO } from "./milestone-store.js";
+import { MilestoneError, type MilestoneNamesRead, type MilestoneRead, type ProjectMilestoneDTO } from "./milestone-store.js";
 import { StoreError, type StoreContext } from "./store-db.js";
 
 /** note: A provider issue id is an immutable Linear UUID, never a display identifier such as ENG-42. */
@@ -1177,4 +1177,12 @@ export function remoteMilestones(view: RemoteReadView, projectId: string, milest
     }));
   const unassignedIssues = subjects.filter((entry) => nullableTextField(projectId, entry.issue, "milestoneId") === null).length;
   return { projectId, milestones, issues, unassignedIssues };
+}
+
+/** see packages/engine/src/store-read.ts - the remote arm of the milestone-name read: `remoteProjectList` gives the project order and `remoteMilestones` the order inside each project. */
+export function remoteMilestoneNames(view: RemoteReadView): MilestoneNamesRead {
+  return {
+    milestones: remoteProjectList(view).items.flatMap(({ project }) =>
+      remoteMilestones(view, project.id).milestones.map((milestone) => ({ projectId: project.id, name: milestone.name }))),
+  };
 }

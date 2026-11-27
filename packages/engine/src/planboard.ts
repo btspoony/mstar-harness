@@ -246,6 +246,14 @@ const LANE_REFUSAL_CODES = new Set([
   "remote.unavailable",
 ]);
 
+/** see packages/engine/src/planboard.ts - // note: TEST-ONLY seam: the public fixture cannot stage a per-id refusal followed by a resolving line, because every reference read spans all selected projects (a partial project refuses them all) and a duplicate reference is refused by the generation-wide unique index. A regression replaces the single line's read only. Production runs without a reader. */
+let remoteIssueReadForTest: ((view: RemoteReadView, id: string) => RemoteIssueRead) | undefined;
+export function setRemoteIssueReadForTest(
+  reader: ((view: RemoteReadView, id: string) => RemoteIssueRead) | undefined,
+): void {
+  remoteIssueReadForTest = reader;
+}
+
 function refusalOf(error: unknown): IssueAnswer {
   const code = (error as { code?: unknown } | null)?.code;
   const stable = typeof code === "string" ? code : "store.unreadable";
@@ -270,9 +278,10 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
   }
   if (mode === "remote") {
     // see packages/engine/src/planboard.ts - // invariant: ONE admitted view answers the whole board: the cache is opened
-    // once, and each id is resolved against the snapshot it already holds. A
-    // lane-level refusal answers every remaining line and never reopens; only a
-    // per-id answer (not-found, scope-refused) is decided line by line.
+    // once, and each id is resolved against the snapshot it already holds. Every
+    // code `refusalOf` classifies as `refusal` answers its own line and the next
+    // id still reads; a `laneRefusal` answers every remaining line and never
+    // reopens.
     let view: RemoteReadView;
     let remoteIssueRead: (view: RemoteReadView, id: string) => RemoteIssueRead;
     try {
@@ -286,7 +295,7 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
     }
     for (const id of ids) {
       try {
-        const read = remoteIssueRead(view, id);
+        const read = (remoteIssueReadForTest ?? remoteIssueRead)(view, id);
         // see packages/engine/src/planboard.ts - // note: A provider-only answer is no MStar subject, so the line names an
         // issue this store does not hold.
         answers.set(id, { kind: "disposition", disposition: read.kind === "native" ? "absent" : read.detail.disposition });
@@ -296,12 +305,13 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
           answers.set(id, { kind: "disposition", disposition: "absent" });
           continue;
         }
-        if (code === "issue.scope-refused") {
-          answers.set(id, { kind: "refusal", code });
+        const refusal = refusalOf(error);
+        if (refusal.kind === "refusal") {
+          // see packages/engine/src/planboard.ts - // A per-id answer: this line is unverified and the next id still reads.
+          answers.set(id, refusal);
           continue;
         }
         // see packages/engine/src/planboard.ts - // A lane-level cause: no later id can answer differently.
-        const refusal = refusalOf(error);
         for (const remaining of ids) if (!answers.has(remaining)) answers.set(remaining, refusal);
         return answers;
       }
