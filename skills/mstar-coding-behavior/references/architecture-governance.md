@@ -35,7 +35,7 @@ Generate candidate moves, then take the one with the **lowest total complexity**
 
 Reject a governance candidate whose only justification is one of these:
 
-- A seam, adapter or interface with one implementation and no stated varying axis — the `Speculative` label in `deep-module-vocabulary.md` § One adapter means a hypothetical seam, never a blocking move.
+- A speculative seam, as judged by `deep-module-vocabulary.md` § The four tests and § Label rule — an advisory candidate, never a blocking move.
 - A directory or file move with no ownership, dependency-direction or responsibility change.
 - Merging semantically different concepts because they now look alike — form symmetry is not a property above.
 - Condensed code that trades readability for a smaller line count.
