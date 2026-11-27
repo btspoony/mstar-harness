@@ -47,7 +47,7 @@ Reject a governance candidate whose only justification is one of these:
 The round ends when any of these holds, and the report names which one:
 
 - No candidate survives the rejection list with an evidence-backed net complexity reduction.
-- The run budget is reached; report the completed batches and the remaining pool, not a partial batch.
+- The round's run budget is reached — the budget the operator states for the round, one batch when none is stated; report the completed batches and the remaining pool, not a partial batch.
 - The next move needs a product decision, an architecture decision, or a destructive migration: capture it per `mstar-project-governance` § Issue capture and end the round. A later run needs that decision and the captured issue; the captured decision is not authority to act on it.
 
 A candidate whose behaviour baseline cannot be established is not a round stop: skip it, keep it in the optimisation pool, name the missing evidence, and continue with the other candidates. The round then ends under one of the conditions above.
