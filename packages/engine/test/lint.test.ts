@@ -2086,6 +2086,56 @@ describe("lintAdrTree", () => {
     expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.fence-unclosed"]);
   });
 
+  // see docs/adr/README.md - the demoted marker is one bare header line, and the
+  // gate reads it behind one list marker and one `*`/`_` emphasis pair in any
+  // case; every spelling is refused the same way.
+  const demotedRecord = (line: string): string =>
+    adrRecord("implemented", ADR_IMPLEMENTED).replace(
+      "Status: implemented \u2014 because",
+      `Status: implemented \u2014 because\n${line}`,
+    );
+
+  test.each([
+    "Superseded-by: 2026-02-01-replacement.md",
+    "- **Superseded-by:** 2026-02-01-replacement.md",
+    "superseded-by: 2026-02-01-replacement.md",
+    "__Superseded-by:__ 2026-02-01-replacement.md",
+    "*Superseded-by:* 2026-02-01-replacement.md",
+    "+ **Superseded-by: 2026-02-01-replacement.md**",
+    "SUPERSEDED-BY: 2026-02-01-replacement.md",
+  ])('a record carrying "%s" under implemented/ fails as implemented-superseded', (line) => {
+    const result = withTree(
+      { "implemented/architecture/2026-01-14-demoted.md": demotedRecord(line) },
+      lintAdrTree,
+    );
+    expect(result.failures.map((failure) => failure.code)).toEqual(["lint.adr.implemented-superseded"]);
+    expect(result.failures[0]!.file).toBe("implemented/architecture/2026-01-14-demoted.md");
+    expect(result.failures[0]!.message).toContain('"Superseded-by: 2026-02-01-replacement.md"');
+    expect(result.failures[0]!.recovery).toContain("superseded by 2026-02-01-replacement.md");
+    expect(result.failures[0]!.recovery).toContain("remove the Superseded-by: line");
+  });
+
+  test("a live replacement carrying Supersedes: passes", () => {
+    const result = withTree(
+      { "implemented/architecture/2026-01-16-replacement.md": demotedRecord("Supersedes: 2026-01-01-older.md") },
+      lintAdrTree,
+    );
+    expect(result.failures).toEqual([]);
+  });
+
+  test("an archived record with Archived: and the canonical Superseded-by: passes", () => {
+    const result = withTree(
+      {
+        "archived/architecture/2026-01-15-demoted.md": adrRecord("implemented", ADR_IMPLEMENTED).replace(
+          "Status: implemented \u2014 because",
+          "Status: implemented \u2014 because\nArchived: 2026-02-01 \u2014 superseded by 2026-02-01-replacement.md\nSuperseded-by: 2026-02-01-replacement.md",
+        ),
+      },
+      lintAdrTree,
+    );
+    expect(result.failures).toEqual([]);
+  });
+
   test("a missing tree passes with zero records", () => {
     const result = withTree({}, (dir) => lintAdrTree(join(dir, "absent")));
     expect(result).toEqual({ records: 0, failures: [] });

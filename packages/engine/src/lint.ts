@@ -1938,6 +1938,10 @@ const ADR_STATUS_LINE = /^Status: (proposed|implemented|rejected) \u2014 .+$/;
  * into a frozen snapshot. */
 const ADR_ARCHIVED_LINE = /^Archived: \d{4}-\d{2}-\d{2} \u2014 .+$/;
 
+/** see docs/adr/README.md - a demoted marker in any list-marker or emphasis
+ * spelling; the label is case-insensitive. */
+const ADR_SUPERSEDED_BY = /^\s*(?:[-*+]\s+)?(?:\*+|_+)?superseded-by:(?:\*+|_+)?\s*(.*)$/i;
+
 /** Required and banned sections per bucket. `archived` reuses the implemented
  * shape: it accepts implemented records only. */
 const ADR_SECTIONS: Record<AdrBucket, { required: readonly string[]; banned: readonly string[] }> = {
@@ -2045,8 +2049,10 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
     // see packages/engine/src/lint.ts - // `implemented/` is the live bucket: a record carrying `Superseded-by:`
     // is already demoted and must move to `archived/`, whatever the state of
     // its replacement. Single-file rule - no cross-file lookup.
-    const supersededBy = header.find((line) => line.startsWith("Superseded-by:"));
-    if (supersededBy !== undefined) {
+    const demoted = header.map((line) => line.match(ADR_SUPERSEDED_BY)).find((match) => match !== null);
+    if (demoted != null) {
+      const value = demoted[1]!.trim().replace(/(?:\*+|_+)$/, "");
+      const supersededBy = `Superseded-by: ${value}`;
       const cls = relPath.split("/").at(-2);
       const filename = basename(relPath);
       push({
