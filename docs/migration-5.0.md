@@ -13,7 +13,7 @@ Every step below is a command an operator runs; none needs source knowledge, and
 | Required mode | No `[collaboration]` mode in `.mstarc` refuses repository-scoped store verbs. | [Before you start](#before-you-start) |
 | 4.9.x access ends | The released 4.9.x build refuses the fenced store with `store.schema-unsupported`. | [What breaks in 5.0](#what-breaks-in-50) |
 | Milestone effort | `effort_sessions` replaces `target`; an existing date becomes unestimated and never comes back. | [What breaks in 5.0](#what-breaks-in-50) |
-| Roadmap removed | `mstar roadmap export` must run on 4.9.x; 5.0 drops the domain. | [Before you start](#before-you-start) |
+| Roadmap removed | `mstar roadmap export` must run on 4.9.x, once per project; 5.0 drops the domain. | [Before you start](#before-you-start) |
 | No rollback | Publication leaves no dual-write window; the retained pre-fence image is the only copy. | [Backup and restore](#backup-and-restore) |
 
 ## What breaks in 5.0
@@ -28,7 +28,13 @@ Every step below is a command an operator runs; none needs source knowledge, and
 
 **Project milestones lose their calendar date.** The `target` column is replaced by `effort_sessions` — null ("unestimated") or a count of standard sessions of at least 1. An existing target becomes **unestimated**: a date is not a measure of work, so it is neither converted nor recoverable from the new column. A `local` or `mirror` lane reaches the new shape through `store upgrade`; a `remote` cache is derived observation state and follows the reviewed `remote bind` ([Remote binding](#remote-binding-and-first-observation)). Timelines order by `ordinal`, and no surface states a calendar target.
 
-**The roadmap domain is gone.** Run `mstar roadmap export` on 4.9.x first: the 5.0 `mstar store upgrade` removes the domain, nothing reads or writes a roadmap afterwards, and the 4.9.x build refuses the upgraded store. Its facts have other owners — open work in the issue store, goals as milestone records, the iteration position in the compass, planning order in the local, gitignored `{HARNESS_DIR}/planboard.md`, whose drift `mstar planboard check` reports. The board is never mirrored or sent to a provider, and dies with the control checkout.
+**The roadmap domain is gone.** Run the export on 4.9.x first: the 5.0 `mstar store upgrade` removes the domain, nothing reads or writes a roadmap afterwards, and the 4.9.x build refuses the upgraded store. That build requires `--project`, so export every project you need, one invocation each:
+
+```bash
+mstar roadmap export --harness <abs> --project <project-id>
+```
+
+Its facts have other owners — open work in the issue store, goals as milestone records, the iteration position in the compass, planning order in the local, gitignored `{HARNESS_DIR}/planboard.md`, whose drift `mstar planboard check` reports. The board is never mirrored or sent to a provider, and dies with the control checkout.
 
 **There is no automatic rollback and no dual-write window.** After publication the source's collaboration rows survive only in the verified pre-fence image the fence recorded. Reverting to the old layout is a manual operator decision made from that image, not a verb.
 
@@ -157,9 +163,9 @@ Field rules that the validator enforces, so a refused document is diagnosable wi
 - `stoppedSessions` entries use `state` `stopped` or `reloaded`, and each named session must exist in the source; a live source session the document does not stop refuses.
 - `cutover` is required for this verb. Its `repoKey`, `mode`, `controlRoot`, `sourceStoreId`, `sourceEpoch`, and `schemaVersion` must match the manifest and the running checkout exactly. `stoppedHandles` must name at least one handle of kind `process`, `session`, `host`, or `consumer`, and `allHandlesStopped` must be the literal `true` — the fence has no OS-level handle inventory, so this sentence is the operator's own statement.
 
-`activate` is two durable steps, not one transaction. The first takes or verifies the retained pre-fence image of the combined source, before any fence work begins.
+`activate` is two durable steps, not one transaction. The first is the **source fence**: it takes or verifies the retained pre-fence image of the combined source before any fence work, then commits, in one source transaction under SQLite write exclusion, the re-proved reviewed manifest and snapshot, the source schema advance if needed, the fence row in the execution store, and the drop of the moved collaboration tables.
 
-The second runs in one source transaction under SQLite write exclusion: it re-proves the reviewed manifest and the source snapshot, advances the source schema if needed, writes the fence row in the execution store, and drops the moved collaboration tables. The target publication follows as its own step. A crash between them leaves a durable intermediate state: the source is fenced and no target is active. The receipt moves `verified` → `source-fenced` → `active`.
+The second is **target publication**, its own step. A crash between them leaves a durable intermediate state: the source is fenced and no target is active. The receipt moves `verified` → `source-fenced` → `active`.
 
 A crash before the fence leaves a restageable attempt. A crash after a committed fence is finished by re-running the same `activate`, which reuses the persisted fence and commits only the missing publication. There is no rollback to infer from the receipt: once the fence commits, the source no longer owns the collaboration rows, and the verified pre-fence image is their only copy.
 
@@ -336,6 +342,8 @@ Refused — the retired form:
 ```markdown
 **Execute as**: writing-specialist
 **Delegation**: forbidden
+**Task category**: docs
+**Task budget**: one implementer round closing this guide
 **Working branch**: feature/20261201-docs
 **Plan id**: 20261201-docs
 ```
@@ -346,14 +354,20 @@ Accepted — the same fields as front matter:
 ---
 execute_as: writing-specialist
 delegation: forbidden
+task_category: docs
+task_budget: one implementer round closing this guide
 working_branch: feature/20261201-docs
 plan_id: 20261201-docs
 ---
 ```
 
-Migrate by rewriting the document as front matter with the snake_case keys (`execute_as`, `working_branch`, `plan_id`, …), or by pointing `Assignment file: <absolute path>` at the rewritten document. The pointer must be absolute and, after canonicalisation, must land in one of the Assignment write homes — `{SDD_DIR}/assignments/`, `{ITERATION_DIR}/<id>/assignments/`, `{WORKFLOW_DIR}/<id>/assignments/` — or in the flat read-only `{HARNESS_DIR}/assignments/`; anything else refuses `dispatch.assignment.path`.
+Migrate by rewriting the document as front matter with the snake_case keys (`execute_as`, `working_branch`, `plan_id`, …), or by pointing `Assignment file: <absolute path>` at the rewritten document.
 
-`mstar sdd` writes each task brief in the new form: `plan_id` and `task` in the block, plus an optional `files` list holding the task's own entries when it declares any. The sliced body is byte-identical. A plan declares `plan_id` matching its registered id and a `title` its H1 repeats, beside the other required keys (`execution`, `working_branch`, `main_worktree_branch`, `delivery_kind`, `status`); check one with `mstar lint <file> --type plan`.
+The dispatching PM picks the write home from the Assignment's identity — plan → `{SDD_DIR}/assignments/`, iteration → `{ITERATION_DIR}/<id>/assignments/`, workflow → `{WORKFLOW_DIR}/<id>/assignments/`, in that precedence — while the flat `{HARNESS_DIR}/assignments/` stays read-only. The pointer is validated separately: it must be absolute and, after canonicalisation, must land in one of those write homes or in that flat source; anything else refuses `dispatch.assignment.path`.
+
+`mstar sdd` writes each task brief in the new form: `plan_id` and `task` in the block, plus an optional `files` list holding the task's own entries when it declares any. The sliced body is byte-identical. A plan requires `plan_id` matching its registered id, plus `execution`, `working_branch`, `main_worktree_branch`, `delivery_kind` and `status`; `title` is optional, and when declared the H1 repeats it. Check a plan with `mstar lint <file> --type plan`.
+
+A PM acceptance report joins the same layer: `mstar lint <report.md> --type acceptance` validates its `plan_id`, `gate: pm-acceptance`, `verdict`, and `generated_at`, and the acceptance template opens with that block.
 
 ## Rebind and rebind refusal
 
@@ -450,16 +464,21 @@ Exit 1 is a domain refusal with a code, a message naming the disagreed fact, and
 **Cross-authority project moves work on every path except remote to remote.**
 
 ```bash
-mstar issue move --id <issue-id> --to-authority <repo-key> \
+mstar issue move --harness <abs> --id <issue-id> --to-authority <repo-key> \
   --payload '{"projectId":"<target>","reason":"<text>"}' \
-  --expect <issue-revision> --expect-store <store-revision>
+  --expect <issue-revision> --expect-store <store-revision> \
+  --actor <role> --operation-id <uuid>
 ```
 
-The command carries one record — with its occurrence, transition, provenance and relation history — to a project another authority owns. The move is a per-record ledger, not one transaction: the source row is a fence, so a staged record keeps its `IssueRef` and refuses every write until the move publishes or is discarded, and reissuing the same command resumes from whatever phase the ledger holds. Local to local runs as one checkout writing both lanes and needs no handoff.
+The command carries one record — with its occurrence, transition, provenance and relation history — to a project another authority owns. `--actor` is mandatory, and the pinned `--operation-id` is what makes a reissue the same ledger operation: omit it and the verb mints a fresh id.
+
+The move is a per-record ledger, not one transaction: the source row is a fence, so a staged record keeps its `IssueRef` and refuses every write until the move publishes or is discarded, and reissuing the same command with that same operation id resumes from whatever phase the ledger holds. Local to local runs as one checkout writing both lanes and needs no handoff.
 
 A `local`/`remote` boundary is a two-checkout exchange: the side that stages emits the handoff with `--out <path>`, the other continues it with `--input <path>`, and each half writes only the lane its own mode selects.
 
-Remote to remote stays unsupported, and the refusal lands on the receiving side: in the two-checkout exchange the remote source stages its own row first — route `remote-unknown`, because the destination's lane is not visible from there — and emits the handoff, and only the remote destination refuses it with `collaboration.mode-unavailable`, before writing its own row or freezing the provider create. The two provider records would have to be rewritten into each other's selector generation as one event, and no admitted transition expresses that.
+Remote to remote stays unsupported, and which side refuses depends on what the staging side can see. A source that can read the destination's remote lane refuses with `collaboration.mode-unavailable` before staging anything.
+
+A source under a separate home cannot see that lane: it stages its own row first — route `remote-unknown` — and emits the handoff, and the receiving remote checkout then refuses with `collaboration.mode-unavailable` before writing its row or freezing the provider create. The two provider records would have to be rewritten into each other's selector generation as one event, and no admitted transition expresses that.
 
 A relation whose target cannot be resolved across authorities stays visible as unresolved (`to_ref` set, `to_issue` empty) rather than absent, and localises to the destination's display id when the record arrives. Proven on one checkout and across the two-checkout exchange inside the controlled-host boundary; live provider behaviour is unverified, as stated below.
 
