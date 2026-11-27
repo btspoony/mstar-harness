@@ -16,7 +16,7 @@ docs/adr/{bucket}/{class}/yyyy-mm-dd-topic.md
 
 ## What a reader may take as current
 
-`implemented/` is the only bucket a reader or an agent may take as current decisions; anything filed there is a live statement, and the gate refuses a record carrying `Superseded-by:` in it, because such a record is already demoted. The marker is one bare header line in exactly that spelling; the gate also reads it behind one list marker and one `*` or `_` emphasis pair, on the label or around the replacement name, in any letter case, and refuses each such spelling the same way. `archived/` is history: it may be read only through an explicit link that cites history, and active prose never summarizes an archived record as authority.
+`implemented/` is the only bucket a reader or an agent may take as current decisions; anything filed there is a live statement, and the gate refuses a record carrying `Superseded-by:` in it, because such a record is already demoted. The marker is one bare header line in exactly that spelling; the gate also reads it behind one bullet or ordered (`1.` / `1)`) list marker and one `*` or `_` emphasis pair, on the label or around the replacement name, in any letter case, and refuses each such spelling the same way. `archived/` is history: it may be read only through an explicit link that cites history, and active prose never summarizes an archived record as authority.
 
 ## Where the trigger lives
 
