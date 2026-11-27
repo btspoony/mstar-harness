@@ -272,7 +272,7 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     const loader = app.ctx.get('loader') as FakeLoaderRegistry
     loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
     expect(fallbacksMounted(app.ctx)).toBe(true)
-    const request: RecordedRequest = { ...textPrompt(ASSIGNMENT_PROMPT), agentPreset: PRESET_ID }
+    const request: RecordedRequest = { ...textPrompt(ASSIGNMENT_PROMPT), agentPreset: PRESET_ID, cwd: app.root }
 
     await startActivationViaNativeChannel(app, specFor('fake-spawn', request))
 
