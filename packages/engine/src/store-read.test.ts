@@ -1,31 +1,4 @@
-/**
- * store-read.test.ts -- proof for the issue-store read boundary
- * (contract §6).
- *
- * Every case runs against the real read boundary, the real issue/catalog
- * modules, the real projection refresh, the real migration runner and the real
- * `node:sqlite` driver in a per-test temporary harness root. No mock database
- * exists anywhere in this proof.
- *
- * Covered here:
- *
- * - one request = one read handle and ONE read transaction: a concurrent writer
- *   (its own connection, committing during the transaction) cannot change what
- *   the envelope's view data or revisions report;
- * - the issue views answer exactly what the issue domain's own readers answer,
- *   with stable ordering and pagination;
- * - old-generation disclosure survives current issue edits, and an issue-only
- *   read never triggers the refresh;
- * - unknown historical dates are counted and disclosed, never imputed into a
- *   bucket;
- * - every terminal disposition counts as retired (no "fixed"/"resolved"
- *   metric), with the authoritative current open count reported separately;
- * - projected workflow/iteration DTOs join the catalog by id and
- *   disclose a missing link or pin as a badge instead of guessing;
- * - an unavailable projection is disclosed as unavailable, not as zero work;
- * - a store that cannot be served (missing, staged) fails instead of returning
- *   an empty result set.
- */
+/** see packages/engine/src/store-read.test.ts - store-read.test.ts -- proof for the issue-store read boundary (contract §6). Every case runs against the real read boundary, the real issue/catalog modules, the real projection refresh, the real migration runner and the real `node:sqlite` driver in a per-test temporary harness root. No mock database exists anywhere in this proof. Covered here: - one request = one read handle and ONE read transaction: a concurrent writer (its own connection, committing during the transaction) cannot change what the envelope's view data or revisions report; - the issue views answer exactly what the issue domain's own readers answer, with stable ordering and pagination; - old-generation disclosure survives current issue edits, and an issue-only read never triggers the refresh; - unknown historical dates are counted and disclosed, never imputed into a bucket; - every terminal disposition counts as retired (no "fixed"/"resolved" metric), with the authoritative current open count reported separately; - projected workflow/iteration DTOs join the catalog by id and disclose a missing link or pin as a badge instead of guessing; - an unavailable projection is disclosed as unavailable, not as zero work; - a store that cannot be served (missing, staged) fails instead of returning an empty result set. */
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
 import { dirname, join } from "node:path";
@@ -281,10 +254,7 @@ const COMPASS_DOC = [
   "",
 ].join("\n");
 
-/**
- * A workspace with a published projection generation 1: one plan workflow with
- * a catalog plan row, an iteration with a compass document and a project.
- */
+/** see packages/engine/src/store-read.test.ts - A workspace with a published projection generation 1: one plan workflow with a catalog plan row, an iteration with a compass document and a project. */
 async function projectedWorkspace(name: string): Promise<Fixture & { generation: number; planRevision: number }> {
   const fixture = await workspace(name);
   const { context } = fixture;
@@ -633,7 +603,7 @@ describe("milestone views", () => {
     ]);
     expect(present.data.unassignedIssues).toBe(1);
 
-    // invariant: The grouping is collaboration data read from the committed rows, and
+    // see packages/engine/src/store-read.test.ts - // invariant: The grouping is collaboration data read from the committed rows, and
     // the view never opens the disposable execution projection at all.
     expect(existsSync(join(harness, "projects/proj-a/roadmap.md"))).toBe(false);
     const again = await withStoreRead(context, queryMilestones("proj-a"));
@@ -643,7 +613,7 @@ describe("milestone views", () => {
     expect(againProjection).toEqual(presentProjection);
     expect(again.projection.observed).toBe(false);
 
-    // A registered project with no milestones still answers empty grouping -- never null.
+    // see packages/engine/src/store-read.test.ts - // A registered project with no milestones still answers empty grouping -- never null.
     await registerCatalogEntity(
       context,
       { kind: "project", id: "proj-known-empty", title: "Known empty", rootKind: "projects", relativePath: "proj-known-empty" },
@@ -1798,7 +1768,7 @@ describe("remote read boundary", () => {
 
   test("a remote catalog entry carrying the retired document kind is refused by path, and a surviving kind is accepted", async () => {
     const { context, commit, check } = await boundScope("remote-catalog-kind-removal");
-    // note: The fixture's catalog carries no document row, so this case submits one: a document is the
+    // see packages/engine/src/store-read.test.ts - // note: The fixture's catalog carries no document row, so this case submits one: a document is the
     // only entity kind that may carry a `documentKind`, and it is the shape the retired value rode in on.
     const withDocument = (documentKind: string | null) => {
       const document = JSON.parse(
@@ -1817,20 +1787,20 @@ describe("remote read boundary", () => {
     };
     const retiredIndex = 2;
     const withRetired = withDocument("roadmap");
-    // invariant: The retired kind never re-enters through the nested catalog vocabulary, even though the
+    // see packages/engine/src/store-read.test.ts - // invariant: The retired kind never re-enters through the nested catalog vocabulary, even though the
     // top-level `project.roadmap` field is already gone.
     expect(remoteObserveDocumentSchema.safeParse(withRetired).success).toBe(false);
     await expect(ingestRemoteObservation(context, withRetired as never)).rejects.toMatchObject({
       code: "remote.input-invalid",
       message: expect.stringContaining(`submission.snapshot.project.catalogEntities[${retiredIndex}].documentKind`),
     });
-    // invariant: A surviving kind is the accepted shape.
+    // see packages/engine/src/store-read.test.ts - // invariant: A surviving kind is the accepted shape.
     expect(remoteObserveDocumentSchema.safeParse(withDocument("spec")).success).toBe(true);
   });
 
   test("a cache admitted before the retirement serves its retired document kind as other, never as roadmap", async () => {
     const { context, check } = await boundScope("remote-cache-retired-kind");
-    // note: A v6-era cache holds this row already: the admission that wrote it accepted the kind, so the
+    // see packages/engine/src/store-read.test.ts - // note: A v6-era cache holds this row already: the admission that wrote it accepted the kind, so the
     // fixture writes the stored snapshot directly instead of going through the (now refusing) ingest.
     const stored = JSON.parse(
       JSON.stringify(completeSnapshot(check)),
@@ -1854,7 +1824,7 @@ describe("remote read boundary", () => {
       lane.close();
     }
 
-    // invariant: The read normalizes the retired value with its identity intact - id, revision and
+    // see packages/engine/src/store-read.test.ts - // invariant: The read normalizes the retired value with its identity intact - id, revision and
     // lifecycle survive - so no surface serves a kind the catalog no longer admits.
     const view = await openRemoteReadView(context, [REMOTE_IDS.projectId]);
     const entities = view.projects.get(REMOTE_IDS.projectId)?.snapshot?.project.catalogEntities ?? [];
@@ -1864,7 +1834,7 @@ describe("remote read boundary", () => {
       revision: 4,
       lifecycle: "active",
     });
-    // invariant: The normalization is the READ's, not a rewrite of admitted evidence: the stored bytes
+    // see packages/engine/src/store-read.test.ts - // invariant: The normalization is the READ's, not a rewrite of admitted evidence: the stored bytes
     // still hold what the predecessor admitted.
     const stored2 = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
     try {
@@ -1883,7 +1853,7 @@ describe("remote read boundary", () => {
     const document = JSON.parse(
       JSON.stringify(submission(commit, check, completeSnapshot(check), 1)),
     ) as Record<string, unknown>;
-    // invariant: The retired member is refused by name at its own path, and the published
+    // see packages/engine/src/store-read.test.ts - // invariant: The retired member is refused by name at its own path, and the published
     // descriptor refuses it too - the shape was revised in place, so `version` stays 1.
     expect(document.version).toBe(1);
     const withRoadmap = JSON.parse(JSON.stringify(document)) as {
@@ -1895,7 +1865,7 @@ describe("remote read boundary", () => {
       code: "remote.input-invalid",
       message: expect.stringContaining("submission.snapshot.project.roadmap: is not a contract field"),
     });
-    // invariant: Without the member the same document is accepted.
+    // see packages/engine/src/store-read.test.ts - // invariant: Without the member the same document is accepted.
     expect(remoteObserveDocumentSchema.safeParse(document).success).toBe(true);
     expect(await ingestRemoteObservation(context, document as never)).toBeDefined();
   });

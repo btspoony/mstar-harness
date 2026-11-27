@@ -1,16 +1,4 @@
-/**
- * The host's half of the Projects pair, plus the one read the whole shell shares.
- *
- * Two obligations converge here:
- *
- *  - **The project list is host-supplied data.** `@mstar-harness/ui`'s README makes
- *    the host responsible for it (obligation 2), because a component cannot know how
- *    a host enumerates projects. One read feeds both consumers — the Issues filter
- *    bar and this destination — instead of each fetching its own copy.
- *  - **The project screen's default body is the milestone rollup.** It comes from
- *    the project-scoped `overview` read's `milestones` member; `milestonesArm`
- *    makes the absence judgement and the host adds nothing to it.
- */
+/** see packages/cli/web/projects-data.ts - The host's half of the Projects pair, plus the one read the whole shell shares. Two obligations converge here: - **The project list is host-supplied data.** `@mstar-harness/ui`'s README makes the host responsible for it (obligation 2), because a component cannot know how a host enumerates projects. One read feeds both consumers — the Issues filter bar and this destination — instead of each fetching its own copy. - **The project screen's default body is the milestone rollup.** It comes from the project-scoped `overview` read's `milestones` member; `milestonesArm` makes the absence judgement and the host adds nothing to it. */
 import type { IssuePage, IterationListDTO, MilestoneRead as MilestoneReadDTO, ProjectListDTO } from "@mstar-harness/engine";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
@@ -125,13 +113,7 @@ export type ProjectMilestonesOutcome =
   | {
       kind: "ready";
       milestones: Resolved<MilestonesModel>;
-      /**
-       * The store revision of the SAME overview read that produced the arm. A
-       * write hashes it into its request, so a stale observation is refused
-       * (`milestone.revision-conflict`) instead of overwriting another writer.
-       * `null` when the collaboration observation carries no revision — the
-       * forms are read-only then, because there is nothing honest to hash.
-       */
+      /** see packages/cli/web/projects-data.ts - The store revision of the SAME overview read that produced the arm. A write hashes it into its request, so a stale observation is refused (`milestone.revision-conflict`) instead of overwriting another writer. `null` when the collaboration observation carries no revision — the forms are read-only then, because there is nothing honest to hash. */
       storeRevision: number | null;
     }
   | { kind: "failed"; message: string };
@@ -181,7 +163,7 @@ export async function readProjectMilestones(
     if (!response.ok) return { status: "error", message: refusalMessage(body, response.status) };
     const envelope = asEnvelope<MilestoneReadDTO>(body);
     if (envelope === null) return { status: "error", message: "The milestone read answered with something that is not a read envelope." };
-    // why: A gap is not an empty milestone set: the authority could not establish
+    // see packages/cli/web/projects-data.ts - // why: A gap is not an empty milestone set: the authority could not establish
     // what the project owns, so the read fails rather than claiming nothing is there.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };
@@ -287,15 +269,15 @@ export async function writeMilestone(
  *  - an assignment moves an ISSUE as well, so the scoped list/picker re-read too.
  */
 export type MilestoneWriteFollowUp = {
-  /** Re-issue the overview read (the forms' revision and the milestone body). */
+  /** see packages/cli/web/projects-data.ts - Re-issue the overview read (the forms' revision and the milestone body). */
   readonly reloadOverview: boolean;
-  /** Re-issue the scoped Issues list and the assign picker. */
+  /** see packages/cli/web/projects-data.ts - Re-issue the scoped Issues list and the assign picker. */
   readonly refreshIssues: boolean;
-  /** Keep the operator's typed draft (`false` clears it after an accepted write). */
+  /** see packages/cli/web/projects-data.ts - Keep the operator's typed draft (`false` clears it after an accepted write). */
   readonly keepDraft: boolean;
-  /** Surface this refusal message, or `null` after an accepted write. */
+  /** see packages/cli/web/projects-data.ts - Surface this refusal message, or `null` after an accepted write. */
   readonly refusal: string | null;
-  /** Keep the logical write's operation id/revision for a retry of the same intent. */
+  /** see packages/cli/web/projects-data.ts - Keep the logical write's operation id/revision for a retry of the same intent. */
   readonly retainOperation: boolean;
 };
 
@@ -319,13 +301,13 @@ export function milestoneWriteFollowUp(
 
 /** The page state one settled milestone write can move. */
 export type MilestonePageState = {
-  /** The overview read's reload token (the forms' revision and the milestone body). */
+  /** see packages/cli/web/projects-data.ts - The overview read's reload token (the forms' revision and the milestone body). */
   readonly overviewReloadToken: number;
-  /** The scoped Issues list / assign picker refresh token. */
+  /** see packages/cli/web/projects-data.ts - The scoped Issues list / assign picker refresh token. */
   readonly issuesRefreshToken: number;
-  /** What the write surface renders: busy, the store's message, and the draft verdict. */
+  /** see packages/cli/web/projects-data.ts - What the write surface renders: busy, the store's message, and the draft verdict. */
   readonly writes: { readonly busy: boolean; readonly refusal: string | null; readonly keepDraft: boolean | undefined };
-  /** Whether the logical write's id/revision is retained (a replays-able ambiguous attempt). */
+  /** see packages/cli/web/projects-data.ts - Whether the logical write's id/revision is retained (a replays-able ambiguous attempt). */
   readonly operationPending: boolean;
 };
 

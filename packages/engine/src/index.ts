@@ -1051,7 +1051,7 @@ export {
   registerCatalogEntity,
   updateCatalogEntity,
 } from "./catalog.js";
-// The `{HARNESS_DIR}/planboard.md` grammar and the findings `mstar planboard
+// see packages/engine/src/index.ts - // The `{HARNESS_DIR}/planboard.md` grammar and the findings `mstar planboard
 // check` reports. Pointers only: the planboard holds no state, and its read
 // touches the issue store without writing either side.
 export type { PlanboardFinding, PlanboardFindingCode, PlanboardFindings } from "./planboard.js";

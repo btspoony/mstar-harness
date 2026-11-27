@@ -703,7 +703,7 @@ describe("remote outbox commands", () => {
     const sync = await invoke("issue-sync.pending", { harness: fixture.harness, project: IDS.projectId }, fixture.repo);
     expect(sync).toMatchObject({ status: "refused", exitCode: 1 });
     expect(String(sync.code)).toMatch(/^(linear|collaboration)\./);
-    // invariant: That refusal records nothing: every domain write stays durably pending.
+    // see packages/commands/test/store-remote-outbox.test.ts - // invariant: That refusal records nothing: every domain write stays durably pending.
     const stillPending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
       harness: fixture.harness,
       project: IDS.projectId,

@@ -482,7 +482,7 @@ export const en = {
   openIssuesUnit: "open issues",
     breadcrumb: { label: "Breadcrumb", trail: "Projects" },
     tabLabel: "Project features",
-    /** The fixed list features, in their fixed order (IA §4). */
+    /** see packages/ui/src/locale/en.ts - The fixed list features, in their fixed order (IA §4). */
     features: { issues: "Issues", iterations: "Iterations" },
     milestones: {
       milestonesHeading: "Milestone board",

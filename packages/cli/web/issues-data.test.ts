@@ -379,7 +379,7 @@ describe("P1: a keystroke must not unmount the search box", () => {
 
 describe("the assign picker's read", () => {
   test("pages the whole OPEN set of the project, ignoring the address bar's filters", async () => {
-    // The page is the address bar's: a severity filter and a second page. The picker
+    // see packages/cli/web/issues-data.test.ts - // The page is the address bar's: a severity filter and a second page. The picker
     // must not inherit either — it asks its own query and follows every page.
     const requested: string[] = [];
     const fetchImpl = (async (input: string | URL | Request) => {
@@ -390,7 +390,7 @@ describe("the assign picker's read", () => {
       return new Response(
         JSON.stringify({
           ...listEnvelope(items, 51),
-          // The list's own page bounds ride the collaboration scope key; the pager
+          // see packages/cli/web/issues-data.test.ts - // The list's own page bounds ride the collaboration scope key; the pager
           // treats the two pages as one list when the logical scope matches.
           collaboration: {
             scope: { kind: "query", key: `issues:open:engine:50:${offset}` },
@@ -410,7 +410,7 @@ describe("the assign picker's read", () => {
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
     expect(result.envelope.data.items).toHaveLength(51);
-    // Every request is the picker's own: disposition=open + the project, no
+    // see packages/cli/web/issues-data.test.ts - // Every request is the picker's own: disposition=open + the project, no
     // severity/search/kind filter, and the two page offsets.
     for (const search of requested) {
       const params = new URLSearchParams(search);
@@ -437,15 +437,15 @@ describe("the assign picker's read", () => {
 describe("the picker's offer list follows an assignment", () => {
   test("an assigned issue leaves the offer set; an unassigned one returns at its NEW revision", () => {
     const open = (id: string, revision: number, milestoneId: string | null) => summary({ id, revision, milestoneId });
-    // Before: I-1 and I-2 are offered; I-3 is already assigned and I-4 is resolved.
+    // see packages/cli/web/issues-data.test.ts - // Before: I-1 and I-2 are offered; I-3 is already assigned and I-4 is resolved.
     const before = [open("I-1", 3, null), open("I-2", 1, null), open("I-3", 1, "m-1"), summary({ id: "I-4", disposition: "resolved", milestoneId: null })];
     expect(assignableOptions(before).map((issue) => issue.id)).toEqual(["I-1", "I-2"]);
 
-    // I-1 is assigned: the refreshed rows no longer offer it.
+    // see packages/cli/web/issues-data.test.ts - // I-1 is assigned: the refreshed rows no longer offer it.
     const afterAssign = [open("I-1", 4, "m-1"), open("I-2", 1, null), open("I-3", 1, "m-1")];
     expect(assignableOptions(afterAssign).map((issue) => issue.id)).toEqual(["I-2"]);
 
-    // I-1 is unassigned again: it returns carrying the observed revision the next
+    // see packages/cli/web/issues-data.test.ts - // I-1 is unassigned again: it returns carrying the observed revision the next
     // write must hash (5), so a stale pick cannot revert another writer.
     const afterUnassign = [open("I-1", 5, null), open("I-2", 1, null)];
     expect(assignableOptions(afterUnassign)).toEqual([

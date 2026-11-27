@@ -1,34 +1,4 @@
-/**
- * catalog-import.ts -- explicit discovery/proposal, reviewed-mapping import and
- * versioned export transport over the catalog authority
- * (state-projection-contract §2/§4).
- *
- * Boundaries this module owns, and does not cross:
- * - Discovery is a PROPOSAL over the configured roots. It writes nothing, never
- *   reads through a symlink, and never treats a filename as project/iteration
- *   membership, archive state, execution status or provenance. A legacy index
- *   row whose reference leaves its catalog root (a cross-root/history link) is
- *   retained as an explicit unresolved-reference unknown, never a fatal plan
- *   error and never a fabricated row (§4).
- * - Import applies a REVIEWED plan through the shared catalog domain verbs
- *   (P1 `registerCatalogEntity` / `linkCatalogEntities`), so every write keeps
- *   its transaction and journal rules. Source hashes remain provenance; drift
- *   does not veto an import. A failure AFTER writes started is never a silent
- *   prefix: applied proposals are journalled progress and the failure reports
- *   the exact partial state and resume guidance (RV-3).
- * - Import never creates a workflow session, retires an index or repairs issue
- *   authority; live index retirement belongs to the cutover plan's G6.
- *
- * Identity sources (what a proposal's id may come from, §2):
- * - iteration / project package directory names (a directory holding the
- *   canonical `delivery-compass.md` marker) and the canonical
- *   `{PLANS_DIR}/<plan-id>.md` plan-file convention: the harness's own layout
- *   identity, read from the filesystem and not from a maintained index.
- * - an explicit id cell in a legacy index row (backticked first cell).
- * - otherwise the proposal carries a discovery-assigned `doc-<UUID>` and an
- *   explicit `identity` unknown; reimport attaches to the existing row at the
- *   same canonical location, so the retained DB id wins (§2).
- */
+/** see packages/engine/src/catalog-import.ts - catalog-import.ts -- explicit discovery/proposal, reviewed-mapping import and versioned export transport over the catalog authority (state-projection-contract §2/§4). Boundaries this module owns, and does not cross: - Discovery is a PROPOSAL over the configured roots. It writes nothing, never reads through a symlink, and never treats a filename as project/iteration membership, archive state, execution status or provenance. A legacy index row whose reference leaves its catalog root (a cross-root/history link) is retained as an explicit unresolved-reference unknown, never a fatal plan error and never a fabricated row (§4). - Import applies a REVIEWED plan through the shared catalog domain verbs (P1 `registerCatalogEntity` / `linkCatalogEntities`), so every write keeps its transaction and journal rules. Source hashes remain provenance; drift does not veto an import. A failure AFTER writes started is never a silent prefix: applied proposals are journalled progress and the failure reports the exact partial state and resume guidance (RV-3). - Import never creates a workflow session, retires an index or repairs issue authority; live index retirement belongs to the cutover plan's G6. Identity sources (what a proposal's id may come from, §2): - iteration / project package directory names (a directory holding the canonical `delivery-compass.md` marker) and the canonical `{PLANS_DIR}/<plan-id>.md` plan-file convention: the harness's own layout identity, read from the filesystem and not from a maintained index. - an explicit id cell in a legacy index row (backticked first cell). - otherwise the proposal carries a discovery-assigned `doc-<UUID>` and an explicit `identity` unknown; reimport attaches to the existing row at the same canonical location, so the retained DB id wins (§2). */
 import { createHash, randomUUID } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, type Dirent } from "node:fs";
 import { basename, join, resolve, sep } from "node:path";
@@ -321,11 +291,7 @@ export type CatalogImportDrift = {
   relativePath: string;
   expectedSha256: string;
   actualSha256: string | null;
-  /**
-   * note: `kind-changed` is the evidence-kind change: a location that was a digested regular file is
-   * now a directory (or the reverse). The recorded hash cannot be verified, so it is reported instead
-   * of being silently accepted as unchanged.
-   */
+  /** see packages/engine/src/catalog-import.ts - `kind-changed` is the evidence-kind change: a location that was a digested regular file is now a directory (or the reverse). The recorded hash cannot be verified, so it is reported instead of being silently accepted as unchanged. */
   state: "changed" | "kind-changed" | "missing" | "refused";
 };
 
@@ -390,11 +356,7 @@ function sourcePath(context: StoreContext, rootKind: CatalogRootKind, relativePa
 
 type SourceRead =
   | { state: "ok"; text: string; sha256: string }
-  /**
-   * note: A project package IS its directory: no marker file, no body, no digest. Recognized
-   * separately from `refused` so an ordinary project location is never reported as an
-   * unreadable source.
-   */
+  /** see packages/engine/src/catalog-import.ts - A project package IS its directory: no marker file, no body, no digest. Recognized separately from `refused` so an ordinary project location is never reported as an unreadable source. */
   | { state: "directory" }
   | { state: "missing" | "refused"; detail: string };
 
@@ -590,7 +552,7 @@ function readForEvidence(acc: Accumulator, context: StoreContext, rootKind: Cata
     recordDigest(acc, rootKind, relativePath, read.sha256);
     return { text: read.text, sourceKey };
   }
-  // note: A directory identity contributes no body evidence: the location itself is the fact.
+  // see packages/engine/src/catalog-import.ts - // note: A directory identity contributes no body evidence: the location itself is the fact.
   if (read.state === "directory") return null;
   acc.unknowns.push({
     code: read.state === "missing" ? "source-missing" : "source-refused",
@@ -895,12 +857,7 @@ function collectBodies(root: string, relativeDir = ""): string[] {
   return bodies;
 }
 
-/**
- * One tracked-body proposal. `evidencePath` names the file the metadata is
- * read from: the body itself for documents, and the package marker file
- * (`delivery-compass.md`) for a directory-located package,
- * whose own location stays the directory.
- */
+/** see packages/engine/src/catalog-import.ts - One tracked-body proposal. `evidencePath` names the file the metadata is read from: the body itself for documents, and the package marker file (`delivery-compass.md`) for a directory-located package, whose own location stays the directory. */
 function bodyProposal(
   acc: Accumulator,
   context: StoreContext,
@@ -1290,7 +1247,7 @@ export async function discoverCatalog(context: StoreContext): Promise<CatalogImp
 
   const iterationIds = listDirectories(iterationsRoot).filter((id) => hasFile(join(iterationsRoot, id), COMPASS_FILE));
 
-  // 1. Layout identity: the harness's own directory conventions (§1). A project
+  // see packages/engine/src/catalog-import.ts - // 1. Layout identity: the harness's own directory conventions (§1). A project
   // package is its directory: it carries no marker file, so its location IS
   // `projects/<id>` and it contributes no body digest.
   for (const id of listDirectories(projectsRoot)) {
@@ -1485,7 +1442,7 @@ export async function planCatalogImport(context: StoreContext, inputs: CatalogIm
     }
 
     const existing = local.get(entityKey(kind, mapping.id.trim()));
-    // invariant: A project row registered at the retired marker path and one at its directory are the
+    // see packages/engine/src/catalog-import.ts - // invariant: A project row registered at the retired marker path and one at its directory are the
     // SAME project. The plan therefore carries that row's OWN location, so the import replays it as an
     // identical registration (no second row, no relocation, registration and revision untouched)
     // instead of failing as a duplicate at a new path.
@@ -1627,7 +1584,7 @@ export async function verifyCatalogImport(context: StoreContext, plan: CatalogIm
   for (const digest of plan.sourceDigests) {
     const read = readSourceFile(context, digest.rootKind, digest.relativePath);
     if (read.state === "ok" && read.sha256 === digest.sha256) continue;
-    // invariant: Each recorded digest was a regular file's bytes. A location that is now a directory
+    // see packages/engine/src/catalog-import.ts - // invariant: Each recorded digest was a regular file's bytes. A location that is now a directory
     // has no comparable bytes - the evidence changed KIND - so it is drift, never "unchanged".
     if (read.state === "directory") {
       drift.push({

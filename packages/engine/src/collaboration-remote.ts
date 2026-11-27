@@ -181,7 +181,7 @@ export type RemoteCatalogEntity = Readonly<{
   id: string;
   title: string;
   description: string | null;
-  /** note: The catalog's own kind vocabulary, not arbitrary text: the retired value never reaches a DTO. */
+  /** see packages/engine/src/collaboration-remote.ts - The catalog's own kind vocabulary, not arbitrary text: the retired value never reaches a DTO. */
   documentKind: CatalogDocumentKind | null;
   lifecycle: "active" | "archived" | "superseded";
   revision: number;
@@ -678,7 +678,7 @@ function catalogEntity(value: unknown, path: string): RemoteCatalogEntity {
   if (documentKind !== null && body.kind !== "document") {
     invalid(`${path}.documentKind`, "only a document entity carries a document kind");
   }
-  // invariant: The retired catalog kind is refused by path here, before any write: the project
+  // see packages/engine/src/collaboration-remote.ts - // invariant: The retired catalog kind is refused by path here, before any write: the project
   // snapshot's catalog entries carry the same vocabulary the local catalog verbs enforce, so a
   // retired value cannot re-enter through the remote surface.
   if (documentKind !== null && !(DOCUMENT_KIND_NAMES as readonly string[]).includes(documentKind)) {
@@ -1087,7 +1087,7 @@ function snapshot(value: unknown, check: ScopeCheck): RemoteSnapshot {
       `The snapshot describes project ${projectId}, but this submission addresses ${check.projectId}. Nothing was written.`,
     );
   }
-  // invariant: The project document's members are the contract's own. The retired `roadmap` member
+  // see packages/engine/src/collaboration-remote.ts - // invariant: The project document's members are the contract's own. The retired `roadmap` member
   // is refused by name at its path, and its absence is the only accepted shape - the shape was
   // revised in place, so the submission stays `version: 1`.
   allowOnly(project, "submission.snapshot.project", ["projectId", "head", "binding", "milestones", "catalogEntities", "catalogLinks"]);
@@ -5453,7 +5453,7 @@ async function readWriteScope(context: StoreContext, projectId: string): Promise
     }
     let snapshot: RemoteSnapshot;
     try {
-      // invariant: The write path parses the SAME admitted evidence the read path does, so it takes the
+      // see packages/engine/src/collaboration-remote.ts - // invariant: The write path parses the SAME admitted evidence the read path does, so it takes the
       // same normalization: a cache admitted before the retirement must not make this process refuse its
       // own project-replace over a kind it no longer knows.
       snapshot = normalizeRetiredDocumentKind(JSON.parse(scope.snapshot_json) as RemoteSnapshot);

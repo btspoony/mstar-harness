@@ -1,18 +1,4 @@
-/**
- * `Projects` and `ProjectDetail` — the only place the product hierarchy is
- * expressed.
- *
- * The load-bearing assertions:
- *
- *  - the milestone rollup is the screen's default body, read from the
- *    project-scoped `overview` read's `milestones` member;
- *  - the list feature set is the fixed two, in order, and `Issues` is the default;
- *  - an empty milestone set renders the `empty` arm with the create form still
- *    offered — there is no `absent` arm and no tab, route or label named roadmap;
- *  - the scoped lists carry a chip naming the project, and clearing it is a model
- *    operation (the screen does not own the scope);
- *  - no envelope counter reaches either page.
- */
+/** see packages/ui/src/screens/projects-screens.test.tsx - `Projects` and `ProjectDetail` — the only place the product hierarchy is expressed. The load-bearing assertions: - the milestone rollup is the screen's default body, read from the project-scoped `overview` read's `milestones` member; - the list feature set is the fixed two, in order, and `Issues` is the default; - an empty milestone set renders the `empty` arm with the create form still offered — there is no `absent` arm and no tab, route or label named roadmap; - the scoped lists carry a chip naming the project, and clearing it is a model operation (the screen does not own the scope); - no envelope counter reaches either page. */
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { MilestoneRead, OverviewMember, ProjectListDTO } from "@mstar-harness/engine";
@@ -122,7 +108,7 @@ const milestoneRow = (
   ...over,
 });
 
-/** The arm the screen renders for one rollup read. */
+/** see packages/ui/src/screens/projects-screens.test.tsx - The arm the screen renders for one rollup read. */
 const armOf = (read: MilestoneRead): Resolved<MilestonesModel> => milestonesArm({ state: "read", data: read });
 
 // why: a slot assertion must be met inside this milestone's own block, not anywhere on the page.
@@ -297,13 +283,13 @@ describe("ProjectDetail — the milestone body and the fixed feature set", () =>
   test("the milestone rollup is the default body, on every feature", () => {
     expect(html).toContain('data-ms-milestones=""');
     expect(html).toContain('data-ms-milestone-timeline=""');
-    // The body is not a tab: selecting the other feature keeps it mounted.
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The body is not a tab: selecting the other feature keeps it mounted.
     expect(renderDetail({ feature: "iterations" })).toContain('data-ms-milestones=""');
   });
 
   test("it never auto-selects a feature that has content", () => {
     const empty = renderDetail({ milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })) });
-    // The milestone set is empty and Issues would have content — the tab must not move.
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The milestone set is empty and Issues would have content — the tab must not move.
     expect(empty).toContain('data-ms-absence="empty"');
     expect(empty).toContain('data-ms-feature="issues"');
   });
@@ -327,7 +313,7 @@ describe("ProjectDetail — the header description", () => {
   test("the project's description sits in the header, above the identity meta", () => {
     expect(html).toContain('data-ms-direction=""');
     expect(html).toContain("Store, projection and gates");
-    // Above the identity meta line: the description precedes the head's meta.
+    // see packages/ui/src/screens/projects-screens.test.tsx - // Above the identity meta line: the description precedes the head's meta.
     expect(html.indexOf("Store, projection and gates")).toBeLessThan(html.indexOf("detail-meta"));
     expect(html).not.toContain("<details");
   });
@@ -502,7 +488,7 @@ describe("ProjectDetail — the milestone body's arms", () => {
     expect(html).toContain('data-ms-absence="empty"');
     expect(html).not.toContain('data-ms-milestones=""');
     expect(html).not.toContain("progressbar");
-    // The header still states the catalog description.
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The header still states the catalog description.
     expect(html).toContain('data-ms-direction=""');
     expect(html).toContain("Store, projection and gates");
   });
@@ -801,7 +787,7 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("the host's keepDraft verdict WINS over the refusal string (a conflict keeps the draft)", () => {
-    // A revision conflict carries a refusal message AND must keep the draft; an
+    // see packages/ui/src/screens/projects-screens.test.tsx - // A revision conflict carries a refusal message AND must keep the draft; an
     // accepted write carries neither and clears it. These two inputs agree with the
     // refusal string, so they pin the ordinary path — the divergent cases below pin
     // that the FIELD is the one being read.
@@ -813,7 +799,7 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("keepDraft:true with NO refusal keeps the draft — the field is read, not derived", () => {
-    // Divergent input 1: the refusal string says nothing, yet the host states the
+    // see packages/ui/src/screens/projects-screens.test.tsx - // Divergent input 1: the refusal string says nothing, yet the host states the
     // draft survives. A consumer that dropped the `keepDraft` read would fall back to
     // `refusal !== null` → `false` → clear, and this fails.
     const typed = { name: "Still mine", effort: "9", status: "active" };
@@ -821,7 +807,7 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("keepDraft:false WITH a terminal refusal clears the draft — keepDraft beats refusal !== null", () => {
-    // Divergent input 2: a terminal refusal string is present (which the old rule read
+    // see packages/ui/src/screens/projects-screens.test.tsx - // Divergent input 2: a terminal refusal string is present (which the old rule read
     // as "keep") while the host states the draft does not survive. Reading the refusal
     // string would keep it; reading `keepDraft` clears it — so this fails if the field
     // is ignored.
@@ -870,7 +856,7 @@ describe("ProjectDetail — the write controls reach every answered arm", () => 
 });
 
 describe("ProjectDetail — the host-owned draft store", () => {
-  // why: the forms live under the milestone read, so a refresh unmounts them — the draft must
+  // see packages/ui/src/screens/projects-screens.test.tsx - // why: the forms live under the milestone read, so a refresh unmounts them — the draft must
   // be the host's, keyed per target, or the operator's typed text dies with the subtree.
   test("the store keeps one draft per target, and clear drops only that target", () => {
     const store = createMilestoneDraftStore();
@@ -1000,7 +986,7 @@ describe("ProjectDetail — the assign picker's three arms", () => {
   });
 
   test("a failed read states the cause in place and offers the retry", () => {
-    // The picker must not vanish (an entry the operator cannot find reads as
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The picker must not vanish (an entry the operator cannot find reads as
     // "nothing to assign") and it must not spin forever.
     const html = renderDetail({
       writes,
@@ -1012,7 +998,7 @@ describe("ProjectDetail — the assign picker's three arms", () => {
     expect(html).toContain("the store could not be read");
     expect(html).toContain('data-ms-assign-retry=""');
     expect(html).toContain("Retry");
-    // The control is rendered at the milestone's own actions, not above the board.
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The control is rendered at the milestone's own actions, not above the board.
     expect(boardBlockOf(html, "9f2c4a10")).toContain('data-ms-assign-error=""');
   });
 

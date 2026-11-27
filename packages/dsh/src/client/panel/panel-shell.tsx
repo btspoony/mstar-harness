@@ -266,16 +266,15 @@ export function PanelShell(props: {
   projectIterations?: MstarDashboardViewState
   /** A project detail's scoped Issues read. */
   projectIssues?: MstarDashboardViewState
-  /** The projects list read — a project page's identity comes from the same rows the list renders. */
+  /** see packages/dsh/src/client/panel/panel-shell.tsx - The projects list read — a project page's identity comes from the same rows the list renders. */
   projectsList?: MstarDashboardViewState
   /** The milestone write channel, alive only while a project page is open. */
   writes?: MilestoneWriteChannel
-  /** The assign picker's read: the offer list, or the loading/failed arm. */
+  /** see packages/dsh/src/client/panel/panel-shell.tsx - The assign picker's read: the offer list, or the loading/failed arm. */
   assignableIssues?: AssignableIssuesRead
-  /** Re-issue the picker's reads after a failure. */
+  /** see packages/dsh/src/client/panel/panel-shell.tsx - Re-issue the picker's reads after a failure. */
   onRetryAssignable?: () => void
-  /** note: the seat-owned milestone draft store — the forms live under the overview read, so a
-   *  refresh unmounts them, and the drafts must outlive the subtree they are typed in. */
+  /** see packages/dsh/src/client/panel/panel-shell.tsx - the seat-owned milestone draft store — the forms live under the overview read, so a refresh unmounts them, and the drafts must outlive the subtree they are typed in. */
   drafts?: MilestoneDraftStore
 }): React.ReactElement {
   const copy = copyFor(props.locale)
@@ -451,7 +450,7 @@ export function failureKey(reason: string): PanelKey {
   return FAILURE_KEYS[reason] ?? 'state.failure.unknown'
 }
 
-/** One issue row as the engine's issue page answers it (the picker's own read). */
+/** see packages/dsh/src/client/panel/panel-shell.tsx - One issue row as the engine's issue page answers it (the picker's own read). */
 type AssignableRow = {
   readonly id: string
   readonly title: string
@@ -503,7 +502,7 @@ export function assignableWalkStep(
   const offset = walk.pages.length
   const items = page.items
   const pages = offset === 0 || walk.pages.length === offset ? [...walk.pages, ...items] : walk.pages
-  // A short page (or the stated total) ends the walk; anything else asks for the next.
+  // see packages/dsh/src/client/panel/panel-shell.tsx - // A short page (or the stated total) ends the walk; anything else asks for the next.
   const done = items.length === 0 || offset + items.length >= (page.total ?? 0)
   return done ? { kind: 'complete', pages } : { kind: 'walking', pages }
 }
@@ -578,14 +577,7 @@ function sessionCwd(useSessions: UseSessions | undefined, sessionId: SessionId |
   return typeof cwd === 'string' && cwd !== '' ? cwd : null
 }
 
-/**
- * note: the milestone write channel the seat hands the project page (plan Task 4).
- * The UI owns no optimistic state: a refused write only sets the refusal copy.
- * An ACCEPTED write and a revision-conflict refusal re-issue the overview read
- * (the store moved, so the open read is stale); an input refusal does not —
- * nothing moved, and a refresh would destroy the form mid-edit for no fact.
- * Either way the operator's draft survives in the seat-owned store.
- */
+/** see packages/dsh/src/client/panel/panel-shell.tsx - the milestone write channel the seat hands the project page (plan Task 4). The UI owns no optimistic state: a refused write only sets the refusal copy. An ACCEPTED write and a revision-conflict refusal re-issue the overview read (the store moved, so the open read is stale); an input refusal does not — nothing moved, and a refresh would destroy the form mid-edit for no fact. Either way the operator's draft survives in the seat-owned store. */
 /**
  * The one refusal class a milestone write can carry that means the OBSERVED STORE MOVED:
  * the engine's own CAS verdict, gated on its code — never the message text. Only this class
@@ -599,7 +591,7 @@ export function isRevisionConflictCode(code: string): boolean {
 export type MilestoneWriteChannel = {
   readonly busy: boolean
   readonly refusal: string | null
-  /** The conflict policy's verdict on the typed draft: accepted clears, conflict keeps. */
+  /** see packages/dsh/src/client/panel/panel-shell.tsx - The conflict policy's verdict on the typed draft: accepted clears, conflict keeps. */
   readonly keepDraft: boolean | undefined
   create(input: { name: string; effortSessions: number | null; ordinal: number }): void
   update(
@@ -697,7 +689,7 @@ export function createMilestoneWrites(seats: {
       if (!ambiguous) ids.settled()
       busy = false
       refusal = result.ok ? null : result.message
-      // The host's draft verdict: an accepted write clears the form; a revision
+      // see packages/dsh/src/client/panel/panel-shell.tsx - // The host's draft verdict: an accepted write clears the form; a revision
       // conflict KEEPS the typed text even though its refusal message is present.
       keepDraft = !result.ok
       onState({ busy, refusal, keepDraft })
@@ -944,7 +936,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   // The open record (list → detail), and its own read.
   const [detail, setDetail] = React.useState<{ view: DetailView; id: string } | null>(null)
   React.useEffect(() => { setDetail(null) }, [destination])
-  // The engine has no `project-detail` view: a project's page is composed from
+  // see packages/dsh/src/client/panel/panel-shell.tsx - // The engine has no `project-detail` view: a project's page is composed from
   // the views that exist — its `overview` (project-scoped, the milestone body's
   // source), plus the scoped `issues` / `iterations` reads below.
   const detailView = useMstarDashboardView({
@@ -964,7 +956,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     view: detail !== null && detail.view === 'project-detail' ? 'issues' : null,
     ...(detail !== null && detail.view === 'project-detail' ? { params: { project: detail.id, limit: '200' } } : {}),
   })
-  // The assign picker's OWN read: the project's OPEN issues, one page at a time
+  // see packages/dsh/src/client/panel/panel-shell.tsx - // The assign picker's OWN read: the project's OPEN issues, one page at a time
   // (`disposition=open`, offset-walked by re-keying the read between answers) so
   // the address-bar filters and the first page's 200 rows cannot hide an offer.
   const [walk, setWalk] = React.useState<AssignableWalk>(initialAssignableWalk)
@@ -982,7 +974,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
       : {}),
   })
   const assignableAnswer = assignableView.state
-  // A new project, an explicit retry, and the post-write reload all restart the
+  // see packages/dsh/src/client/panel/panel-shell.tsx - // A new project, an explicit retry, and the post-write reload all restart the
   // WHOLE walk from page 0 (a re-read of only the current page would leave the
   // earlier pages of another observation behind).
   React.useEffect(() => {
@@ -1005,7 +997,7 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     ...(detail !== null && detail.view === 'project-detail' ? { params: { project: detail.id, limit: '200' } } : {}),
   })
 
-  // The milestone write channel (plan Task 4): one write at a time, driven by
+  // see packages/dsh/src/client/panel/panel-shell.tsx - // The milestone write channel (plan Task 4): one write at a time, driven by
   // the overview read's own store revision (contract C2). Only alive while a
   // project page is open.
   const expectedStoreRevision =
@@ -1020,13 +1012,13 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     expectedStoreRevision,
     reload: () => {
       detailView.reload()
-      // The accepted write (or conflict re-read) moved the store: the picker's
+      // see packages/dsh/src/client/panel/panel-shell.tsx - // The accepted write (or conflict re-read) moved the store: the picker's
       // offer must be walked again from page 0, not resumed at the old offset.
       restartAssignableWalk()
     },
     drafts: milestoneDrafts,
   })
-  // The picker's three arms, never two: a still-walking read (waiting, loading,
+  // see packages/dsh/src/client/panel/panel-shell.tsx - // The picker's three arms, never two: a still-walking read (waiting, loading,
   // or a page not yet answered) says loading; a refusal at ANY page is `failed`
   // with the store's reason and the retry that restarts the walk.
   const assignableIssues: AssignableIssuesRead | undefined =

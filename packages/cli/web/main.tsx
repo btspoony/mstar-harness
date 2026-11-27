@@ -227,15 +227,7 @@ function OverviewDestination(props: { query: string; outcome: OverviewOutcome })
   );
 }
 
-/**
- * The assign picker's own read: every open issue of one project, independent of
- * the address bar and the list's page. `refreshToken` re-issues it after a write
- * moves an issue's milestone or revision; `retry()` re-issues it after a failure.
- *
- * Three arms, never two: a rejected read is `failed` with the store's own reason,
- * so the picker states the cause and offers the retry instead of spinning or
- * vanishing.
- */
+/** see packages/cli/web/main.tsx - The assign picker's own read: every open issue of one project, independent of the address bar and the list's page. `refreshToken` re-issues it after a write moves an issue's milestone or revision; `retry()` re-issues it after a failure. Three arms, never two: a rejected read is `failed` with the store's own reason, so the picker states the cause and offers the retry instead of spinning or vanishing. */
 function useAssignableIssues(
   projectId: string | null,
   refreshToken: number,
@@ -268,13 +260,7 @@ function useAssignableIssues(
   return { read, retry: () => setRetryToken((token) => token + 1) };
 }
 
-/**
- * The project's scoped Issues list, behind its own read.
- *
- * The query is the address bar's: the screen reports a whole query change and this
- * destination turns it into history — `replace` for a filter change, so Back steps
- * through destinations rather than keystrokes.
- */
+/** see packages/cli/web/main.tsx - The project's scoped Issues list, behind its own read. The query is the address bar's: the screen reports a whole query change and this destination turns it into history — `replace` for a filter change, so Back steps through destinations rather than keystrokes. */
 /**
  * The iterations envelope at one scope, kept raw so a filter change re-derives the rows
  * instead of re-fetching. Lifted out of the screen so a caller can state the total before
@@ -317,7 +303,7 @@ function useIssues(query: IssueQuery, enabled = true, refreshToken = 0): IssuesO
       current = false;
       controller.abort();
     };
-    // The key is the request's identity: a new object with the same values must not
+    // see packages/cli/web/main.tsx - // The key is the request's identity: a new object with the same values must not
     // refetch on every render. `refreshToken` is the explicit re-issue a write asks
     // for (the store moved, so the painted rows are stale).
   }, [key, enabled, refreshToken]);
@@ -744,7 +730,7 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
       model={props.outcome.model}
       copy={projectsCopy(copy)}
       onOpen={(projectId) => {
-        // The default feature is the route model's: `#project/<id>` means the default.
+        // see packages/cli/web/main.tsx - // The default feature is the route model's: `#project/<id>` means the default.
         navigate({ name: "project", id: projectId, feature: DEFAULT_PROJECT_FEATURE }, "", "push");
       }}
     />
@@ -759,11 +745,7 @@ function ProjectsDestination(props: { outcome: ProjectsOutcome }) {
 export function ProjectDetailDestination(props: { address: Address; feature: ProjectFeature; projectIds: readonly string[]; projects: ProjectsOutcome }) {
   const projectId = props.address.route.name === "project" ? props.address.route.id : "";
   const [outcome, setOutcome] = useState<ProjectMilestonesOutcome>({ kind: "loading" });
-  /**
-   * The forms' drafts live OUTSIDE the read's subtree (the overview read
-   * unmounts them on a re-read), so a typed name/effort survives an accepted
-   * write's re-read and a revision-conflict retry.
-   */
+  /** see packages/cli/web/main.tsx - The forms' drafts live OUTSIDE the read's subtree (the overview read unmounts them on a re-read), so a typed name/effort survives an accepted write's re-read and a revision-conflict retry. */
   const [drafts] = useState(createMilestoneDraftStore);
   const [pageState, setPageState] = useState<MilestonePageState>({
     overviewReloadToken: 0,
@@ -771,9 +753,9 @@ export function ProjectDetailDestination(props: { address: Address; feature: Pro
     writes: { busy: false, refusal: null, keepDraft: undefined },
     operationPending: false,
   });
-  /** One operation id per logical write, retained across a transport-ambiguous retry. */
+  /** see packages/cli/web/main.tsx - One operation id per logical write, retained across a transport-ambiguous retry. */
   const [operationIds] = useState(milestoneWriteIds);
-  // The scoped Issues list and the assignable read both follow an assignment: the
+  // see packages/cli/web/main.tsx - // The scoped Issues list and the assignable read both follow an assignment: the
   // page state's `issuesRefreshToken` re-issues them (an assigned issue leaves the
   // offer set and its revision moves).
   /**
@@ -829,7 +811,7 @@ export function ProjectDetailDestination(props: { address: Address; feature: Pro
     };
   }, [projectId, pageState.overviewReloadToken]);
 
-  // The assign picker's options: the project's OPEN issues, read by its OWN query
+  // see packages/cli/web/main.tsx - // The assign picker's options: the project's OPEN issues, read by its OWN query
   // (disposition only, every page) so the address bar's filters, search and page
   // window can never shrink the offer; the unassigned subset is the picker's rule.
   const assignable = useAssignableIssues(projectId === "" ? null : projectId, pageState.issuesRefreshToken);
@@ -840,14 +822,7 @@ export function ProjectDetailDestination(props: { address: Address; feature: Pro
         ? { kind: "failed", reason: assignable.read.reason }
         : { kind: "loading" };
 
-  /**
-   * The milestone write channel: one write at a time, each carrying the store
-   * revision of the overview read that rendered the forms. A revision conflict
-   * re-reads (the read moved under the observation, so the re-armed channel gets
-   * the new revision and the operator's draft survives the re-mount); an input
-   * refusal wrote nothing and does not re-read. An ambiguous transport failure
-   * keeps its operation id and revision so a retry replays the engine's receipt.
-   */
+  /** see packages/cli/web/main.tsx - The milestone write channel: one write at a time, each carrying the store revision of the overview read that rendered the forms. A revision conflict re-reads (the read moved under the observation, so the re-armed channel gets the new revision and the operator's draft survives the re-mount); an input refusal wrote nothing and does not re-read. An ambiguous transport failure keeps its operation id and revision so a retry replays the engine's receipt. */
   const writes: MilestoneWriteSurface | undefined =
     outcome.kind !== "ready" || outcome.storeRevision === null
       ? undefined
@@ -872,7 +847,7 @@ export function ProjectDetailDestination(props: { address: Address; feature: Pro
       operationId: retained.operationId,
       expectedStoreRevision: retained.request.expectedStoreRevision,
     }).then((result) => {
-      // The whole policy lives in one asserted function: accepted → re-read and clear
+      // see packages/cli/web/main.tsx - // The whole policy lives in one asserted function: accepted → re-read and clear
       // the draft; conflict → re-read and KEEP it; input refusal → neither; ambiguous
       // transport failure → retain the operation for a replay.
       const followUp = milestoneWriteFollowUp(request, result);
@@ -1299,13 +1274,7 @@ function ThemeButton(props: {
   );
 }
 
-/**
- * The wrapper the shell renders into, with both host contracts applied.
- *
- * Guarded on `document`: the module is imported by the page-render test (which has
- * no DOM) as well as by the browser bundle. A missing document is not an error —
- * there is simply nothing to mount.
- */
+/** see packages/cli/web/main.tsx - The wrapper the shell renders into, with both host contracts applied. Guarded on `document`: the module is imported by the page-render test (which has no DOM) as well as by the browser bundle. A missing document is not an error — there is simply nothing to mount. */
 function mount(): void {
   if (typeof document === "undefined") return;
   const rootElement = document.getElementById("app");

@@ -1,12 +1,4 @@
-/**
- * The host's envelope handling for the Projects pair, and the two facts this pair
- * is the only place to get wrong:
- *
- *  - the milestone body reads the project-scoped milestone view, which needs no
- *    execution store — a degraded read is its own arm, never a flattened null;
- *  - the feature set is the fixed two with `Issues` permanently default — never
- *    "the first non-empty" — and no tab, route or label named roadmap survives.
- */
+/** see packages/cli/web/projects-data.test.ts - The host's envelope handling for the Projects pair, and the two facts this pair is the only place to get wrong: - the milestone body reads the project-scoped milestone view, which needs no execution store — a degraded read is its own arm, never a flattened null; - the feature set is the fixed two with `Issues` permanently default — never "the first non-empty" — and no tab, route or label named roadmap survives. */
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -269,7 +261,7 @@ describe("the milestone read", () => {
 });
 
 describe("the dashboard milestone write channel", () => {
-  /** A fetch that records the request and answers one settled response. */
+  /** see packages/cli/web/projects-data.test.ts - A fetch that records the request and answers one settled response. */
   const recording = (answer: { status: number; body: unknown }) => {
     const calls: Array<{ url: string; method: string; body: unknown }> = [];
     const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
@@ -395,14 +387,14 @@ describe("the detail's fixed feature set", () => {
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order.every((index) => index >= 0)).toBe(true);
     expect(html.match(/role="tab"/g)?.length).toBe(2);
-    // No tab, route or label named roadmap survives.
+    // see packages/cli/web/projects-data.test.ts - // No tab, route or label named roadmap survives.
     expect(html).not.toContain("Roadmap");
     expect(html).not.toContain("roadmap");
   });
 
   test("Issues is the permanent default", () => {
     expect(DEFAULT_PROJECT_FEATURE).toBe("issues");
-    // The default is a constant, not "the first tab that has content": selecting
+    // see packages/cli/web/projects-data.test.ts - // The default is a constant, not "the first tab that has content": selecting
     // `iterations` moves the selection and leaves the default where it was.
     const iterations = render("iterations");
     expect(iterations).toContain('data-ms-feature="iterations"');
@@ -416,7 +408,7 @@ describe("the detail's fixed feature set", () => {
     expect(html).toContain('data-ms-milestones=""');
     expect(html).toContain('data-ms-milestone-timeline=""');
     expect(html).toContain("Release the shared layer");
-    // The body is not a tab: it is present whichever feature is selected.
+    // see packages/cli/web/projects-data.test.ts - // The body is not a tab: it is present whichever feature is selected.
     expect(render("iterations")).toContain('data-ms-milestones=""');
   });
 
@@ -435,7 +427,7 @@ describe("the detail's fixed feature set", () => {
 });
 
 describe("the page's conflict policy (the production re-read and draft rules)", () => {
-  // The assertions fail if `main.tsx` drops the automatic re-read or clears drafts:
+  // see packages/cli/web/projects-data.test.ts - // The assertions fail if `main.tsx` drops the automatic re-read or clears drafts:
   // the page has no policy of its own left to drift — it renders this function's
   // output (reloadOverview → reload token, keepDraft → the draft store, etc.).
   const accepted = { status: "ok" as const, receipt: null };
@@ -456,7 +448,7 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
       { status: "refused", code: "milestone.revision-conflict", message: "[milestone.revision-conflict] moved" },
     );
     expect(conflict.reloadOverview).toBe(true);
-    // THE regression the earlier test could not catch: a page that stopped
+    // see packages/cli/web/projects-data.test.ts - // THE regression the earlier test could not catch: a page that stopped
     // re-reading, or cleared the draft on a conflict, fails here.
     expect(conflict.keepDraft).toBe(true);
     expect(conflict.refusal).toContain("milestone.revision-conflict");
@@ -484,7 +476,7 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
   });
 
   test("the page-state transition performs the follow-up: reload, refresh, verdict, operation", () => {
-    // The page calls this reducer with the policy's output; these cases are the
+    // see packages/cli/web/projects-data.test.ts - // The page calls this reducer with the policy's output; these cases are the
     // transition itself, so the wiring cannot pass on a source-string match.
     const start: MilestonePageState = {
       overviewReloadToken: 3,
@@ -495,7 +487,7 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     const inFlight = milestoneWriteStarted(start);
     expect(inFlight).toMatchObject({ writes: { busy: true, refusal: null, keepDraft: undefined }, operationPending: true });
 
-    // Conflict: the overview re-reads, the draft verdict is "keep", the operation settles.
+    // see packages/cli/web/projects-data.test.ts - // Conflict: the overview re-reads, the draft verdict is "keep", the operation settles.
     const conflict = applyMilestoneFollowUp(
       inFlight,
       milestoneWriteFollowUp(
@@ -508,13 +500,13 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     expect(conflict.writes).toEqual({ busy: false, refusal: "[milestone.revision-conflict] moved", keepDraft: true });
     expect(conflict.operationPending).toBe(false);
 
-    // Accepted: the overview re-reads, the draft verdict is "clear", the operation settles.
+    // see packages/cli/web/projects-data.test.ts - // Accepted: the overview re-reads, the draft verdict is "clear", the operation settles.
     const accepted = applyMilestoneFollowUp(inFlight, milestoneWriteFollowUp({ verb: "update" }, { status: "ok", receipt: null }));
     expect(accepted.overviewReloadToken).toBe(start.overviewReloadToken + 1);
     expect(accepted.writes).toEqual({ busy: false, refusal: null, keepDraft: false });
     expect(accepted.operationPending).toBe(false);
 
-    // Input refusal: nothing re-reads; the draft stays; the operation settles.
+    // see packages/cli/web/projects-data.test.ts - // Input refusal: nothing re-reads; the draft stays; the operation settles.
     const refused = applyMilestoneFollowUp(
       inFlight,
       milestoneWriteFollowUp({ verb: "create" }, { status: "refused", code: "milestone.invalid-input", message: "bad name" }),
@@ -524,7 +516,7 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     expect(refused.writes).toEqual({ busy: false, refusal: "bad name", keepDraft: true });
     expect(refused.operationPending).toBe(false);
 
-    // Transport-ambiguous: nothing re-reads; the operation stays armed for the replay.
+    // see packages/cli/web/projects-data.test.ts - // Transport-ambiguous: nothing re-reads; the operation stays armed for the replay.
     const ambiguous = applyMilestoneFollowUp(
       inFlight,
       milestoneWriteFollowUp({ verb: "create" }, { status: "refused", code: "transport-error", message: "unreachable" }),
@@ -533,7 +525,7 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     expect(ambiguous.writes.keepDraft).toBe(true);
     expect(ambiguous.operationPending).toBe(true);
 
-    // Accepted assign: BOTH reads re-read.
+    // see packages/cli/web/projects-data.test.ts - // Accepted assign: BOTH reads re-read.
     const assigned = applyMilestoneFollowUp(inFlight, milestoneWriteFollowUp({ verb: "assign" }, { status: "ok", receipt: null }));
     expect(assigned.issuesRefreshToken).toBe(start.issuesRefreshToken + 1);
     expect(assigned.overviewReloadToken).toBe(start.overviewReloadToken + 1);
@@ -544,7 +536,7 @@ describe("the page's conflict policy (the production re-read and draft rules)", 
     for (const verb of ["create", "update", "remove"] as const) {
       expect(milestoneWriteFollowUp({ verb }, accepted).refreshIssues).toBe(false);
     }
-    // A refused assignment wrote nothing: no refresh.
+    // see packages/cli/web/projects-data.test.ts - // A refused assignment wrote nothing: no refresh.
     expect(
       milestoneWriteFollowUp({ verb: "assign" }, { status: "refused", code: "milestone.revision-conflict", message: "moved" })
         .refreshIssues,

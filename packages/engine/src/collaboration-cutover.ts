@@ -456,13 +456,7 @@ function readRows(db: StoreDb, table: string, columns: readonly string[]): unkno
   return rows.map((row) => columns.map((column) => (typeof row[column] === "bigint" ? String(row[column]) : row[column])));
 }
 
-/**
- * invariant: The one value the retired catalog kind becomes on the combined-to-lane path. The lane's
- * CHECK no longer admits `roadmap`, so a combined source holding such a row is copied as `other`:
- * identity, revision and registration are untouched and no catalog row is dropped. The same
- * normalization runs on BOTH sides of the copy - the source snapshot that feeds the reviewed digest
- * and the staged copy the verification re-reads - so the evidence stays exact.
- */
+/** see packages/engine/src/collaboration-cutover.ts - The one value the retired catalog kind becomes on the combined-to-lane path. The lane's CHECK no longer admits `roadmap`, so a combined source holding such a row is copied as `other`: identity, revision and registration are untouched and no catalog row is dropped. The same normalization runs on BOTH sides of the copy - the source snapshot that feeds the reviewed digest and the staged copy the verification re-reads - so the evidence stays exact. */
 const RETIRED_DOCUMENT_KIND = "roadmap";
 const RETIRED_DOCUMENT_KIND_REPLACEMENT = "other";
 
@@ -603,15 +597,7 @@ function isProjectBindingReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/**
- * invariant: The retired roadmap writer's persisted receipt, still promoted verbatim as a
- * historical operation. It recorded the returned receipt PLUS the recorded outcome and
- * the nullable reviewed provenance:
- * `{projectId, revision, contentHash, storeRevision, outcome: "committed",
- * provenance: {sourcePath, sourceHash} | null}`. A receipt written before those
- * two fields were recorded keeps the four-field shape, which is accepted too -
- * both are exact key sets, never a loose subset.
- */
+/** see packages/engine/src/collaboration-cutover.ts - The retired roadmap writer's persisted receipt, still promoted verbatim as a historical operation. It recorded the returned receipt PLUS the recorded outcome and the nullable reviewed provenance: `{projectId, revision, contentHash, storeRevision, outcome: "committed", provenance: {sourcePath, sourceHash} | null}`. A receipt written before those two fields were recorded keeps the four-field shape, which is accepted too - both are exact key sets, never a loose subset. */
 function isRoadmapReceipt(record: Record<string, unknown>): boolean {
   const provenance = record.provenance;
   const provenanceOk =
@@ -1917,7 +1903,7 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
           backupPath,
           at,
         );
-      // invariant: The fence drops the source-only set, child before parent: a populated
+      // see packages/engine/src/collaboration-cutover.ts - // invariant: The fence drops the source-only set, child before parent: a populated
       // `project_roadmaps` references `catalog_entities`, and reverse order removes it first.
       for (const table of [...COLLABORATION_SOURCE_DROP_TABLES].reverse()) handle.db.exec(`drop table ${table}`);
       const fence: CollaborationFence = {

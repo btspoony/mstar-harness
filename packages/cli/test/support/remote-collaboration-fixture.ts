@@ -498,7 +498,7 @@ export class RemoteCollaborationFixture {
     this.issues = issues;
   }
 
-  /** note: Replace the portable project document (milestones, catalog) a traversal renders. */
+  /** see packages/cli/test/support/remote-collaboration-fixture.ts - Replace the portable project document (milestones, catalog) a traversal renders. */
   setProjectDocument(project: Readonly<Record<string, unknown>>): void {
     this.projectDocument = project;
   }

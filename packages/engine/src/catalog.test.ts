@@ -146,7 +146,7 @@ test("catalog list and show do not create the knowledge directory", async () => 
 describe("the retired roadmap document kind", () => {
   test("a catalog write with documentKind roadmap is refused at the kind boundary", async () => {
     const context = await initialized("kind-roadmap-");
-    // invariant: The vocabulary no longer names the value, so the writer refuses it before any row
+    // see packages/engine/src/catalog.test.ts - // invariant: The vocabulary no longer names the value, so the writer refuses it before any row
     // is written; the existing invalid-kind refusal is the path, with its published list.
     await expect(
       registerCatalogEntity(context, { ...doc("doc-roadmap"), documentKind: "roadmap" as never }, op("kind-roadmap")),

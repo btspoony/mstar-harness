@@ -244,7 +244,7 @@ const catalogEntityDocument = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string().nullable(),
-  // invariant: The published shape carries the ONE surviving vocabulary, so a caller building from it
+  // see packages/engine/src/remote-documents.ts - // invariant: The published shape carries the ONE surviving vocabulary, so a caller building from it
   // cannot submit the retired kind and never learns a value the runtime would refuse.
   documentKind: z.enum(DOCUMENT_KIND_NAMES).nullable(),
   lifecycle: z.enum(["active", "archived", "superseded"]),

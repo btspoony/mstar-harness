@@ -1,28 +1,4 @@
-/**
- * store-read.ts -- the issue-store READ boundary (state-projection-contract §6).
- *
- * One request = one read handle (`withStoreRead`): an optional lazy projection
- * refresh for the views that need projected execution rows, then every
- * view query inside ONE read transaction over committed store data. The view
- * readers return DTOs only -- no source JSON is read or parsed here, and no
- * filesystem probe happens in a view (source I/O is isolated in the projection
- * refresh boundary, `refreshProjections`).
- *
- * Why the view SQL is written out here instead of calling `listIssues` /
- * `getIssue` / `listCatalog`: those functions each open their OWN connection,
- * which would break both contract §6 requirements -- "one store handle per
- * request" and one transaction that sees issue, catalog and projection rows at
- * the same point in time. The issue readers below therefore mirror
- * `issue.ts` (`LAST_ACTIVITY_SQL`, `bindFilter`, `listIssues`, `getIssue`)
- * statement for statement, and `store-read.test.ts` pins the two readers to the
- * same answer so a future change to one side cannot drift silently.
- *
- * Refusals reuse the frozen vocabulary: `store.not-active` for a staged store,
- * the issue domain's `issue.not-found` for an absent issue, and the engine's
- * `SddScriptError(…, 2)` usage failure (the CLI's exit-2 / HTTP-400 class) for
- * a request shape the contract does not define -- an unknown view, a missing
- * required filter or an out-of-range page.
- */
+/** see packages/engine/src/store-read.ts - store-read.ts -- the issue-store READ boundary (state-projection-contract §6). One request = one read handle (`withStoreRead`): an optional lazy projection refresh for the views that need projected execution rows, then every view query inside ONE read transaction over committed store data. The view readers return DTOs only -- no source JSON is read or parsed here, and no filesystem probe happens in a view (source I/O is isolated in the projection refresh boundary, `refreshProjections`). Why the view SQL is written out here instead of calling `listIssues` / `getIssue` / `listCatalog`: those functions each open their OWN connection, which would break both contract §6 requirements -- "one store handle per request" and one transaction that sees issue, catalog and projection rows at the same point in time. The issue readers below therefore mirror `issue.ts` (`LAST_ACTIVITY_SQL`, `bindFilter`, `listIssues`, `getIssue`) statement for statement, and `store-read.test.ts` pins the two readers to the same answer so a future change to one side cannot drift silently. Refusals reuse the frozen vocabulary: `store.not-active` for a staged store, the issue domain's `issue.not-found` for an absent issue, and the engine's `SddScriptError(…, 2)` usage failure (the CLI's exit-2 / HTTP-400 class) for a request shape the contract does not define -- an unknown view, a missing required filter or an out-of-range page. */
 import type { CatalogDocumentKind, CatalogEntityKind, CatalogLifecycle, CatalogRootKind, CatalogKey } from "./catalog.js";
 import {
   assertExecutionSelection,

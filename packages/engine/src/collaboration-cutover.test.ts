@@ -473,7 +473,7 @@ describe("collaboration cutover", () => {
     const repo = makeRepo("https://github.com/acme/cutover-roadmap-source.git");
     const source = await seedSource(repo);
     const location = locationAt(repo);
-    // note: A combined source still carries both the retired marker row and the roadmap table that
+    // see packages/engine/src/collaboration-cutover.test.ts - // note: A combined source still carries both the retired marker row and the roadmap table that
     // immutable execution-store migration 6 created.
     const seeded = await openStore(source.context, "write");
     try {
@@ -490,10 +490,10 @@ values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
     const manifest = await planCollaborationCutover(source.context);
     expect(manifest.blockers).toEqual([]);
     expect((await applyCollaborationCutover(source.context, manifest)).phase).toBe("verified");
-    // invariant: The retired kind becomes `other` on the combined-to-lane path with its identity,
+    // see packages/engine/src/collaboration-cutover.test.ts - // invariant: The retired kind becomes `other` on the combined-to-lane path with its identity,
     // revision and registration intact - the lane's CHECK no longer admits the value.
     const staged = await stagedRows(location);
-    // invariant: Only the retired KIND changes: identity, revision and the registration instant are
+    // see packages/engine/src/collaboration-cutover.test.ts - // invariant: Only the retired KIND changes: identity, revision and the registration instant are
     // the source row's own values, so the registration is preserved rather than re-created.
     expect(staged.rows.catalog_entities!.find((row) => row.id === "doc-roadmap")).toMatchObject({
       document_kind: "other",
@@ -505,7 +505,7 @@ values ('p-one', '# Roadmap', 'roadmap-hash', 1, '2026-11-21T00:00:00.000Z');
     });
     expect(staged.foreignKeyViolations).toEqual([]);
 
-    // invariant: Activation fences the source and drops the retired table with it, child first.
+    // see packages/engine/src/collaboration-cutover.test.ts - // invariant: Activation fences the source and drops the retired table with it, child first.
     expect((await activateCollaborationCutover(source.context, manifest, cutoverOptions(source.context, manifest.source))).phase).toBe("active");
     const fenced = await openStore(source.context, "read");
     try {

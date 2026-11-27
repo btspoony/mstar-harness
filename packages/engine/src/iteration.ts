@@ -874,13 +874,7 @@ function listDocumentBodies(dir: string, base = ""): string[] {
   return bodies.sort();
 }
 
-/**
- * Every store location the harness layout convention proposes (§4: discovery
- * is a proposal, never a live parallel authority). Identity comes from the
- * layout rule — an iteration is a directory carrying a compass, a project a
- * directory under `projects/`, a plan a file under `plans/` — and never from
- * a maintained index table.
- */
+/** see packages/engine/src/iteration.ts - Every store location the harness layout convention proposes (§4: discovery is a proposal, never a live parallel authority). Identity comes from the layout rule — an iteration is a directory carrying a compass, a project a directory under `projects/`, a plan a file under `plans/` — and never from a maintained index table. */
 function discoverCatalogLocations(context: StoreContext, roots: readonly CatalogCompletenessRoot[]): DiscoveredLocation[] {
   const locations: DiscoveredLocation[] = [];
   for (const rootKind of roots) {
@@ -962,11 +956,7 @@ export async function readCatalogCompleteness(
   }
   const discovered = discoverCatalogLocations(context, [...covered]);
   const registered = new Set<string>();
-  /**
-   * note: The project directory identities backed by an ACTUAL project row. A document registered under
-   * the `projects` root - at the directory spelling or at a retained body's path - is not a project
-   * registration, so it can neither cover a discovered directory nor hide a missing project row.
-   */
+  /** see packages/engine/src/iteration.ts - The project directory identities backed by an ACTUAL project row. A document registered under the `projects` root - at the directory spelling or at a retained body's path - is not a project registration, so it can neither cover a discovered directory nor hide a missing project row. */
   const registeredProjects = new Set<string>();
   let storeRevision = 0;
   let catalogRevision = 0;
@@ -975,7 +965,7 @@ export async function readCatalogCompleteness(
     try {
       storeRevision = handle.authority.revision;
       catalogRevision = handle.authority.catalogRevision;
-      // note: The row KIND is read with the location: only a `project` row names a project. A retained
+      // see packages/engine/src/iteration.ts - // note: The row KIND is read with the location: only a `project` row names a project. A retained
       // document under the `projects` root (a reclassified roadmap body, say) is not a registration of
       // the directory it happens to sit in.
       const rows = handle.db
@@ -985,7 +975,7 @@ export async function readCatalogCompleteness(
         if (typeof row.root_kind !== "string" || typeof row.relative_path !== "string") continue;
         if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
         registered.add(`${row.root_kind}\u0000${row.relative_path}`);
-        // invariant: A PROJECT row registered at the retired `roadmap.md` marker names the same project as
+        // see packages/engine/src/iteration.ts - // invariant: A PROJECT row registered at the retired `roadmap.md` marker names the same project as
         // its directory, so the directory it names reads as registered. Only a project row can say this:
         // the set below is what the project gap check consults, and nothing else writes to it.
         if (row.kind === "project" && row.root_kind === "projects") {
@@ -1004,7 +994,7 @@ export async function readCatalogCompleteness(
 
   const gaps: CatalogCompletenessGap[] = [];
   for (const location of discovered) {
-    // note: A discovered project location is covered only by a project row naming it - directly, or
+    // see packages/engine/src/iteration.ts - // note: A discovered project location is covered only by a project row naming it - directly, or
     // through the retired marker alias. A document at the same path is not that row.
     if (location.rootKind === "projects") {
       if (registeredProjects.has(location.relativePath)) continue;

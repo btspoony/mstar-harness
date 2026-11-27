@@ -357,7 +357,7 @@ function snapshotOf(raw: string | null, projectId: string): RemoteSnapshot | nul
       `The stored observation for project ${projectId} is not a complete project snapshot; this cache cannot serve it. Nothing was read.`,
     );
   }
-  // invariant: A cache admitted BEFORE the retirement can still hold `documentKind: "roadmap"`. The read
+  // see packages/engine/src/collaboration-remote-read.ts - // invariant: A cache admitted BEFORE the retirement can still hold `documentKind: "roadmap"`. The read
   // normalizes it to `other` at the same identity - id, revision and registration are untouched - so no
   // surface serves the retired value, and the read is not refused over history the store cannot rewrite
   // (a remote cache is derived observation state, re-bootstrapped rather than migrated in place).
@@ -1005,7 +1005,7 @@ export function remoteIssueFlow(view: RemoteReadView, projectId?: string) {
   };
 }
 
-// ---------------------------------------------------------------------------
+// see packages/engine/src/collaboration-remote-read.ts - // ---------------------------------------------------------------------------
 // note: Catalog, projects and milestones
 // ---------------------------------------------------------------------------
 
@@ -1015,7 +1015,7 @@ export type RemoteCatalogRow = Readonly<{
   id: string;
   title: string;
   description: string | null;
-  /** note: The catalog's own kind vocabulary: admission refuses a value outside it, so no cast remains. */
+  /** see packages/engine/src/collaboration-remote-read.ts - The catalog's own kind vocabulary: admission refuses a value outside it, so no cast remains. */
   documentKind: CatalogDocumentKind | null;
   lifecycle: "active" | "archived" | "superseded";
   revision: number;

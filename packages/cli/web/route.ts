@@ -1,25 +1,4 @@
-/**
- * The URL contract (compass D27) — one grammar for the dashboard and for any link
- * the product emits.
- *
- * It extends the hash grammar the Preact dashboard already shipped rather than
- * inventing a second one: plural destination segments, singular detail segments
- * with an id, and a query string that belongs to the filters.
- *
- * Three rules carry the semantics, and each is a decision rather than a parsing
- * detail:
- *
- *  - **`#roadmap` is removed, not aliased.** The roadmap domain is retired; an
- *    alias would keep a dead vocabulary alive. The route is absent from the
- *    model, so unrecognised input — including it — lands on `#overview`.
- *  - **The query string belongs to the filters.** The screens never see a URL, so
- *    this module is where the filter keys are read and written; it delegates to the
- *    shared `parseIssueQuery` / `issueQuery` pair rather than re-deriving keys, and
- *    the round-trip is therefore the same one the panel uses.
- *  - **One authority per page.** A project feature page scopes the API call with
- *    `project=<id>`; a `project` key in the address bar would scope it twice, so it
- *    is dropped on the way in.
- */
+/** see packages/cli/web/route.ts - The URL contract (compass D27) — one grammar for the dashboard and for any link the product emits. It extends the hash grammar the Preact dashboard already shipped rather than inventing a second one: plural destination segments, singular detail segments with an id, and a query string that belongs to the filters. Three rules carry the semantics, and each is a decision rather than a parsing detail: - **`#roadmap` is removed, not aliased.** The roadmap domain is retired; an alias would keep a dead vocabulary alive. The route is absent from the model, so unrecognised input — including it — lands on `#overview`. - **The query string belongs to the filters.** The screens never see a URL, so this module is where the filter keys are read and written; it delegates to the shared `parseIssueQuery` / `issueQuery` pair rather than re-deriving keys, and the round-trip is therefore the same one the panel uses. - **One authority per page.** A project feature page scopes the API call with `project=<id>`; a `project` key in the address bar would scope it twice, so it is dropped on the way in. */
 import {
   DEFAULT_PROJECT_FEATURE,
   PROJECT_FEATURES,

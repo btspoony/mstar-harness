@@ -40,7 +40,7 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** A fixture harness directory; `board` is written when given. */
+/** see packages/engine/src/planboard.test.ts - A fixture harness directory; `board` is written when given. */
 function board(harnessDir: string, text: string): StoreContext {
   mkdirSync(harnessDir, { recursive: true });
   writeFileSync(join(harnessDir, PLANBOARD_FILE), text);
@@ -140,7 +140,7 @@ describe("planboard grammar", () => {
       expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: 3 }]);
       expect(parsed.candidates).toEqual([]);
     }
-    // invariant: No punctuation exception exists — the validated value is the
+    // see packages/engine/src/planboard.test.ts - // invariant: No punctuation exception exists — the validated value is the
     // emitted value, so a suffixed token is malformed rather than normalized.
     expect(pairs(parse(["review_after: 2026-12-10", "## Candidates", "- ? ok \u2014 I-000001;"]).findings)).toEqual([
       { code: "malformed", line: 3 },
@@ -162,7 +162,7 @@ describe("planboard grammar", () => {
     const entries = Array.from({ length: 21 }, (_, index) => `- I-${String(index + 1).padStart(6, "0")} \u2014 order ${index}`);
     const parsed = parse(["review_after: 2026-12-10", "## Captured", ...entries]);
     expect(parsed.issues).toHaveLength(20);
-    // One section-level finding, not one per excess line.
+    // see packages/engine/src/planboard.test.ts - // One section-level finding, not one per excess line.
     expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: 23 }]);
   });
 
@@ -172,7 +172,7 @@ describe("planboard grammar", () => {
       { code: "malformed", line: 3 },
       { code: "malformed", line: 4 },
     ]);
-    // invariant: The pointer under the unknown heading is never looked up.
+    // see packages/engine/src/planboard.test.ts - // invariant: The pointer under the unknown heading is never looked up.
     expect(parsed.issues).toEqual([]);
   });
 
@@ -218,7 +218,7 @@ describe("planboard grammar", () => {
       "- ? a candidate \u2014 docs/specs/example.md",
     ]);
     expect(pairs(parsed.findings)).toEqual([{ code: "malformed", line: null }]);
-    // invariant: No valid date, so nothing is overdue.
+    // see packages/engine/src/planboard.test.ts - // invariant: No valid date, so nothing is overdue.
     expect(parsed.reviewAfter).toBeNull();
   });
 
@@ -273,7 +273,7 @@ describe("planboard findings against a store", () => {
   });
 
   test("a malformed line is not looked up, and a refused store leaves it unread", async () => {
-    // No collaboration lane exists at this harness, so an issue lookup would refuse.
+    // see packages/engine/src/planboard.test.ts - // No collaboration lane exists at this harness, so an issue lookup would refuse.
     const context = board(join(ROOT, "malformed", ".mstar"), [
       "review_after: 2099-01-01",
       "## Captured",
@@ -292,7 +292,7 @@ describe("planboard findings against a store", () => {
     const result = await checkPlanboard(context);
     expect(codes(result.findings)).toEqual(["unverified", "unverified"]);
     expect(result.findings.map((finding) => finding.line)).toEqual([3, 4]);
-    // Every issue line carries the store's own refusal code; none is read as open.
+    // see packages/engine/src/planboard.test.ts - // Every issue line carries the store's own refusal code; none is read as open.
     for (const finding of result.findings) expect(finding.storeCode).toMatch(/^collaboration\./);
   });
 
@@ -369,12 +369,12 @@ describe("planboard findings against a store", () => {
       context.harnessDir,
       ["review_after: 2099-01-01", "## Captured", `- ${issueRef} \u2014 written in remote mode, read locally`].join("\n"),
     );
-    // invariant: A completed local read that DID look at `issue_ref` reports the
+    // see packages/engine/src/planboard.test.ts - // invariant: A completed local read that DID look at `issue_ref` reports the
     // disposition, never `missing` — a board written under a remote selection must
     // survive the selection returning to local.
     expect((await checkPlanboard(context)).findings).toEqual([]);
 
-    // A reference the lane does not hold is a completed answer: missing.
+    // see packages/engine/src/planboard.test.ts - // A reference the lane does not hold is a completed answer: missing.
     board(
       context.harnessDir,
       ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.secondIssueRef} \u2014 not in this lane`].join("\n"),
@@ -390,7 +390,7 @@ describe("planboard findings against a store", () => {
       context.harnessDir,
       ["review_after: 2099-01-01", "## Captured", `- ${first.issueId} \u2014 first`, `- ${second.issueId} \u2014 second`].join("\n"),
     );
-    // note: A staged lane is the reachable lane-level refusal on a local store.
+    // see packages/engine/src/planboard.test.ts - // note: A staged lane is the reachable lane-level refusal on a local store.
     const location = resolveCollaborationLocation(context);
     const db = new DatabaseSync(location.dbPath);
     try {
@@ -410,7 +410,7 @@ describe("planboard findings against a store", () => {
     const commit = fixture.publish();
     const context = fixture.context();
     await bindRemoteAuthority(context, fixture.batch(commit));
-    // A published selector with no admitted observation: opening the view refuses.
+    // see packages/engine/src/planboard.test.ts - // A published selector with no admitted observation: opening the view refuses.
     board(
       context.harnessDir,
       [
@@ -422,7 +422,7 @@ describe("planboard findings against a store", () => {
       ].join("\n"),
     );
     const findings = (await checkPlanboard(context)).findings;
-    // invariant: The lane-level cause answers all three, so nothing reopened and
+    // see packages/engine/src/planboard.test.ts - // invariant: The lane-level cause answers all three, so nothing reopened and
     // no line was re-decided against a cache that never answered.
     expect(findings.map(({ code, line }) => ({ code, line }))).toEqual([
       { code: "unverified", line: 3 },
@@ -450,10 +450,10 @@ describe("planboard findings against a store", () => {
         `- ${REMOTE_IDS.issueRef} \u2014 open in the admitted snapshot`,
       ].join("\n"),
     );
-    // The admitted issue is open, so the line reports nothing — not `unverified`.
+    // see packages/engine/src/planboard.test.ts - // The admitted issue is open, so the line reports nothing — not `unverified`.
     expect((await checkPlanboard(context)).findings).toEqual([]);
 
-    // A reference the snapshot does not carry is a completed answer: missing.
+    // see packages/engine/src/planboard.test.ts - // A reference the snapshot does not carry is a completed answer: missing.
     board(
       context.harnessDir,
       ["review_after: 2099-01-01", "## Captured", `- ${REMOTE_IDS.secondIssueRef} \u2014 absent from this snapshot`].join("\n"),
@@ -507,7 +507,7 @@ function mutation(operationId: string): MutationContext {
   return { operationId, actor: "project-manager" };
 }
 
-/** A fixture harness with one active collaboration lane, as real activation writes it. */
+/** see packages/engine/src/planboard.test.ts - A fixture harness with one active collaboration lane, as real activation writes it. */
 async function liveStore(name: string): Promise<StoreContext> {
   const checkoutRoot = join(ROOT, name);
   mkdirSync(checkoutRoot, { recursive: true });

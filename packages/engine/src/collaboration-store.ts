@@ -813,19 +813,8 @@ const COLLABORATION_MILESTONE_EFFORT_SCHEMA: Migration = {
   sql: COLLABORATION_MILESTONE_EFFORT_V6_SQL,
 };
 
-/**
- * invariant: v7 `collaboration-roadmap-removal` - the roadmap domain leaves the lane. `project_roadmaps`
- * is dropped and `catalog_entities` is rebuilt without `'roadmap'` in its `document_kind` CHECK, because
- * SQLite cannot alter a CHECK in place. The rebuild copies every row; a `document_kind = 'roadmap'` row
- * is reclassified to `other` and keeps its id, revision and registration - a catalog row is never
- * deleted to satisfy an enum.
- *
- * `catalog_links` and `project_milestones` reference `catalog_entities`, and `issues` references
- * `project_milestones`, so the rebuild uses the same FK-safe staging the v2 issue rebuild uses:
- * the children are staged out, the parent rebuilt, the children restored, and `defer_foreign_keys`
- * lets the grandchildren be proven at commit against the restored rows.
- */
-/** note: The table v7 retires. Every generation before it carried the lane's roadmap body. */
+/** see packages/engine/src/collaboration-store.ts - v7 `collaboration-roadmap-removal` - the roadmap domain leaves the lane. `project_roadmaps` is dropped and `catalog_entities` is rebuilt without `'roadmap'` in its `document_kind` CHECK, because SQLite cannot alter a CHECK in place. The rebuild copies every row; a `document_kind = 'roadmap'` row is reclassified to `other` and keeps its id, revision and registration - a catalog row is never deleted to satisfy an enum. `catalog_links` and `project_milestones` reference `catalog_entities`, and `issues` references `project_milestones`, so the rebuild uses the same FK-safe staging the v2 issue rebuild uses: the children are staged out, the parent rebuilt, the children restored, and `defer_foreign_keys` lets the grandchildren be proven at commit against the restored rows. */
+/** see packages/engine/src/collaboration-store.ts - The table v7 retires. Every generation before it carried the lane's roadmap body. */
 const COLLABORATION_ROADMAP_TABLE = "project_roadmaps";
 
 const COLLABORATION_ROADMAP_REMOVAL_SQL = `
@@ -1087,10 +1076,7 @@ const COLLABORATION_V5_ROUTE_COLUMNS: Readonly<Record<string, readonly string[]>
   ...COLLABORATION_ROUTE_COLUMNS,
 };
 
-/**
- * note: The v6 inventory: the v5 generation plus the effort column, and the roadmap table the lane
- * still carried before v7. A lane at v6 proves this shape before the v7 DDL.
- */
+/** see packages/engine/src/collaboration-store.ts - The v6 inventory: the v5 generation plus the effort column, and the roadmap table the lane still carried before v7. A lane at v6 proves this shape before the v7 DDL. */
 const COLLABORATION_V6_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V5_ROUTE_COLUMNS,
   project_milestones: [
@@ -1288,7 +1274,7 @@ const COLLABORATION_KEY_LAYOUT_CURRENT: readonly KeyLayout[] = [
 /** note: The v3 inventory an upgrade from v3 proves before the v4 move DDL runs. */
 const COLLABORATION_MOVE_TABLES: readonly string[] = ["issue_moves"];
 
-/** note: The v6 inventory: the current lane plus the roadmap table v7 drops. */
+/** see packages/engine/src/collaboration-store.ts - The v6 inventory: the current lane plus the roadmap table v7 drops. */
 const COLLABORATION_V6_TABLES: readonly string[] = [...COLLABORATION_TABLES, COLLABORATION_ROADMAP_TABLE];
 
 const COLLABORATION_V3_TABLES: readonly string[] = COLLABORATION_V6_TABLES.filter(
@@ -1717,7 +1703,7 @@ function assertMoveRouteSchema(db: StoreDb, dbPath: string): void {
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
 
-/** note: The exact v6 shape an upgrade from v6 proves before the v7 roadmaps drop: a partial v7 refuses. */
+/** see packages/engine/src/collaboration-store.ts - The exact v6 shape an upgrade from v6 proves before the v7 roadmaps drop: a partial v7 refuses. */
 function assertMilestoneEffortSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V6_TABLES, COLLABORATION_V6_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
@@ -2770,12 +2756,7 @@ export function setRemoteCacheReplacementGapForTest(callback: (() => void | Prom
   remoteCacheReplacementGapForTest = callback;
 }
 
-/**
- * note: The v7 crash seam: runs INSIDE the upgrade ladder's single transaction, after the roadmap
- * removal DDL and before its ledger row, so a regression can capture the hot journal of a genuinely
- * interrupted rebuild through the production path instead of hand-rolling a transaction. It is
- * synchronous because the ladder is; throwing from it leaves the ladder's own rollback in charge.
- */
+/** see packages/engine/src/collaboration-store.ts - The v7 crash seam: runs INSIDE the upgrade ladder's single transaction, after the roadmap removal DDL and before its ledger row, so a regression can capture the hot journal of a genuinely interrupted rebuild through the production path instead of hand-rolling a transaction. It is synchronous because the ladder is; throwing from it leaves the ladder's own rollback in charge. */
 let collaborationRoadmapRemovalGapForTest: ((db: StoreDb) => void) | undefined;
 export function setCollaborationRoadmapRemovalGapForTest(callback: ((db: StoreDb) => void) | undefined): void {
   collaborationRoadmapRemovalGapForTest = callback;
@@ -3384,13 +3365,13 @@ export function applyCollaborationLadder(
       nowRfc3339(),
     );
   }
-  // invariant: The exact v6 shape is proven before the v7 rebuild: a `catalog_entities` that already lost
+  // see packages/engine/src/collaboration-store.ts - // invariant: The exact v6 shape is proven before the v7 rebuild: a `catalog_entities` that already lost
   // `roadmap` (or a lane that already dropped `project_roadmaps`) without its ledger row is a partial
   // apply, and is refused instead of being re-copied.
   if (appliedMax < COLLABORATION_ROADMAP_REMOVAL_SCHEMA.version) {
     assertMilestoneEffortSchema(db, dbPath);
     db.exec(COLLABORATION_ROADMAP_REMOVAL_SCHEMA.sql);
-    // note: The crash seam sits exactly on this step's own boundary: the rebuild is applied and its
+    // see packages/engine/src/collaboration-store.ts - // note: The crash seam sits exactly on this step's own boundary: the rebuild is applied and its
     // ledger row is not, inside the ladder's one transaction.
     collaborationRoadmapRemovalGapForTest?.(db);
     db.prepare("insert into schema_version(version, name, checksum, applied_at) values (?, ?, ?, ?)").run(

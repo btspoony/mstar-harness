@@ -1,19 +1,4 @@
-/**
- * Engine project module — project register validator.
- *
- * Spec sources (each test cites the plan/brief section it enforces):
- * - Register file `projects/<id>/residuals.json` shape
- * `{ entries: { [key]: ResidualEntry & { source_plan, registered_at,
- * lifecycle_id? } } }` (). Entry validation delegates verbatim
- * to `validateResidual` (status.ts) — severity enum + lifecycle semantics
- * preserved at the new address, no copy. The validator is MIGRATION-ONLY
- * (issue-governance cutover G2a): the register is historical input to the
- * staged import, never a runtime findings authority, so this file no longer
- * covers register writes — the issue store owns them (issue-cutover.test.ts).
- * - `_DEFAULT_PROJECT` fallback constant + PROJECT_FILE names (;
- * compass ruling 2 — `projects/_default/` fallback for project-less
- * flows).
- */
+/** see packages/engine/test/project.test.ts - Engine project module — project register validator. Spec sources (each test cites the plan/brief section it enforces): - Register file `projects/<id>/residuals.json` shape `{ entries: { [key]: ResidualEntry & { source_plan, registered_at, lifecycle_id? } } }` (). Entry validation delegates verbatim to `validateResidual` (status.ts) — severity enum + lifecycle semantics preserved at the new address, no copy. The validator is MIGRATION-ONLY (issue-governance cutover G2a): the register is historical input to the staged import, never a runtime findings authority, so this file no longer covers register writes — the issue store owns them (issue-cutover.test.ts). - `_DEFAULT_PROJECT` fallback constant + PROJECT_FILE names (; compass ruling 2 — `projects/_default/` fallback for project-less flows). */
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

@@ -548,7 +548,7 @@ describe("dashboard collaboration disclosure", () => {
 describe("dashboard --project selector", () => {
   test("refuses an id that only an issue names, and accepts a catalog-backed project", async () => {
     const { dir, context } = await workspace("project-selector-catalog-");
-    // note: An issue-only project id is listed by the `projects` view with a synthesized item, but no
+    // see packages/cli/test/dashboard-server.test.ts - // note: An issue-only project id is listed by the `projects` view with a synthesized item, but no
     // catalog row backs it.
     await captureIssue(context, {
       projectId: "issue-only-project",
@@ -569,7 +569,7 @@ describe("dashboard --project selector", () => {
     }, { actor: "project-manager", operationId: "capture-issue-only-project" });
     await expect(start(dir, { project: "issue-only-project" })).rejects.toThrow(/no catalog project row exists/);
 
-    // invariant: A registered catalog project is the accepted selector.
+    // see packages/cli/test/dashboard-server.test.ts - // invariant: A registered catalog project is the accepted selector.
     await registerCatalogEntity(
       context,
       { kind: "project", id: "registered-project", title: "Registered", rootKind: "projects", relativePath: "registered-project" },
@@ -581,7 +581,7 @@ describe("dashboard --project selector", () => {
 });
 
 describe("the milestone write route", () => {
-  /** The store revision the page would have observed from its overview read. */
+  /** see packages/cli/test/dashboard-server.test.ts - The store revision the page would have observed from its overview read. */
   async function observedRevision(context: StoreContext, projectId: string): Promise<number> {
     const envelope = await withStoreRead(context, {
       view: "milestones",
@@ -633,7 +633,7 @@ describe("the milestone write route", () => {
     expect(receipt.data.revision).toBe(1);
     expect(receipt.data.storeRevision).toBe(revision + 1);
 
-    // A write that observed the PRE-write revision is refused with the engine's
+    // see packages/cli/test/dashboard-server.test.ts - // A write that observed the PRE-write revision is refused with the engine's
     // own conflict code — never applied, never silently retried.
     const stale = await post(dir, {
       verb: "update",
@@ -680,7 +680,7 @@ describe("the milestone write route", () => {
     expect(created.status).toBe(200);
     const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
 
-    // The offer the picker renders is the project's OPEN issue page: the issue and
+    // see packages/cli/test/dashboard-server.test.ts - // The offer the picker renders is the project's OPEN issue page: the issue and
     // the revision the assignment must hash come from the SAME read the page makes.
     const issues = await listIssues(context, { disposition: "open", projectId: "proj-a", limit: 50, offset: 0 });
     const offered = issues.items.find((item) => item.title === "Assignable offer");
@@ -700,10 +700,10 @@ describe("the milestone write route", () => {
     const after = await listIssues(context, { disposition: "open", projectId: "proj-a", limit: 50, offset: 0 });
     const assignedRow = after.items.find((item) => item.id === offered.id);
     expect(assignedRow?.milestoneId).toBe(milestone.milestoneId);
-    // The assignment moved the issue's own revision, so the picker's next observation differs.
+    // see packages/cli/test/dashboard-server.test.ts - // The assignment moved the issue's own revision, so the picker's next observation differs.
     expect(assignedRow?.revision).not.toBe(offered.revision);
 
-    // Retire (remove) the now non-empty milestone: the engine refuses in place, the
+    // see packages/cli/test/dashboard-server.test.ts - // Retire (remove) the now non-empty milestone: the engine refuses in place, the
     // route passes the refusal through, and the message names the real cause.
     const retire = await post(dir, {
       verb: "remove",
@@ -750,7 +750,7 @@ describe("the milestone write route", () => {
       expect(retired.status).toBe(200);
       expect((JSON.parse(retired.body) as { data: { changed: boolean } }).data.changed).toBe(true);
 
-      // The re-read the page performs no longer carries it.
+      // see packages/cli/test/dashboard-server.test.ts - // The re-read the page performs no longer carries it.
       const after = await raw(new URL("/api/overview?project=proj-a", server.url).href);
       const afterMilestones = (JSON.parse(after.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
         .data.milestones.data.milestones;
@@ -761,7 +761,7 @@ describe("the milestone write route", () => {
   });
 
   test("the dashboard host's own read/write loop re-reads after a conflict and keeps the typed draft", async () => {
-    // Drives the SHIPPED host pair — `readProjectMilestones` + `writeMilestone` —
+    // see packages/cli/test/dashboard-server.test.ts - // Drives the SHIPPED host pair — `readProjectMilestones` + `writeMilestone` —
     // exactly as `ProjectDetailDestination` does, over the real loopback server:
     // the read that renders the forms supplies the revision, the write carries it,
     // a conflict triggers the host's re-read, and the draft kept outside the read's
@@ -777,7 +777,7 @@ describe("the milestone write route", () => {
     );
     const server = await start(dir);
     try {
-      // The page's first action is a create; the milestone must exist for the forms.
+      // see packages/cli/test/dashboard-server.test.ts - // The page's first action is a create; the milestone must exist for the forms.
       const projectRevision = await observedRevision(context, "proj-a");
       const created = await post(dir, {
         verb: "create",
@@ -788,7 +788,7 @@ describe("the milestone write route", () => {
       });
       const milestone = (JSON.parse(created.body) as { data: { milestoneId: string } }).data;
 
-      // The browser's `fetch`, against the real server and its token boundary.
+      // see packages/cli/test/dashboard-server.test.ts - // The browser's `fetch`, against the real server and its token boundary.
       const token = new URL(server.url).searchParams.get("token")!;
       const origin = `http://127.0.0.1:${new URL(server.url).port}`;
       const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
@@ -797,18 +797,18 @@ describe("the milestone write route", () => {
         return fetch(url, init);
       }) as unknown as typeof fetch;
 
-      // The read that renders the forms: the observed revision rides its envelope.
+      // see packages/cli/test/dashboard-server.test.ts - // The read that renders the forms: the observed revision rides its envelope.
       const first = await readProjectMilestones(fetchImpl, "proj-a");
       expect(first.status).toBe("ready");
       if (first.status !== "ready") return;
 
-      // Another writer moves the store between the read and the write.
+      // see packages/cli/test/dashboard-server.test.ts - // Another writer moves the store between the read and the write.
       await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved elsewhere" }, {
         operationId: "op-host-other",
         expectedStoreRevision: first.storeRevision as number,
       });
 
-      // The operator's draft lives OUTSIDE the read's subtree — the host's store.
+      // see packages/cli/test/dashboard-server.test.ts - // The operator's draft lives OUTSIDE the read's subtree — the host's store.
       const drafts = createMilestoneDraftStore();
       const target = milestoneDraftTargetKey("proj-a", milestone.milestoneId);
       drafts.write(target, { name: "Typed in the editor", effort: "4" });
@@ -823,15 +823,15 @@ describe("the milestone write route", () => {
       });
       expect(stale).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
 
-      // The host's re-read (the conflict's own follow-up) answers the FRESH revision.
+      // see packages/cli/test/dashboard-server.test.ts - // The host's re-read (the conflict's own follow-up) answers the FRESH revision.
       const second = await readProjectMilestones(fetchImpl, "proj-a");
       expect(second.status).toBe("ready");
       if (second.status !== "ready") return;
       expect(second.storeRevision).not.toBe(first.storeRevision);
-      // ...and the draft the operator typed survived that re-read untouched.
+      // see packages/cli/test/dashboard-server.test.ts - // ...and the draft the operator typed survived that re-read untouched.
       expect(drafts.read(target)).toMatchObject({ name: "Typed in the editor", effort: "4" });
 
-      // The retry at the fresh revision carries the draft's text and lands.
+      // see packages/cli/test/dashboard-server.test.ts - // The retry at the fresh revision carries the draft's text and lands.
       const retried = await writeMilestone(fetchImpl, {
         verb: "update",
         projectId: "proj-a",
@@ -869,7 +869,7 @@ describe("the milestone write route", () => {
     });
     const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
 
-    // Another writer moves the store between the page's read and its write.
+    // see packages/cli/test/dashboard-server.test.ts - // Another writer moves the store between the page's read and its write.
     await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved by another writer" }, {
       operationId: "op-other-writer",
       expectedStoreRevision: milestone.storeRevision,
@@ -886,7 +886,7 @@ describe("the milestone write route", () => {
     expect(stale.status).toBe(409);
     expect((JSON.parse(stale.body) as { error: { code: string } }).error.code).toBe("milestone.revision-conflict");
 
-    // The re-read the page performs answers the FRESH revision; the retained draft
+    // see packages/cli/test/dashboard-server.test.ts - // The re-read the page performs answers the FRESH revision; the retained draft
     // (what the operator typed) is a pure value the host keeps, so the retry sends
     // exactly it at the new revision and lands.
     const fresh = await observedRevision(context, "proj-a");

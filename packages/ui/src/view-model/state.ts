@@ -50,14 +50,7 @@ export type ResolveOptions<T> = {
    * empty (a single record).
    */
   readonly isEmpty?: (value: T) => boolean;
-  /**
-   * Whether the payload lives in the execution projection.
-   *
-   * Default `false`: the store-backed views (issues, projects) answer
-   * successful envelopes with `generation: null`, and vetoing those made a working
-   * read render as `unavailable` everywhere. The views whose rows come *from* the
-   * projection set this, and keep the veto.
-   */
+  /** see packages/ui/src/view-model/state.ts - Whether the payload lives in the execution projection. Default `false`: the store-backed views (issues, projects) answer successful envelopes with `generation: null`, and vetoing those made a working read render as `unavailable` everywhere. The views whose rows come *from* the projection set this, and keep the veto. */
   readonly requiresProjection?: boolean;
   /**
    * Which arm an empty collection earns. Defaults to `empty`; a caller whose
@@ -158,7 +151,7 @@ export function resolveRead<T>(
   if (read?.projection === undefined) {
     return { kind: "unavailable", reason: "the read envelope carries no projection" };
   }
-  // Only a read whose rows *live in* the projection may be vetoed by a missing
+  // see packages/ui/src/view-model/state.ts - // Only a read whose rows *live in* the projection may be vetoed by a missing
   // generation. The store-backed views (issues, projects) answer successful
   // envelopes with `generation: null` — treating that as a failure made a working
   // read render as unavailable everywhere.

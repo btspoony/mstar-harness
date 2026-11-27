@@ -139,7 +139,7 @@ describe("checkAdrTree — failure codes", () => {
   });
 });
 
-// `implemented/` is the live bucket: a record already demoted by a
+// see scripts/adr-check.test.ts - // `implemented/` is the live bucket: a record already demoted by a
 // `Superseded-by:` line must move to `archived/`, and the rule is single-file
 // - it never checks whether the replacement exists.
 describe("checkAdrTree — implemented-superseded", () => {
@@ -152,7 +152,7 @@ describe("checkAdrTree — implemented-superseded", () => {
     expect(result.failures.map((f) => f.code)).toEqual(["adr.implemented-superseded"]);
     const [failure] = result.failures;
     expect(failure.message).toContain(`${ADR_ROOT}/implemented/architecture/2026-01-14-demoted.md`);
-    // The recovery names both valid operations: the archived move when the
+    // see scripts/adr-check.test.ts - // The recovery names both valid operations: the archived move when the
     // replacement is promoted, and removing the premature header while the
     // replacement is still proposed. The destination is tree-relative — the
     // engine does not know the repository's ADR root.

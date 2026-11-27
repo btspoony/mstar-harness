@@ -1,12 +1,4 @@
-/**
- * `project-detail` — the product's only hierarchy page (final round).
- *
- * The milestone rollup is the page's default body, read from the project-scoped
- * `milestones` view (collaboration data only, so it answers without an execution
- * store); the adapter owns the list-FEATURE
- * state: the fixed two tabs, `Issues` the default, and each tab's body from its
- * own project-scoped read.
- */
+/** see packages/dsh/tests/project-detail.spec.ts - `project-detail` — the product's only hierarchy page (final round). The milestone rollup is the page's default body, read from the project-scoped `milestones` view (collaboration data only, so it answers without an execution store); the adapter owns the list-FEATURE state: the fixed two tabs, `Issues` the default, and each tab's body from its own project-scoped read. */
 
 import { describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
@@ -54,9 +46,9 @@ describe('project detail — the milestone body, two tabs, Issues the default', 
     expect(markup).toContain(uiEn.projectDetail.milestones.milestonesHeading)
     expect(markup).toContain(uiEn.projectDetail.features.issues)
     expect(markup).toContain(uiEn.projectDetail.features.iterations)
-    // No tab, route or label named roadmap survives.
+    // see packages/dsh/tests/project-detail.spec.ts - // No tab, route or label named roadmap survives.
     expect(markup).not.toContain('Roadmap')
-    // Issues is the default feature: the project's issue list IS the body under it.
+    // see packages/dsh/tests/project-detail.spec.ts - // Issues is the default feature: the project's issue list IS the body under it.
     expect(markup).toContain('a project issue')
   })
 
@@ -124,10 +116,10 @@ describe('project identity — the projects list row is the identity, not a gues
 
   it('a project with no list row still renders its tabs and claims nothing it does not know', () => {
     const markup = render()
-    // The page renders (milestone body + two features) instead of an error or a blank landmark.
+    // see packages/dsh/tests/project-detail.spec.ts - // The page renders (milestone body + two features) instead of an error or a blank landmark.
     expect(markup).toContain('data-ms-screen="project-detail"')
     expect(markup).toContain(uiEn.projectDetail.features.issues)
-    // The fallback does not claim a lifecycle.
+    // see packages/dsh/tests/project-detail.spec.ts - // The fallback does not claim a lifecycle.
     expect(markup).not.toContain('active')
   })
 })

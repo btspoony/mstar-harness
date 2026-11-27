@@ -285,7 +285,7 @@ describe("projects", () => {
       lifecycle: "active",
       lifecycleTone: "neutral",
     });
-    // The source hash and the churn metadata stay out — the screen has no place for them.
+    // see packages/ui/src/view-model/lists.test.ts - // The source hash and the churn metadata stay out — the screen has no place for them.
     expect(Object.keys(identity)).not.toContain("sourceHash");
     expect(Object.keys(identity)).not.toContain("revision");
   });

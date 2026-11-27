@@ -1,16 +1,4 @@
-/**
- * planboard.ts — the `{HARNESS_DIR}/planboard.md` grammar and its findings.
- *
- * The board holds pointers only: an ordered list of captured issue ids, a list
- * of not-yet-captured candidates with the evidence that names them, and one
- * `review_after` date. It is gitignored local execution state, never mirrored
- * and never sent to a provider, so nothing here is collaboration authority.
- *
- * This module parses the closed grammar and reports drift. It writes nothing,
- * and the caller decides what to do with the findings — the verb that exposes
- * it exits 0 for every finding class because a stale line is the normal state
- * of a board between iterations, not a failure.
- */
+/** see packages/engine/src/planboard.ts - planboard.ts — the `{HARNESS_DIR}/planboard.md` grammar and its findings. The board holds pointers only: an ordered list of captured issue ids, a list of not-yet-captured candidates with the evidence that names them, and one `review_after` date. It is gitignored local execution state, never mirrored and never sent to a provider, so nothing here is collaboration authority. This module parses the closed grammar and reports drift. It writes nothing, and the caller decides what to do with the findings — the verb that exposes it exits 0 for every finding class because a stale line is the normal state of a board between iterations, not a failure. */
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveCollaborationLocation } from "./collaboration-identity.js";
@@ -31,47 +19,39 @@ export type PlanboardFinding = {
   code: PlanboardFindingCode;
   line: number | null;
   message: string;
-  /** The issue id an issue-line finding is about. */
+  /** see packages/engine/src/planboard.ts - The issue id an issue-line finding is about. */
   issueId?: string;
-  /** The candidate text an `overdue` finding is about. */
+  /** see packages/engine/src/planboard.ts - The candidate text an `overdue` finding is about. */
   candidate?: string;
-  /** The issue store's own refusal code, on `unverified`. */
+  /** see packages/engine/src/planboard.ts - The issue store's own refusal code, on `unverified`. */
   storeCode?: string;
 };
 
 export type PlanboardFindings = {
-  /** The board file that was read; `null` when it does not exist. */
+  /** see packages/engine/src/planboard.ts - The board file that was read; `null` when it does not exist. */
   path: string | null;
   reviewAfter: string | null;
-  /**
-   * The board's clean pointers, in file order: the ordering reason of each
-   * well-formed captured line and the candidate text of each well-formed
-   * candidate line. The findings are drift; this is what the board says.
-   */
+  /** see packages/engine/src/planboard.ts - The board's clean pointers, in file order: the ordering reason of each well-formed captured line and the candidate text of each well-formed candidate line. The findings are drift; this is what the board says. */
   captured: Array<{ line: number; issueId: string; reason: string }>;
   candidates: Array<{ line: number; candidate: string; evidence: string }>;
   findings: PlanboardFinding[];
 };
 
-/**
- * An issue pointer names either the local display id or the stable portable
- * reference. The display id is local vocabulary; a remote selection addresses
- * its admitted snapshot by the reference, so a board read there must carry it.
- */
+/** see packages/engine/src/planboard.ts - An issue pointer names either the local display id or the stable portable reference. The display id is local vocabulary; a remote selection addresses its admitted snapshot by the reference, so a board read there must carry it. */
 const POINTER = "mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const ISSUE_LINE = new RegExp(`^- ((?:I-[0-9]{6})|(?:${POINTER})) \u2014 (.+)$`);
 const CANDIDATE_LINE = /^- \? (.+?) \u2014 (.+)$/;
 const ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`, "g");
-/** Does this line start with an issue pointer? Compiled once, not per line. */
+/** see packages/engine/src/planboard.ts - Does this line start with an issue pointer? Compiled once, not per line. */
 const HAS_ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`);
 const REVIEW_AFTER = /^review_after: ([0-9]{4}-[0-9]{2}-[0-9]{2})$/;
-/** An ADR record name, as the ADR tree spells it. */
+/** see packages/engine/src/planboard.ts - An ADR record name, as the ADR tree spells it. */
 const ADR_NAME = /^[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]*(\.md)?$/;
-/** A repository path: one token, no spaces, with a separator or a file extension. */
+/** see packages/engine/src/planboard.ts - A repository path: one token, no spaces, with a separator or a file extension. */
 const EVIDENCE_PATH = /^[\w.@+-]+(?:\/[\w.@+-]+)+\/?$|^[\w.@+-]+\.(?:[a-z0-9]+)$/i;
-/** note: The stable portable issue reference, the only address a remote snapshot resolves. */
+/** see packages/engine/src/planboard.ts - The stable portable issue reference, the only address a remote snapshot resolves. */
 const ISSUE_REF = new RegExp(`^${POINTER}$`);
-/** A local display issue id, on its own. */
+/** see packages/engine/src/planboard.ts - A local display issue id, on its own. */
 const DISPLAY_ISSUE_ID = /^I-[0-9]{6}$/;
 
 type IssueRef = { line: number; id: string; reason: string };
@@ -88,21 +68,13 @@ function malformed(line: number | null, message: string, extra: Partial<Planboar
   return { code: "malformed", line, message, ...extra };
 }
 
-/** A calendar date the parser accepts: `yyyy-mm-dd` that names a real day. */
+/** see packages/engine/src/planboard.ts - A calendar date the parser accepts: `yyyy-mm-dd` that names a real day. */
 function isCalendarDate(value: string): boolean {
   const parsed = new Date(`${value}T00:00:00Z`);
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-/**
- * The evidence one candidate may name, exactly: one path token, one ADR record
- * name, or one issue pointer — and nothing else. Anything with words or extra
- * punctuation around the token (`see I-000001 for context`, `I-000001;`) is
- * prose, and the board is not prose.
- *
- * Returns the value that was validated, so the emitted pointer can never be a
- * differently punctuated spelling of the evidence that passed.
- */
+/** see packages/engine/src/planboard.ts - The evidence one candidate may name, exactly: one path token, one ADR record name, or one issue pointer — and nothing else. Anything with words or extra punctuation around the token (`see I-000001 for context`, `I-000001;`) is prose, and the board is not prose. Returns the value that was validated, so the emitted pointer can never be a differently punctuated spelling of the evidence that passed. */
 function evidenceOf(text: string): string | null {
   const value = text.trim();
   if (value === "") return null;
@@ -150,7 +122,7 @@ export function parsePlanboard(text: string): Parsed {
         continue;
       }
       findings.push(malformed(line, `unknown heading \`${trimmed}\`; the board has only \`## Captured\` and \`## Candidates\``));
-      // invariant: An unknown heading closes the open section. A pointer below it
+      // see packages/engine/src/planboard.ts - // invariant: An unknown heading closes the open section. A pointer below it
       // is not under a legal heading, so it is malformed and never looked up.
       section = "unknown";
       continue;
@@ -158,13 +130,13 @@ export function parsePlanboard(text: string): Parsed {
 
     if (trimmed.startsWith("review_after:")) {
       reviewAfterLines += 1;
-      // invariant: Exactly one valid preamble date decides `overdue`. A second
+      // see packages/engine/src/planboard.ts - // invariant: Exactly one valid preamble date decides `overdue`. A second
       // declaration, a misplaced one, or an unparsable one invalidates the date
       // entirely, so nothing is reported overdue from a half-read header.
       const date = REVIEW_AFTER.exec(trimmed);
       const valid = section === "preamble" && reviewAfterLines === 1 && date !== null && isCalendarDate(date[1]!);
       if (!valid) {
-        // invariant: One file-level finding covers the whole header, however many
+        // see packages/engine/src/planboard.ts - // invariant: One file-level finding covers the whole header, however many
         // ways it is wrong: two declarations are one broken date, not two.
         if (!dateReported) findings.push(malformed(null, "the board declares exactly one valid `review_after: yyyy-mm-dd` before the first heading"));
         dateReported = true;
@@ -198,7 +170,7 @@ export function parsePlanboard(text: string): Parsed {
       }
       capturedEntries += 1;
       if (capturedEntries > PLANBOARD_SECTION_CAP) {
-        // invariant: The cap is reported once, and the excess is not walked into
+        // see packages/engine/src/planboard.ts - // invariant: The cap is reported once, and the excess is not walked into
         // per-line findings that would scale with the file.
         if (capturedEntries === PLANBOARD_SECTION_CAP + 1) {
           findings.push(malformed(line, `\`## Captured\` holds at most ${PLANBOARD_SECTION_CAP} entries; the rest were not read`));
@@ -216,7 +188,7 @@ export function parsePlanboard(text: string): Parsed {
         continue;
       }
       const match = CANDIDATE_LINE.exec(trimmed);
-      // invariant: A candidate obeys the same one-id rule as a captured line, and
+      // see packages/engine/src/planboard.ts - // invariant: A candidate obeys the same one-id rule as a captured line, and
       // its evidence names a path, an ADR record or an issue — never prose.
       if (ids.length > 1) {
         findings.push(malformed(line, "a candidate line names at most one issue id", { issueId: ids[0] }));
@@ -254,19 +226,13 @@ export function parsePlanboard(text: string): Parsed {
   return { reviewAfter, issues, candidates, findings };
 }
 
-/**
- * One issue line's answer: its disposition, `missing`, or a code.
- *
- * `refusal` is a per-line answer (the store answered, and this id resolved
- * nowhere); `laneRefusal` means the whole lane could not be read, which no
- * further line can improve on.
- */
+/** see packages/engine/src/planboard.ts - One issue line's answer: its disposition, `missing`, or a code. `refusal` is a per-line answer (the store answered, and this id resolved nowhere); `laneRefusal` means the whole lane could not be read, which no further line can improve on. */
 type IssueAnswer =
   | Readonly<{ kind: "disposition"; disposition: string }>
   | Readonly<{ kind: "refusal"; code: string }>
   | Readonly<{ kind: "laneRefusal"; code: string }>;
 
-/** A lane-level refusal: the store never answered, so no line is decided by it. */
+/** see packages/engine/src/planboard.ts - A lane-level refusal: the store never answered, so no line is decided by it. */
 const LANE_REFUSAL_CODES = new Set([
   "collaboration.not-initialized",
   "collaboration.stale-binding",
@@ -288,17 +254,7 @@ function refusalOf(error: unknown): IssueAnswer {
     : { kind: "refusal", code: stable };
 }
 
-/**
- * Answer every board id with ONE lane read.
- *
- * why: A per-line open re-enters the lane (and its busy timeout) once per entry,
- * so a contended or unreadable lane would stall a plain report up to the
- * section cap. One read answers the whole board; after a lane-level refusal the
- * remaining lines are reported with the same code and nothing reopens.
- *
- * A remote selection opens its admitted view once and resolves every id against
- * it, so the remote cache follows the same one-read rule.
- */
+/** see packages/engine/src/planboard.ts - Answer every board id with ONE lane read. why: A per-line open re-enters the lane (and its busy timeout) once per entry, so a contended or unreadable lane would stall a plain report up to the section cap. One read answers the whole board; after a lane-level refusal the remaining lines are reported with the same code and nothing reopens. A remote selection opens its admitted view once and resolves every id against it, so the remote cache follows the same one-read rule. */
 async function answersFor(context: StoreContext, ids: readonly string[]): Promise<Map<string, IssueAnswer>> {
   const answers = new Map<string, IssueAnswer>();
   if (ids.length === 0) return answers;
@@ -306,14 +262,14 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
   try {
     mode = resolveCollaborationLocation(context).mode;
   } catch (error) {
-    // note: A checkout whose identity cannot be resolved never reached the lane,
+    // see packages/engine/src/planboard.ts - // note: A checkout whose identity cannot be resolved never reached the lane,
     // so no line is decided by it.
     const refusal = refusalOf(error);
     for (const id of ids) answers.set(id, refusal);
     return answers;
   }
   if (mode === "remote") {
-    // invariant: ONE admitted view answers the whole board: the cache is opened
+    // see packages/engine/src/planboard.ts - // invariant: ONE admitted view answers the whole board: the cache is opened
     // once, and each id is resolved against the snapshot it already holds. A
     // lane-level refusal answers every remaining line and never reopens; only a
     // per-id answer (not-found, scope-refused) is decided line by line.
@@ -331,7 +287,7 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
     for (const id of ids) {
       try {
         const read = remoteIssueRead(view, id);
-        // note: A provider-only answer is no MStar subject, so the line names an
+        // see packages/engine/src/planboard.ts - // note: A provider-only answer is no MStar subject, so the line names an
         // issue this store does not hold.
         answers.set(id, { kind: "disposition", disposition: read.kind === "native" ? "absent" : read.detail.disposition });
       } catch (error) {
@@ -344,7 +300,7 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
           answers.set(id, { kind: "refusal", code });
           continue;
         }
-        // A lane-level cause: no later id can answer differently.
+        // see packages/engine/src/planboard.ts - // A lane-level cause: no later id can answer differently.
         const refusal = refusalOf(error);
         for (const remaining of ids) if (!answers.has(remaining)) answers.set(remaining, refusal);
         return answers;
@@ -363,11 +319,11 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
   }
   try {
     const db = handle.db;
-    // note: `openCollaborationStore` already refuses a staged, foreign or
+    // see packages/engine/src/planboard.ts - // note: `openCollaborationStore` already refuses a staged, foreign or
     // otherwise inactive lane (`collaboration.not-active`), so nothing is gated
     // again here — the handle only ever carries an ACTIVE lane.
     for (const id of ids) {
-      // why: The display id is the row's primary key; the stable portable
+      // see packages/engine/src/planboard.ts - // why: The display id is the row's primary key; the stable portable
       // reference is its own column. A board written in `remote` mode carries the
       // reference, and a local lane that only matched `id` reported it missing.
       const row = db

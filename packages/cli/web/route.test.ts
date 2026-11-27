@@ -55,7 +55,7 @@ describe("the project feature segment", () => {
 
   test("an unknown feature resolves to the default, never to a third feature", () => {
     expect(parseRoute("#project/engine/workflows").route).toEqual({ name: "project", id: "engine", feature: "issues" });
-    // The retired feature's address is unknown input now, not an alias.
+    // see packages/cli/web/route.test.ts - // The retired feature's address is unknown input now, not an alias.
     expect(parseRoute("#project/engine/roadmap").route).toEqual({ name: "project", id: "engine", feature: "issues" });
   });
 });
@@ -73,7 +73,7 @@ describe("unknown input lands on the documented default", () => {
 
 describe("#roadmap is removed, not aliased", () => {
   test("it resolves to the landing destination", () => {
-    // The roadmap domain is retired. A compatibility alias would keep a dead
+    // see packages/cli/web/route.test.ts - // The roadmap domain is retired. A compatibility alias would keep a dead
     // vocabulary alive, so the route is simply not in the table.
     expect(parseRoute("#roadmap").route).toEqual({ name: "overview" });
   });
@@ -84,7 +84,7 @@ describe("#roadmap is removed, not aliased", () => {
     for (const hash of ["#overview", "#issues", "#workflows", "#iterations", "#projects", "#issue/I-1"]) {
       expect(routeHash(parseRoute(hash).route)).not.toBe("#roadmap");
     }
-    // A project page's default feature is a different, nested address and must
+    // see packages/cli/web/route.test.ts - // A project page's default feature is a different, nested address and must
     // not be confused with the removed destination.
     expect(routeHash(parseRoute("#project/engine").route)).toBe("#project/engine/issues");
   });

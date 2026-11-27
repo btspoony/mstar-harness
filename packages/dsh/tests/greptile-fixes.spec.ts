@@ -27,7 +27,7 @@ describe('P1 — a project opens the read that exists', () => {
   })
 
   it('a project open reads its milestone body through the overview view, scoped to the project', async () => {
-    // The consumer-visible behavior: the project page's read target is a view the
+    // see packages/dsh/tests/greptile-fixes.spec.ts - // The consumer-visible behavior: the project page's read target is a view the
     // engine actually serves, so the panel renders the milestone arm instead of an
     // "unknown dashboard view" refusal. The engine read itself is the proof — no
     // internal mapping is re-pinned here.
@@ -38,7 +38,7 @@ describe('P1 — a project opens the read that exists', () => {
       params: target.params,
       ...(target.id === undefined ? {} : { id: target.id }),
     }).catch((error: unknown) => error)
-    // The store is absent, so the read refuses for THAT reason — never because the
+    // see packages/dsh/tests/greptile-fixes.spec.ts - // The store is absent, so the read refuses for THAT reason — never because the
     // view name is unknown.
     expect(String(read)).not.toContain('unknown dashboard view')
   })

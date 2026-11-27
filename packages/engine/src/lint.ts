@@ -2042,7 +2042,7 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
   }
 
   if (bucket === "implemented") {
-    // `implemented/` is the live bucket: a record carrying `Superseded-by:`
+    // see packages/engine/src/lint.ts - // `implemented/` is the live bucket: a record carrying `Superseded-by:`
     // is already demoted and must move to `archived/`, whatever the state of
     // its replacement. Single-file rule - no cross-file lookup.
     const supersededBy = header.find((line) => line.startsWith("Superseded-by:"));

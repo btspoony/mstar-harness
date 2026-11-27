@@ -1,12 +1,4 @@
-/**
- * CLI `mstar planboard check` — the envelope, the exit code and the
- * write-nothing promise.
- *
- * The command is a report, never a gate: every finding class and all of them
- * together still exit 0, and the store's bytes, the board's bytes and the file
- * list of `{HARNESS_DIR}` are identical before and after the run. Only a
- * malformed invocation keeps the CLI's usage exit, which the adapter owns.
- */
+/** see packages/cli/test/planboard-cli.test.ts - CLI `mstar planboard check` — the envelope, the exit code and the write-nothing promise. The command is a report, never a gate: every finding class and all of them together still exit 0, and the store's bytes, the board's bytes and the file list of `{HARNESS_DIR}` are identical before and after the run. Only a malformed invocation keeps the CLI's usage exit, which the adapter owns. */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -30,7 +22,7 @@ import { createRemoteScope, REMOTE_IDS } from "../../engine/src/remote-scope.fix
 import { z } from "zod";
 import { runCli, writeFixtureRepoId } from "./harness";
 
-/** The parsed report envelope, validated at this boundary instead of cast. */
+/** see packages/cli/test/planboard-cli.test.ts - The parsed report envelope, validated at this boundary instead of cast. */
 const reportSchema = z.object({
   status: z.string(),
   exitCode: z.number(),
@@ -48,7 +40,7 @@ function report(stdout: string): z.infer<typeof reportSchema> {
   return reportSchema.parse(JSON.parse(stdout));
 }
 
-/** An invocation the adapter refused before execution: it carries no data. */
+/** see packages/cli/test/planboard-cli.test.ts - An invocation the adapter refused before execution: it carries no data. */
 const usageSchema = z.object({ status: z.string(), code: z.string(), exitCode: z.number(), message: z.string() });
 
 function captureInput(rootCauseKey: string): CaptureInput {
@@ -75,7 +67,7 @@ function mutation(operationId: string): MutationContext {
   return { operationId, actor: "project-manager" };
 }
 
-/** The issue lane's revision, read without creating or migrating anything. */
+/** see packages/cli/test/planboard-cli.test.ts - The issue lane's revision, read without creating or migrating anything. */
 function storeRevision(root: string | StoreContext): number {
   const context = typeof root === "string" ? { harnessDir: join(root, ".mstar") } : root;
   const location = resolveCollaborationLocation(context);
@@ -87,7 +79,7 @@ function storeRevision(root: string | StoreContext): number {
   }
 }
 
-/** Everything a report must leave alone: the board's bytes and the harness file list. */
+/** see packages/cli/test/planboard-cli.test.ts - Everything a report must leave alone: the board's bytes and the harness file list. */
 function harnessState(harness: string): string {
   const board = join(harness, "planboard.md");
   return JSON.stringify({ files: readdirSync(harness).sort(), board: existsSync(board) ? readFileSync(board, "utf8") : null });
@@ -101,9 +93,7 @@ function fixtureRoot(prefix: string): string {
   return root;
 }
 
-/** why: The collaboration lane is user-level, so the spawned child and this
- * process must resolve the SAME home; the spy covers this process and `HOME`
- * reaches the child. */
+/** see packages/cli/test/planboard-cli.test.ts - The collaboration lane is user-level, so the spawned child and this process must resolve the SAME home; the spy covers this process and `HOME` reaches the child. */
 const HOME = mkdtempSync(join(tmpdir(), "mstar-planboard-cli-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -175,7 +165,7 @@ describe("mstar planboard check", () => {
         expect(storeRevision(root)).toBe(revision);
       }
 
-      // All at once: one open line (no finding), a stale line, a missing line,
+      // see packages/cli/test/planboard-cli.test.ts - // All at once: one open line (no finding), a stale line, a missing line,
       // a malformed line and an overdue candidate. Findings sort by line.
       writeFileSync(
         join(harness, "planboard.md"),
@@ -203,7 +193,7 @@ describe("mstar planboard check", () => {
         { code: "malformed", line: 7 },
         { code: "overdue", line: 10 },
       ]);
-      // invariant: The board's well-formed pointers travel in the envelope, so a
+      // see packages/cli/test/planboard-cli.test.ts - // invariant: The board's well-formed pointers travel in the envelope, so a
       // caller that runs only the verb still reads the ordering and the
       // candidates — the findings say which of them drifted.
       expect(combined.captured).toEqual([
@@ -222,7 +212,7 @@ describe("mstar planboard check", () => {
   });
 
   test("unverified, malformed and overdue together in one run, exit 0, nothing written", async () => {
-    // why: `unverified` means the one store this run reads refused, and that
+    // see packages/cli/test/planboard-cli.test.ts - // why: `unverified` means the one store this run reads refused, and that
     // refuses EVERY issue line (a refused read is never a stale or missing one),
     // so the joint run pairs it with the two findings the parser decides alone;
     // the store-backed joint run above covers stale+missing+malformed+overdue.
@@ -233,7 +223,7 @@ describe("mstar planboard check", () => {
     const root = fixture.repo;
     try {
       const commit = fixture.publish();
-      // A published selector with no admitted observation: every issue read refuses.
+      // see packages/cli/test/planboard-cli.test.ts - // A published selector with no admitted observation: every issue read refuses.
       await bindRemoteAuthority(fixture.context(), fixture.batch(commit));
       writeFileSync(
         join(harness, "planboard.md"),
@@ -249,7 +239,7 @@ describe("mstar planboard check", () => {
         ].join("\n"),
       );
       const before = harnessState(harness);
-      // The bind wrote this selection's cache, so the remote lane has a revision.
+      // see packages/cli/test/planboard-cli.test.ts - // The bind wrote this selection's cache, so the remote lane has a revision.
       const revision = storeRevision(fixture.context());
       const result = runCli(["planboard", "check"], { cwd: root, env: { HOME } });
       expect(result.exitCode).toBe(0);
@@ -260,7 +250,7 @@ describe("mstar planboard check", () => {
         { code: "overdue", line: 8 },
       ]);
       expect(reported.findings[0]!.storeCode).toMatch(/^remote\.|^collaboration\./);
-      // invariant: The pointers the parse accepted travel even when the read refused.
+      // see packages/cli/test/planboard-cli.test.ts - // invariant: The pointers the parse accepted travel even when the read refused.
       expect(reported.captured).toEqual([{ line: 4, issueId: REMOTE_IDS.issueRef, reason: "an issue this store cannot answer for" }]);
       expect(reported.candidates).toEqual([
         { line: 8, candidate: "an overdue candidate", evidence: "docs/specs/example.md" },
@@ -268,7 +258,7 @@ describe("mstar planboard check", () => {
       expect(harnessState(harness)).toBe(before);
       expect(storeRevision(fixture.context())).toBe(revision);
     } finally {
-      // note: The fixture's checkout and lane live under the shared HOME.
+      // see packages/cli/test/planboard-cli.test.ts - // note: The fixture's checkout and lane live under the shared HOME.
       rmSync(fixture.repo, { recursive: true, force: true });
     }
   });
@@ -277,7 +267,7 @@ describe("mstar planboard check", () => {
     const root = fixtureRoot("mstar-planboard-cli-refused-");
     const harness = join(root, ".mstar");
     try {
-      // why: A STAGED collaboration lane is a real store with a real revision that
+      // see packages/cli/test/planboard-cli.test.ts - // why: A STAGED collaboration lane is a real store with a real revision that
       // refuses every ordinary issue read, so the refused-read case can compare
       // the revision it started with instead of merely claiming nothing was written.
       await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
@@ -295,7 +285,7 @@ describe("mstar planboard check", () => {
         { code: "unverified", line: 4 },
       ]);
       for (const finding of reported.findings) expect(finding.storeCode).toMatch(/^collaboration\./);
-      // invariant: A refused read still reports the pointers it parsed.
+      // see packages/cli/test/planboard-cli.test.ts - // invariant: A refused read still reports the pointers it parsed.
       expect(reported.captured).toEqual([
         { line: 3, issueId: "I-000001", reason: "first" },
         { line: 4, issueId: "I-000002", reason: "second" },
@@ -309,7 +299,7 @@ describe("mstar planboard check", () => {
   });
 
   test("an unresolved harness root refuses instead of reading a stray planboard", async () => {
-    // why: Outside Git with no explicit harness, a plain `./planboard.md` is not
+    // see packages/cli/test/planboard-cli.test.ts - // why: Outside Git with no explicit harness, a plain `./planboard.md` is not
     // this project's board. The verb must say so, not report a clean board.
     const root = mkdtempSync(join(tmpdir(), "mstar-planboard-cli-noharness-"));
     try {
@@ -319,7 +309,7 @@ describe("mstar planboard check", () => {
       expect(result.exitCode).toBe(1);
       const refused = usageSchema.parse(JSON.parse(result.stdout));
       expect(refused).toMatchObject({ status: "refused", code: "planboard.harness-unresolved", exitCode: 1 });
-      // The refusal states the recovery inline, as every family's envelope does.
+      // see packages/cli/test/planboard-cli.test.ts - // The refusal states the recovery inline, as every family's envelope does.
       expect(refused.message).toContain("--harness");
       expect(readFileSync(join(root, "planboard.md"), "utf8")).toBe(before);
     } finally {

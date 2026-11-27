@@ -1599,7 +1599,7 @@ describe('D4 catalog identity encoding + selected compass path', () => {
 })
 
 describe('the project milestone rollup feeds the gate from the store', () => {
-  /** The store's own revision, read the way a milestone write observes it. */
+  /** see packages/dsh/tests/catalog.spec.ts - The store's own revision, read the way a milestone write observes it. */
   async function observedRevision(harnessDir: string): Promise<number> {
     const lane = new DatabaseSync(collaborationDbPathAt(harnessDir))
     try {
@@ -1636,7 +1636,7 @@ describe('the project milestone rollup feeds the gate from the store', () => {
 
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     if (state === null) throw new Error('expected a state section')
-    // The gate reads the store milestone rollup, not a hand-built payload: the
+    // see packages/dsh/tests/catalog.spec.ts - // The gate reads the store milestone rollup, not a hand-built payload: the
     // names arrive in catalog-project order and ordinal order within the project.
     expect(state.project.milestones).toEqual(['P1 foundation', 'Release the panel'])
     expect(state.project.milestoneSource).toEqual({ kind: 'present', diagnostic: null })
@@ -1648,7 +1648,7 @@ describe('the project milestone rollup feeds the gate from the store', () => {
     await mkdir(harnessDir, { recursive: true })
     await seedStore(harnessDir)
     await seedProjectWithMilestones(harnessDir, ['P1 foundation'])
-    // A missing milestone table is exactly the refusal class the gate must
+    // see packages/dsh/tests/catalog.spec.ts - // A missing milestone table is exactly the refusal class the gate must
     // disclose: the catalog (projects) still reads, but the milestone query
     // cannot answer — so it is unavailable, never the same empty success as a
     // project that genuinely holds no milestones.

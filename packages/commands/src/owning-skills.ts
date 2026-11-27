@@ -15,7 +15,7 @@ const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   milestone: "mstar-project-governance",
   project: "mstar-project-governance",
   catalog: "mstar-conventions",
-  // why: The board is read and cleaned at the iteration read/write points, so the
+  // see packages/commands/src/owning-skills.ts - // why: The board is read and cleaned at the iteration read/write points, so the
   // skill that owns those points owns the verb.
   planboard: "mstar-iteration",
   store: "mstar-conventions",

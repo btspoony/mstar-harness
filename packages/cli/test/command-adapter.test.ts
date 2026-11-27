@@ -912,7 +912,7 @@ test("plan payload decode returns indexed field paths in the usage envelope", as
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-typed-options-"));
   try {
-    // note: `limit`/`offset` are schema-typed numbers: a decoded value is what keeps this from being a
+    // see packages/cli/test/command-adapter.test.ts - // note: `limit`/`offset` are schema-typed numbers: a decoded value is what keeps this from being a
     // usage refusal, whatever the store then answers about the harness it was pointed at.
     const numeric = await run(["issue", "list", "--limit", "5", "--offset", "2", "--harness", root]);
     const numericResult = JSON.parse(numeric.stdout) as { code?: string; message?: string };

@@ -233,7 +233,7 @@ export interface MilestoneSourceView {
 
 /** The additive project rollup, sourced from store authority and open issues. */
 export interface MstarHarnessProject {
-  /** Milestone names in deterministic catalog-project order, ordinal order within each project. */
+  /** see packages/dsh/src/types.ts - Milestone names in deterministic catalog-project order, ordinal order within each project. */
   readonly milestones: readonly string[]
   readonly milestoneSource: MilestoneSourceView
   /** Open-issue counts by severity across the harness (non-zero severities only — same rollup as `state.residuals`). */
@@ -316,11 +316,7 @@ export interface MstarHarnessState {
   readonly plans: readonly HarnessPlanView[]
   /** Open issue counts by severity (non-zero only) — the issue authority's own rollup. */
   readonly residuals: readonly HarnessResidualView[]
-  /**
-   * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
-   * zone): store-authoritative milestones plus open-issue counts.
-   * Always-present (lossless), including an explicit milestone-source verdict.
-   */
+  /** see packages/dsh/src/types.ts - The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth zone): store-authoritative milestones plus open-issue counts. Always-present (lossless), including an explicit milestone-source verdict. */
   readonly project: MstarHarnessProject
   /**
    * Open issue detail (issue id + severity + title), in the issue authority's

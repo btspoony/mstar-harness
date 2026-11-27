@@ -1,16 +1,4 @@
-/**
- * Projects list + detail transforms.
- *
- * IA §8.2: the list carries id/title, description, lifecycle and the open-issue
- * count; the detail's identity block carries the same facts from the same list
- * read, so the head cannot disagree with the row the reader opened.
- *
- * The project screen's default body is the milestone rollup (the `overview`
- * view's project-scoped `milestones` member); the two list features (Issues /
- * Iterations) are fixed by IA §4. This module only orders them and names the
- * arm each one starts in; the rows come from the issue and iteration
- * transforms.
- */
+/** see packages/ui/src/view-model/projects.ts - Projects list + detail transforms. IA §8.2: the list carries id/title, description, lifecycle and the open-issue count; the detail's identity block carries the same facts from the same list read, so the head cannot disagree with the row the reader opened. The project screen's default body is the milestone rollup (the `overview` view's project-scoped `milestones` member); the two list features (Issues / Iterations) are fixed by IA §4. This module only orders them and names the arm each one starts in; the rows come from the issue and iteration transforms. */
 import type { MilestoneRead, OverviewMember, ProjectListDTO } from "@mstar-harness/engine";
 
 import type { Resolved } from "./state.ts";

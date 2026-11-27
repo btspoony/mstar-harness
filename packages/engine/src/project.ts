@@ -1,33 +1,4 @@
-/**
- * Engine project module — project layer (conventions:
- * mstar-conventions/references/artifact-storage-paths.md § project layer;
- * project register validator. This module is the only register validator;
- * the register re-hosts the residual entry schema from `status.ts` via
- * import — no copy.
- *
- * Spec sources (each export cites the plan/compass section it enforces):
- * - Register file `projects/<id>/residuals.json` shape
- * `{ entries: { [key]: (ResidualEntry & { source_plan, registered_at,
- * lifecycle_id? })[] } }` ( ) — entries keyed by
- * plan id, each value an ARRAY of entries (v1 `residual_findings[plan-id]`
- * semantics preserved verbatim: a plan may hold 2+ open residuals); entry
- * validation delegates verbatim to `validateResidual` (status.ts), so the
- * severity enum + lifecycle semantics are preserved at the new address.
- * - `_DEFAULT_PROJECT` fallback for project-less flows (compass ruling 2).
- * - Theme-scoped research corpus `projects/<id>/references/`: engine owns
- * `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles` — directory
- * metadata only (`readdirSync` with `withFileTypes`), never file bodies,
- * never a markdown schema; placement semantics are skills prose, not
- * engine validation.
- * - Project-register consumers: `findingsCleanupGate` (findings-cleanup
- * modes; issue-governance cutover G2a — it consumes the authoritative open
- * issues linked to the plan in `store.db`, never the legacy register) lives
- * HERE. The legacy register rollup (`techDebtRollup`) is deleted (plan QC fix
- * wave FW-5): the register authority is retired and the findings rollup
- * computes from the issue store (`readIssueRollup`), so the register-walking
- * reader had no supported caller left. status.ts no longer imports this
- * module (the former module cycle stays broken).
- */
+/** see packages/engine/src/project.ts - Engine project module — project layer (conventions: mstar-conventions/references/artifact-storage-paths.md § project layer; project register validator. This module is the only register validator; the register re-hosts the residual entry schema from `status.ts` via import — no copy. Spec sources (each export cites the plan/compass section it enforces): - Register file `projects/<id>/residuals.json` shape `{ entries: { [key]: (ResidualEntry & { source_plan, registered_at, lifecycle_id? })[] } }` ( ) — entries keyed by plan id, each value an ARRAY of entries (v1 `residual_findings[plan-id]` semantics preserved verbatim: a plan may hold 2+ open residuals); entry validation delegates verbatim to `validateResidual` (status.ts), so the severity enum + lifecycle semantics are preserved at the new address. - `_DEFAULT_PROJECT` fallback for project-less flows (compass ruling 2). - Theme-scoped research corpus `projects/<id>/references/`: engine owns `PROJECT_REFERENCES_DIR` + `listProjectReferenceFiles` — directory metadata only (`readdirSync` with `withFileTypes`), never file bodies, never a markdown schema; placement semantics are skills prose, not engine validation. - Project-register consumers: `findingsCleanupGate` (findings-cleanup modes; issue-governance cutover G2a — it consumes the authoritative open issues linked to the plan in `store.db`, never the legacy register) lives HERE. The legacy register rollup (`techDebtRollup`) is deleted (plan QC fix wave FW-5): the register authority is retired and the findings rollup computes from the issue store (`readIssueRollup`), so the register-walking reader had no supported caller left. status.ts no longer imports this module (the former module cycle stays broken). */
 import { readdirSync, type Dirent } from "node:fs";
 import { join } from "node:path";
 import { type GateResult, type Severity, type ValidationResult } from "./core.js";

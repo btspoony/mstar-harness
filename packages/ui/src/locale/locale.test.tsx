@@ -196,7 +196,7 @@ describe("no key exists for a fact IA §8 marks not-rendered", () => {
     "pin",
     "external",
     "provider-link",
-    // The roadmap domain is retired: no key may name it again.
+    // see packages/ui/src/locale/locale.test.tsx - // The roadmap domain is retired: no key may name it again.
     "roadmap",
   ];
 

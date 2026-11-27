@@ -1,22 +1,4 @@
-/**
- * The panel's snapshot contract (`readPanelSnapshot` produces it).
- *
- * SHRUNK BY DECISION (plan dsh-panel-unification Task 4; compass D23): the
- * transport carries only the facts no dashboard DTO owns. Everything an engine
- * `DashboardView` answers — workflows, iterations, issues, projects, the
- * overview — is read per view through `mstar/dashboardView` by the screen that
- * needs it, so this payload cannot go stale behind a poll or duplicate a DTO.
- *
- * - `enforcement` — harness state. The dashboard has none to read.
- * - `knowledge` — a catalog rollup that is CARRIED and never rendered (IA §8,
- *   D30 rule 3). A screen that draws it is the defect.
- * - `selection` — this session's workflow binding, the picker's read face.
- * - `iteration` — the ONE envelope read the per-view path does not replace:
- *   the delivery line's no-answer fallback. The per-view `iterations` read has
- *   no arm for "could not answer yet", and `Focus` must never print
- *   "No iteration" for a read that has not happened, so this member stays while
- *   it has that consumer.
- */
+/** see packages/dsh/src/panel/panel-snapshot.ts - The panel's snapshot contract (`readPanelSnapshot` produces it). SHRUNK BY DECISION (plan dsh-panel-unification Task 4; compass D23): the transport carries only the facts no dashboard DTO owns. Everything an engine `DashboardView` answers — workflows, iterations, issues, projects, the overview — is read per view through `mstar/dashboardView` by the screen that needs it, so this payload cannot go stale behind a poll or duplicate a DTO. - `enforcement` — harness state. The dashboard has none to read. - `knowledge` — a catalog rollup that is CARRIED and never rendered (IA §8, D30 rule 3). A screen that draws it is the defect. - `selection` — this session's workflow binding, the picker's read face. - `iteration` — the ONE envelope read the per-view path does not replace: the delivery line's no-answer fallback. The per-view `iterations` read has no arm for "could not answer yet", and `Focus` must never print "No iteration" for a read that has not happened, so this member stays while it has that consumer. */
 
 import type { EnforcementFlag, IterationDTO } from '@mstar-harness/engine'
 import type { MstarHarnessState, WorkflowSelectionView } from '../types.ts'

@@ -23,7 +23,7 @@ export function getPlanboardCommandDefinitions(): readonly CommandDefinition<Inp
       description:
         "Read {HARNESS_DIR}/planboard.md and report its pointers and their drift: malformed, stale, missing, overdue and unverified, each with its line. Writes nothing and exits 0 for every finding.",
       async execute(input, context): Promise<CommandEnvelope> {
-        // invariant: The board belongs to the control harness. An unresolved root
+        // see packages/commands/src/families/planboard.ts - // invariant: The board belongs to the control harness. An unresolved root
         // is refused instead of reading `./planboard.md` — a file in whatever
         // directory the caller happened to run in is not this project's board.
         const harnessDir = resolveProcessHarnessDir(context.cwd, input.harness) ?? context.controlRoot;
@@ -49,7 +49,7 @@ export function getPlanboardCommandDefinitions(): readonly CommandDefinition<Inp
           data: {
             path: result.path,
             reviewAfter: result.reviewAfter,
-            // why: The pointers are the board's content; findings are its drift.
+            // see packages/commands/src/families/planboard.ts - // why: The pointers are the board's content; findings are its drift.
             // A report that dropped the clean lines would leave the caller with
             // no planning order to read, so both travel together.
             captured: result.captured,

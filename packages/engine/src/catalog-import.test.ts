@@ -211,7 +211,7 @@ describe("catalog discovery", () => {
     expect(plan.version).toBe(CATALOG_IMPORT_PLAN_VERSION);
     expect(entityAt(plan, "iter-alpha")?.kind).toBe("iteration");
     expect(entityAt(plan, "proj-a")?.kind).toBe("project");
-    // A project package is its directory: no marker file, so the title falls back to the id.
+    // see packages/engine/src/catalog-import.test.ts - // A project package is its directory: no marker file, so the title falls back to the id.
     expect(entityAt(plan, "proj-a")?.title).toBe("proj-a");
     expect(entityAt(plan, "20260918-alpha.md")?.kind).toBe("plan");
     expect(entityAt(plan, "20260918-alpha.md")?.title).toBe("Alpha plan");

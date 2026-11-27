@@ -323,7 +323,7 @@ describe("dashboard views over a real store", () => {
     const iterations = await readDashboardView({ context, view: "iterations" });
     expect(iterations.data as IterationListDTO).toEqual({ items: [], total: 0, attribution: "absent" });
 
-    // note: The retired roadmap view is not a view any more: it refuses as an unknown view.
+    // see packages/cli/test/store-read.test.ts - // note: The retired roadmap view is not a view any more: it refuses as an unknown view.
     await expect(readDashboardView({ context, view: "roadmap" as never })).rejects.toMatchObject({ exitCode: 2 });
   });
 

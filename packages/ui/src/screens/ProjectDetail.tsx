@@ -1,22 +1,4 @@
-/**
- * `ProjectDetail` — identity head, the milestone rollup, and the project's two
- * list features (IA §4).
- *
- * The milestone timeline and its write forms are the screen's default body,
- * read from the project-scoped milestone rollup. The list feature set is
- * **fixed**: Issues, Iterations, in that order, with **Issues the default**.
- * It does not grow, it is not configurable, and it never opens "the first
- * feature that has content": a fixed default keeps every project page the same
- * shape so a reader's memory of the layout transfers between projects, and
- * auto-selection would quietly hide an absence — which is itself a fact (§4).
- *
- * Each feature is scoped to this project. A feature whose attribution is missing
- * renders the not-applicable / absent arm; it must never fall back to the
- * store-wide list, which would be a wrong answer presented as a right one.
- *
- * Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`,
- * `checkedAt`, the catalog `revision`, `sourceHash`.
- */
+/** see packages/ui/src/screens/ProjectDetail.tsx - `ProjectDetail` — identity head, the milestone rollup, and the project's two list features (IA §4). The milestone timeline and its write forms are the screen's default body, read from the project-scoped milestone rollup. The list feature set is **fixed**: Issues, Iterations, in that order, with **Issues the default**. It does not grow, it is not configurable, and it never opens "the first feature that has content": a fixed default keeps every project page the same shape so a reader's memory of the layout transfers between projects, and auto-selection would quietly hide an absence — which is itself a fact (§4). Each feature is scoped to this project. A feature whose attribution is missing renders the not-applicable / absent arm; it must never fall back to the store-wide list, which would be a wrong answer presented as a right one. Not rendered anywhere here: `storeRevision`, `catalogRevision`, `builtAt`, `checkedAt`, the catalog `revision`, `sourceHash`. */
 import { useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState.tsx";
 import { StatusDot } from "../components/StatusDot.tsx";
@@ -258,15 +240,7 @@ export type MilestoneWriteSurface = {
   busy: boolean;
   /** The store's own refusal message, verbatim, or `null`. */
   refusal: string | null;
-  /**
-   * Whether the operator's typed draft survives the write that just settled.
-   *
-   * The HOST decides this (its conflict policy), not the refusal string: an
-   * accepted write clears the draft, while a revision conflict — whose refusal
-   * text is present too — keeps it, so the retry still carries the typed text.
-   * Omitted, the surface falls back to `refusal === null`, which is the
-   * pre-conflict behaviour for a host that cannot distinguish the two.
-   */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - Whether the operator's typed draft survives the write that just settled. The HOST decides this (its conflict policy), not the refusal string: an accepted write clears the draft, while a revision conflict — whose refusal text is present too — keeps it, so the retry still carries the typed text. Omitted, the surface falls back to `refusal === null`, which is the pre-conflict behaviour for a host that cannot distinguish the two. */
   keepDraft?: boolean;
   create: (input: { name: string; effortSessions: number | null; ordinal: number }) => void;
   update: (milestoneId: string, patch: { name?: string; effortSessions?: number | null; status?: string }) => void;
@@ -282,7 +256,7 @@ export type ProjectDetailCopy = {
   /** The noun after the project's open-issue count. */
   openIssuesUnit: string;
   tabLabel: string;
-  /** The fixed list features, in order. `PROJECT_FEATURES` is the id list. */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - The fixed list features, in order. `PROJECT_FEATURES` is the id list. */
   features: Record<ProjectFeature, string>;
   milestones: {
     milestonesHeading: string;
@@ -312,11 +286,11 @@ export type ProjectDetailCopy = {
       unassign: string;
       /** Said when the picker hit the cap, so the truncation is never silent. */
       assignCap: string;
-      /** The picker's read is pending. */
+      /** see packages/ui/src/screens/ProjectDetail.tsx - The picker's read is pending. */
       assignLoading: string;
-      /** The picker's read failed; the store's own reason follows. */
+      /** see packages/ui/src/screens/ProjectDetail.tsx - The picker's read failed; the store's own reason follows. */
       assignFailed: string;
-      /** The retry control's word, beside the failure reason. */
+      /** see packages/ui/src/screens/ProjectDetail.tsx - The retry control's word, beside the failure reason. */
       assignRetry: string;
       remove: string;
       removeConfirm: string;
@@ -337,7 +311,7 @@ export type ProjectDetailProps = {
   /** The selected feature; the host owns the address bar (compass D27). */
   feature: ProjectFeature;
   onFeatureChange: (feature: ProjectFeature) => void;
-  /** The milestone body's arm, resolved by `state.ts`/`milestonesArm`. */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - The milestone body's arm, resolved by `state.ts`/`milestonesArm`. */
   milestones: Resolved<MilestonesModel>;
   /**
    * The two scoped lists, rendered by their own screens. Passing the element keeps
@@ -357,20 +331,16 @@ export type ProjectDetailProps = {
   writes?: MilestoneWriteSurface;
   /** note: the host-owned draft store; absent, drafts live in component state as before. */
   drafts?: MilestoneDraftStore;
-  /** The assign picker's read: the offer list, or the loading/failed arm. */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - The assign picker's read: the offer list, or the loading/failed arm. */
   assignableIssues?: AssignableIssuesRead;
-  /** Re-issue the picker's read after a failure; absent means the host cannot retry. */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - Re-issue the picker's read after a failure; absent means the host cannot retry. */
   onRetryAssignable?: () => void;
   onBack?: () => void;
   /** Leaving the project's scope — the chip's own affordance. Omitted, there is no chip button. */
   onClearScope?: () => void;
 };
 
-/**
- * The assignment picker for one milestone: a native `<details>` whose summary is
- * the control (natively focusable, toggles on Enter/Space and pointer), with one
- * chip per offered issue and the stated cap.
- */
+/** see packages/ui/src/screens/ProjectDetail.tsx - The assignment picker for one milestone: a native `<details>` whose summary is the control (natively focusable, toggles on Enter/Space and pointer), with one chip per offered issue and the stated cap. */
 function AssignPicker(props: {
   milestone: Milestone;
   writes: MilestoneWriteSurface;
@@ -410,9 +380,9 @@ function AssignPicker(props: {
 function MilestoneActions(props: {
   milestone: Milestone;
   writes: MilestoneWriteSurface;
-  /** The picker's read; absent means this host offers no picker here. */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - The picker's read; absent means this host offers no picker here. */
   assignable: AssignableIssuesRead | undefined;
-  /** Re-issue the picker's read; absent means this host cannot retry. */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - Re-issue the picker's read; absent means this host cannot retry. */
   onRetryAssignable?: () => void;
   copy: ProjectDetailCopy;
   /** note: the host-owned draft store (absent: drafts live in component state, as before). */
@@ -460,7 +430,7 @@ function MilestoneActions(props: {
   const setDraft = setDraftState;
   const [removing, setRemoving] = useState(false);
   const [effortError, setEffortError] = useState(false);
-  // why: the surface's keepDraft verdict (its host's conflict policy), not the submit itself,
+  // see packages/ui/src/screens/ProjectDetail.tsx - // why: the surface's keepDraft verdict (its host's conflict policy), not the submit itself,
   // decides whether the draft closes — an accepted write clears it, a revision conflict keeps it.
   const [writeInFlight, setWriteInFlight] = useState(false);
   useEffect(() => {
@@ -515,7 +485,7 @@ function MilestoneActions(props: {
             <AssignPicker milestone={milestone} writes={writes} assignable={assignable} copy={copy} />
           )
         ) : assignable.kind === "failed" ? (
-          // A failed read is stated IN PLACE: the picker must not vanish (an entry the
+          // see packages/ui/src/screens/ProjectDetail.tsx - // A failed read is stated IN PLACE: the picker must not vanish (an entry the
           // operator cannot find reads as "nothing to assign") and a retry must exist.
           <span className={"inline-write-error"} role="alert" data-ms-assign-error="">
             <span className="muted t-11">
@@ -528,7 +498,7 @@ function MilestoneActions(props: {
             )}
           </span>
         ) : (
-          // A pending read says so instead of pretending the set is empty.
+          // see packages/ui/src/screens/ProjectDetail.tsx - // A pending read says so instead of pretending the set is empty.
           <span className="muted t-11" data-ms-assign-loading="">
             {copy.milestones.writes.assignLoading}
           </span>
@@ -722,7 +692,7 @@ function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal
     if (name === "" && effort === "") props.drafts?.clear(targetKey);
     else props.drafts?.write(targetKey, { name, effort });
   }, [name, effort, props.drafts, targetKey]);
-  // why: same rule as the editor — the surface's keepDraft verdict clears the form only on an
+  // see packages/ui/src/screens/ProjectDetail.tsx - // why: same rule as the editor — the surface's keepDraft verdict clears the form only on an
   // accepted write, so a conflict (whose refusal text is present) keeps the typed values.
   const [writeInFlight, setWriteInFlight] = useState(false);
   useEffect(() => {
@@ -849,9 +819,7 @@ function MilestoneTimeline(props: { model: MilestonesModel; copy: ProjectDetailC
   );
 }
 
-/**
- * The milestone body: the timeline, then the board.
- */
+/** see packages/ui/src/screens/ProjectDetail.tsx - The milestone body: the timeline, then the board. */
 function MilestoneBoard(props: {
   model: MilestonesModel;
   copy: ProjectDetailCopy;
@@ -908,12 +876,7 @@ function MilestoneBoard(props: {
   );
 }
 
-/**
- * The write controls, outside the populated arm: a project whose milestone set
- * is empty still needs a way to create the FIRST one. The store is the
- * authority on whether the write lands, so the form is offered and a refusal
- * is surfaced.
- */
+/** see packages/ui/src/screens/ProjectDetail.tsx - The write controls, outside the populated arm: a project whose milestone set is empty still needs a way to create the FIRST one. The store is the authority on whether the write lands, so the form is offered and a refusal is surfaced. */
 function MilestoneWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy; drafts?: MilestoneDraftStore; draftsProject?: string }) {
   if (props.writes === undefined) return null;
   const writes = props.writes;
@@ -937,14 +900,7 @@ function MilestoneWrites(props: { writes?: MilestoneWriteSurface; nextOrdinal: n
   );
 }
 
-/**
- * The milestone body's arms.
- *
- * `empty` is a project whose milestone set holds nothing yet — no board, no
- * zero-width bar — while the create form stays offered, so the first milestone
- * is always creatable. `not-applicable` means no project resolved for the
- * read; `unavailable` carries the store's own reason.
- */
+/** see packages/ui/src/screens/ProjectDetail.tsx - The milestone body's arms. `empty` is a project whose milestone set holds nothing yet — no board, no zero-width bar — while the create form stays offered, so the first milestone is always creatable. `not-applicable` means no project resolved for the read; `unavailable` carries the store's own reason. */
 function MilestonesArm(props: {
   milestones: Resolved<MilestonesModel>;
   copy: ProjectDetailCopy;
@@ -955,7 +911,7 @@ function MilestonesArm(props: {
   draftsProject?: string;
 }) {
   const { milestones, copy } = props;
-  // The write controls sit OUTSIDE the arm: a project with no milestone still
+  // see packages/ui/src/screens/ProjectDetail.tsx - // The write controls sit OUTSIDE the arm: a project with no milestone still
   // needs a way to create the first one, so the form renders for every state
   // where the read answered and the host can write.
   const writes =
@@ -1026,15 +982,15 @@ function MilestonesArm(props: {
 
 export function ProjectDetail(props: ProjectDetailProps) {
   const { identity, copy, feature } = props;
-  // The header line is the project's own description — the only thing the list
+  // see packages/ui/src/screens/ProjectDetail.tsx - // The header line is the project's own description — the only thing the list
   // read says about what the project is. None renders nothing, not a dash.
   const direction = identity.description;
-  // The head's `N open issues` is the project's open-issue total, which the scoped Issues
+  // see packages/ui/src/screens/ProjectDetail.tsx - // The head's `N open issues` is the project's open-issue total, which the scoped Issues
   // read already answers under its default `open` disposition. The milestone
   // tallies cannot answer it: `unassignedIssues` counts every unassigned issue, retired
   // ones included (`MilestoneRead` documents the row that way).
   const openIssues = props.issuesCount ?? null;
-  // The prototype's tabs each carry their own count: the scoped lists' lengths,
+  // see packages/ui/src/screens/ProjectDetail.tsx - // The prototype's tabs each carry their own count: the scoped lists' lengths,
   // which only the host knows.
   const counts: Record<ProjectFeature, number | undefined> = {
     issues: props.issuesCount,
@@ -1067,7 +1023,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
           <h1 className="detail-title">
             <TruncatedText text={identity.title} />
           </h1>
-          {/* The description above the identity meta line, as the confirmed baseline has it. */}
+          {/* see packages/ui/src/screens/ProjectDetail.tsx - The description above the identity meta line, as the confirmed baseline has it. */}
           {direction === null ? null : (
             <p className="prose t-12 secondary" data-ms-direction="">
               {direction}
@@ -1089,7 +1045,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
         </div>
       </header>
 
-      {/* The screen's default body: the milestone rollup, then its write forms. */}
+      {/* see packages/ui/src/screens/ProjectDetail.tsx - The screen's default body: the milestone rollup, then its write forms. */}
       <MilestonesArm
         milestones={props.milestones}
         copy={copy}
@@ -1100,7 +1056,7 @@ export function ProjectDetail(props: ProjectDetailProps) {
         draftsProject={identity.projectId}
       />
 
-      {/* The fixed list-feature set. `Issues` is always the default. */}
+      {/* see packages/ui/src/screens/ProjectDetail.tsx - The fixed list-feature set. `Issues` is always the default. */}
       <Tabs
         tabs={tabs}
         activeId={feature}
@@ -1109,13 +1065,11 @@ export function ProjectDetail(props: ProjectDetailProps) {
       />
 
       <div className={"feature-body"} data-ms-feature={feature}>
-        {/* The scope chip: this list is this project's, and the scope is
-            removable so the reader can say what they are looking at. */}
+        {/* see packages/ui/src/screens/ProjectDetail.tsx - The scope chip: this list is this project's, and the scope is removable so the reader can say what they are looking at. */}
         <div className={"chips"}>
           <span className={"chip"} data-ms-scope-chip={identity.projectId}>
             {copy.scope.label(identity.projectId)}
-            {/* No callback, no button: a control that looks removable and is not is
-                worse than a chip that simply states the scope. */}
+            {/* see packages/ui/src/screens/ProjectDetail.tsx - No callback, no button: a control that looks removable and is not is worse than a chip that simply states the scope. */}
             {props.onClearScope === undefined ? null : (
               <button
                 type="button"

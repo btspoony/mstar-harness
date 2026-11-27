@@ -468,19 +468,19 @@ describe('the shell holds the open record and the project detail mounts', () => 
       { projectIterations: envelope({ items: [], total: 0, attribution: 'absent' }) },
     )
     expect(markup).toContain('data-ms-screen="project-detail"')
-    // The milestone rollup is the default body; the two fixed list features
+    // see packages/dsh/tests/panel-navigation.spec.ts - // The milestone rollup is the default body; the two fixed list features
     // follow, Issues the default.
     expect(markup).toContain(uiEn.projectDetail.milestones.milestonesHeading)
     expect(markup).toContain(uiEn.projectDetail.features.issues)
     expect(markup).toContain(uiEn.projectDetail.features.iterations)
-    // No tab, route or label named roadmap survives.
+    // see packages/dsh/tests/panel-navigation.spec.ts - // No tab, route or label named roadmap survives.
     expect(markup).not.toContain('Roadmap')
     expect(markup).not.toContain('data-ms-screen="projects"')
     expect(markup.length).toBeGreaterThan(200)
   })
 
   it('the milestone write channel reaches the project screen (Greptile 1)', () => {
-    // The adapter chain dropped `writes` once, so every project page rendered its
+    // see packages/dsh/tests/panel-navigation.spec.ts - // The adapter chain dropped `writes` once, so every project page rendered its
     // read-only shape even when the seat supplied a channel. This proves the
     // props arrive: with a channel the controls are there, without one they are not.
     // The project-detail read answers the milestone grouping directly (the

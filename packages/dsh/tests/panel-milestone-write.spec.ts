@@ -1,15 +1,4 @@
-/**
- * The milestone write channel (the dashboard alignment change, Task 4,
- * contract C1): the four write invocations — add, update, assign/unassign and
- * remove — ride the panel's own typert service, call the engine verbs with the
- * observed store revision, and answer `{ ok, receipt }` or the engine's own
- * refusal verbatim. Removal's emptiness rule is the engine's
- * (`milestone.not-empty`), so the attempt is made and the refusal passed
- * through.
- *
- * No test pins this workspace's revision: every expected revision is read
- * through the panel's own `overview` view first (contract C2).
- */
+/** see packages/dsh/tests/panel-milestone-write.spec.ts - The milestone write channel (the dashboard alignment change, Task 4, contract C1): the four write invocations — add, update, assign/unassign and remove — ride the panel's own typert service, call the engine verbs with the observed store revision, and answer `{ ok, receipt }` or the engine's own refusal verbatim. Removal's emptiness rule is the engine's (`milestone.not-empty`), so the attempt is made and the refusal passed through. No test pins this workspace's revision: every expected revision is read through the panel's own `overview` view first (contract C2). */
 
 import { afterEach, describe, expect, it } from 'bun:test'
 import { rm } from 'node:fs/promises'
@@ -779,7 +768,7 @@ describe('milestoneAssign — the requested seat authorizes the write, not a ses
 
 
 describe('a refused write never reloads the read — the operator\'s draft survives', () => {
-  // invariant: a reload re-keys the OnceReader, the destination renders the loading arm and the
+  // see packages/dsh/tests/panel-milestone-write.spec.ts - // invariant: a reload re-keys the OnceReader, the destination renders the loading arm and the
   // mounted forms
   // (and the operator's typed draft) are destroyed. A refused write wrote
   // nothing, so there is nothing to reload: only an ACCEPTED write refreshes
@@ -1028,7 +1017,7 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
   })
 
   it('the create draft is keyed by the project the form was opened over — a project switch never re-seeds', async () => {
-    // invariant: the draft store is one per seat and survives navigation, so the key must carry
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // invariant: the draft store is one per seat and survives navigation, so the key must carry
     // the identity the form belongs to. Seed project A's create slot through the SAME key the
     // production form computes (the page's project identity plus the create target), switch
     // to project B, and B's form must read empty; back on A the typed text is still there.
@@ -1066,7 +1055,7 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
 
 
 describe('the assign walk — fail-closed at any page, restarted by a write', () => {
-  /** One page of the walk, as the engine's issue view answers it. */
+  /** see packages/dsh/tests/panel-milestone-write.spec.ts - One page of the walk, as the engine's issue view answers it. */
   const page = (offset: number, count: number, total: number) => ({
     data: {
       items: Array.from({ length: count }, (_, index) => ({
@@ -1087,10 +1076,10 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
     const first = assignableWalkStep(initialAssignableWalk(), { kind: 'ok', envelope: page(0, 200, 400) })
     expect(first).toMatchObject({ kind: 'walking' })
     expect(assignableWalkOffset(first)).toBe(200)
-    // Page 2 is refused: the store's own reason becomes the picker's failure arm.
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // Page 2 is refused: the store's own reason becomes the picker's failure arm.
     const failed = assignableWalkStep(first, { kind: 'unavailable', reason: '[store.not-active] the store is staged' })
     expect(failed).toEqual({ kind: 'failed', reason: '[store.not-active] the store is staged' })
-    // A late retry does not reopen a failed walk; the host's restart does.
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // A late retry does not reopen a failed walk; the host's restart does.
     expect(assignableWalkStep(failed, { kind: 'ok', envelope: page(200, 200, 400) })).toEqual(failed)
   })
 
@@ -1101,7 +1090,7 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
     })
     const done = assignableWalkStep(initialAssignableWalk(), { kind: 'ok', envelope: page(0, 12, 12) })
     expect(done).toMatchObject({ kind: 'complete' })
-    // A pending read is still a walk in progress.
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // A pending read is still a walk in progress.
     expect(assignableWalkStep(initialAssignableWalk(), { kind: 'loading' })).toEqual({ kind: 'walking', pages: [] })
   })
 
@@ -1112,7 +1101,7 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
     const endpoint = endpointOf(app)
     await seedProject(app.harnessDir)
     const revisions: number[] = []
-    // note: The reload restarts the walk at offset 0. Record each restart in an array rather than
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // note: The reload restarts the walk at offset 0. Record each restart in an array rather than
     // assigning a `let` from inside the closure, so the assertion reads a value the compiler can
     // widen (a closure-only assignment narrows a `let` to its initializer's literal type).
     const restartOffsets: number[] = []
@@ -1122,7 +1111,7 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
       cwd: app.root,
       projectId: '_default',
       expectedStoreRevision: await observedRevision(endpoint, 'ses_walk_restart', app.root),
-      // What the seat's reload does for the walk: restart from page 0.
+      // see packages/dsh/tests/panel-milestone-write.spec.ts - // What the seat's reload does for the walk: restart from page 0.
       reload: () => { restartOffsets.push(0); revisions.push(revisions.length + 1) },
       onState: () => {},
       ids: writeOperationIds<{ expectedStoreRevision: number }>(),
@@ -1130,10 +1119,10 @@ describe('the assign walk — fail-closed at any page, restarted by a write', ()
     })
     channel.create({ name: 'Walk restart', effortSessions: null, ordinal: 0 })
     for (let i = 0; i < 100 && channel.busy; i++) await new Promise((resolve) => setTimeout(resolve, 0))
-    // The accepted write reloaded once, and that reload restarts the walk at offset 0.
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // The accepted write reloaded once, and that reload restarts the walk at offset 0.
     expect(restartOffsets).toEqual([0])
     expect(revisions).toHaveLength(1)
-    // The restart is a NEW walk whose offset is zero again — the accumulated pages
+    // see packages/dsh/tests/panel-milestone-write.spec.ts - // The restart is a NEW walk whose offset is zero again — the accumulated pages
     // are not carried across the write's observation.
     expect(assignableWalkOffset(initialAssignableWalk())).toBe(0)
   })

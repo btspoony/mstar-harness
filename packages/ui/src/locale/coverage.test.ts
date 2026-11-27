@@ -103,7 +103,7 @@ function screens(copy: Copy) {
   };
   const projectDetail: ProjectDetailCopy = {
     ...copy.projectDetail,
-    // The panel heading is the milestone body's own name.
+    // see packages/ui/src/locale/coverage.test.ts - // The panel heading is the milestone body's own name.
     absence: {
       empty: { ...copy.state.empty, heading: copy.projectDetail.milestones.milestonesHeading },
       unavailable: { ...copy.state.unavailable, heading: copy.projectDetail.milestones.milestonesHeading },

@@ -324,7 +324,7 @@ describe("catalog command family", () => {
     const missing = await project["project.show"]!.execute({ project: "not-registered", harness }, invocation(cwd));
     expect(missing.status).toBe("ok");
     if (missing.status === "ok") {
-      // note: No fabricated record: a project with no binding answers its own absent arm.
+      // see packages/commands/test/catalog-roadmap.test.ts - // note: No fabricated record: a project with no binding answers its own absent arm.
       expect(missing.data).toMatchObject({ kind: "absent", code: "linear.binding-absent" });
       expect(observation(missing.data).scope).toEqual({ kind: "project", key: "not-registered" });
     }

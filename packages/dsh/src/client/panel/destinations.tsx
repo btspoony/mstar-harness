@@ -269,7 +269,7 @@ export type DetailProps = {
   readonly projectIterations?: MstarDashboardViewState
   /** A project detail's scoped Issues read (`project` enforced on the request). */
   readonly projectIssues?: MstarDashboardViewState
-  /** The projects list read — the project page's identity comes from the same rows the list renders. */
+  /** see packages/dsh/src/client/panel/destinations.tsx - The projects list read — the project page's identity comes from the same rows the list renders. */
   readonly projects?: MstarDashboardViewState
   /**
    * The milestone write channel, alive only while a project page is open. This
@@ -279,7 +279,7 @@ export type DetailProps = {
   readonly writes?: MilestoneWriteSurface
   /** The project's open unassigned issues, as the assign picker's options. */
   readonly assignableIssues?: AssignableIssuesRead
-  /** Re-issue the picker's read after a failure. */
+  /** see packages/dsh/src/client/panel/destinations.tsx - Re-issue the picker's read after a failure. */
   readonly onRetryAssignable?: () => void
   /** note: the seat-owned draft store, passed to the project page's forms. */
   readonly drafts?: MilestoneDraftStore
@@ -427,7 +427,7 @@ export function ProjectDetailDestination(props: {
   onBack: () => void
   iterations?: MstarDashboardViewState
   issues?: MstarDashboardViewState
-  /** The projects list read — the head's identity comes from the same rows the list renders. */
+  /** see packages/dsh/src/client/panel/destinations.tsx - The projects list read — the head's identity comes from the same rows the list renders. */
   projects?: MstarDashboardViewState
   /**
    * The milestone write channel and the assign picker's options. Carried here
@@ -436,18 +436,18 @@ export function ProjectDetailDestination(props: {
    */
   writes?: MilestoneWriteSurface
   assignableIssues?: AssignableIssuesRead
-  /** Re-issue the picker's read after a failure. */
+  /** see packages/dsh/src/client/panel/destinations.tsx - Re-issue the picker's read after a failure. */
   onRetryAssignable?: () => void
   /** note: the seat-owned milestone draft store (the forms' drafts survive a read refresh). */
   drafts?: MilestoneDraftStore
-  /** Test seam: the tab the page opens on. Production always starts at the default. */
+  /** see packages/dsh/src/client/panel/destinations.tsx - Test seam: the tab the page opens on. Production always starts at the default. */
   initialFeature?: ProjectFeature
 }): React.ReactElement {
   const copy = copyFor(props.locale)
   const [feature, setFeature] = React.useState<ProjectFeature>(props.initialFeature ?? DEFAULT_PROJECT_FEATURE)
   if (props.state.kind !== 'ok') return <ReadState state={props.state} copy={copy} />
   const data = props.state.envelope.data
-  // The shared arm owns the decision (a degraded member keeps its own state and
+  // see packages/dsh/src/client/panel/destinations.tsx - // The shared arm owns the decision (a degraded member keeps its own state and
   // reason), so both hosts answer a project the same way. The read answers the
   // milestone grouping directly, so it is wrapped as the member it used to ride.
   const milestones =

@@ -1515,7 +1515,7 @@ function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: A real v6 lane: every immutable migration before v7, with its ledger row. */
+/** see packages/engine/src/collaboration-store.test.ts - A real v6 lane: every immutable migration before v7, with its ledger row. */
 function writeV6Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
   writeV1Lane(location);
   const db = new DatabaseSync(location.dbPath);
@@ -2045,7 +2045,7 @@ describe("collaboration remote schema ladder", () => {
           "values ('p-one', '# Roadmap', 'hash', 2, '2026-11-22T00:00:00.000Z');" +
           "insert into catalog_links(from_kind, from_id, relation, to_kind, to_id) " +
           "values ('project', 'p-one', 'documents', 'document', 'doc-r');" +
-          // note: A populated milestone, and an issue that references it, so the v7 rebuild's FK staging
+          // see packages/engine/src/collaboration-store.test.ts - // note: A populated milestone, and an issue that references it, so the v7 rebuild's FK staging
           // and its deferred grandchild edge (issues.milestone_id -> project_milestones) are exercised,
           // not merely the empty-table path.
           "insert into project_milestones(milestone_id, project_id, project_kind, name, effort_sessions, status, " +
@@ -2064,7 +2064,7 @@ describe("collaboration remote schema ladder", () => {
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 6, toVersion: LANE_CURRENT_VERSION });
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
-    // invariant: No table remains and no row was deleted: the roadmap row keeps its id, revision and
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: No table remains and no row was deleted: the roadmap row keeps its id, revision and
     // registration and reads back as `other`, with its link intact.
     expect(tableNames(location.dbPath)).not.toContain("project_roadmaps");
     const db = new DatabaseSync(location.dbPath);
@@ -2073,7 +2073,7 @@ describe("collaboration remote schema ladder", () => {
         db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get(),
       ).toEqual({ document_kind: "other", revision: 7, registered_at: "2026-09-02T00:00:00.000Z" });
       expect(db.prepare("select count(*) as n from catalog_links").get()).toEqual({ n: 1 });
-      // invariant: The populated milestone and the issue referencing it cross the rebuild unchanged.
+      // see packages/engine/src/collaboration-store.test.ts - // invariant: The populated milestone and the issue referencing it cross the rebuild unchanged.
       expect(
         db.prepare("select name, effort_sessions, status, revision from project_milestones where milestone_id = 'm-one'").get(),
       ).toEqual({ name: "Milestone One", effort_sessions: 3, status: "active", revision: 2 });
@@ -2082,7 +2082,7 @@ describe("collaboration remote schema ladder", () => {
         issue_ref: "mstar:issue:00000000-0000-4000-8000-000000000r01",
       });
       expect(db.prepare("pragma foreign_key_check").all()).toEqual([]);
-      // invariant: The CHECK that admitted the value is gone, so the retired value is refused.
+      // see packages/engine/src/collaboration-store.test.ts - // invariant: The CHECK that admitted the value is gone, so the retired value is refused.
       expect(() =>
         db.prepare(
           "insert into catalog_entities(kind, id, title, root_kind, relative_path, document_kind, registered_at, updated_at) " +
@@ -2097,7 +2097,7 @@ describe("collaboration remote schema ladder", () => {
   });
 
   test("a copy of the lane taken inside its own upgrade transaction recovers as v6 and replays to v7", async () => {
-    // note: This case owns a FRESH home and its own synthetic origin, so the lane path it opens is
+    // see packages/engine/src/collaboration-store.test.ts - // note: This case owns a FRESH home and its own synthetic origin, so the lane path it opens is
     // shared with no other case: the snapshot's identity, the replay's target and every probe below
     // name that one path. A lane shared with the rest of the shard would let a concurrent writer
     // hold the copy's target past the bounded wait, which is exactly the flake this isolates.
@@ -2119,20 +2119,20 @@ describe("collaboration remote schema ladder", () => {
     activate(location.dbPath);
     const v6Tables = tableNames(location.dbPath);
     const v6Ledger = ledgerRows(location.dbPath);
-    // note: The identity the replay must carry: the interrupted lane keeps its metadata row, so the
+    // see packages/engine/src/collaboration-store.test.ts - // note: The identity the replay must carry: the interrupted lane keeps its metadata row, so the
     // copy's own `store_id` / `authority_epoch` is what the fresh binding below is proved against.
     const v6Meta = metaRecord(location.dbPath);
 
-    // note: The capture goes through the PRODUCTION upgrade path, not a hand-rolled transaction: the
+    // see packages/engine/src/collaboration-store.test.ts - // note: The capture goes through the PRODUCTION upgrade path, not a hand-rolled transaction: the
     // seam runs inside the ladder's own `BEGIN IMMEDIATE`, after the v7 rebuild and before its ledger
     // row. Everything the recovery proof needs is copied HERE, so the proof never depends on this
     // process's rollback.
     const snapshotDir = join(ROOT, "roadmap-crash-snapshot");
-    // note: Start from an empty directory: a sidecar left by an earlier run of this case would be
+    // see packages/engine/src/collaboration-store.test.ts - // note: Start from an empty directory: a sidecar left by an earlier run of this case would be
     // opened beside the fresh copy and would answer for bytes this run never captured.
     rmSync(snapshotDir, { recursive: true, force: true });
     mkdirSync(snapshotDir, { recursive: true });
-    // note: The copy is taken once, into a path of its own; the replay below reads that copy and never
+    // see packages/engine/src/collaboration-store.test.ts - // note: The copy is taken once, into a path of its own; the replay below reads that copy and never
     // the live lane again.
     const snapshotPath = join(snapshotDir, "collaboration.db");
     const captured: string[] = [];
@@ -2140,7 +2140,7 @@ describe("collaboration remote schema ladder", () => {
     let journalHasDroppedTable = false;
     let outsideTables: string[] = [];
     setCollaborationRoadmapRemovalGapForTest((inFlightDb) => {
-      // note: Evict the rebuild's dirty pages to the file so the journal beside them is real work,
+      // see packages/engine/src/collaboration-store.test.ts - // note: Evict the rebuild's dirty pages to the file so the journal beside them is real work,
       // not an empty allocation, and the database file itself is mid-transaction.
       inFlightDb.exec("pragma cache_size=1");
       inFlightDb.exec("create table crash_spill(x text)");
@@ -2177,10 +2177,10 @@ describe("collaboration remote schema ladder", () => {
     expect(captured).toContain(snapshotPath);
     expect(journalBytes).toBeGreaterThan(0);
     expect(journalHasDroppedTable).toBe(true);
-    // invariant: Uncommitted work was never visible outside the transaction.
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: Uncommitted work was never visible outside the transaction.
     expect(outsideTables).toEqual(v6Tables);
 
-    // note: Recover from the COPY, not from the interrupted lane: a fresh connection opened on the
+    // see packages/engine/src/collaboration-store.test.ts - // note: Recover from the COPY, not from the interrupted lane: a fresh connection opened on the
     // captured pair must roll the hot journal back and answer the v6 predecessor, with no half-applied
     // v7 (no rebuilt catalog_entities, no dropped roadmap table).
     const recovered = new DatabaseSync(snapshotPath);
@@ -2196,7 +2196,7 @@ describe("collaboration remote schema ladder", () => {
         document_kind: "roadmap",
         revision: 7,
       });
-      // note: The journal FILE may remain (SQLite truncates rather than unlinks on some paths); what
+      // see packages/engine/src/collaboration-store.test.ts - // note: The journal FILE may remain (SQLite truncates rather than unlinks on some paths); what
       // proves recovery is the answered v6 state above - the pre-image was applied, not the v7 DDL.
     } finally {
       recovered.close();
@@ -2248,7 +2248,7 @@ describe("collaboration remote schema ladder", () => {
     const repo = makeRepo("https://github.com/v4-upgrade/roadmap-crash-ledger.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
-    // note: The crash window: the v7 DDL committed, its ledger row did not.
+    // see packages/engine/src/collaboration-store.test.ts - // note: The crash window: the v7 DDL committed, its ledger row did not.
     writeV6Lane(location, (db) => db.exec(COLLABORATION_MIGRATIONS[6]!.sql));
     activate(location.dbPath);
     const before = ledgerRows(location.dbPath);
@@ -2445,7 +2445,7 @@ function positiveCheck(overrides: Partial<ScopeCheck> = {}): ScopeCheck {
   };
 }
 
-/** note: A complete fixture scope: project binding, milestones, portable catalog and history. */
+/** see packages/engine/src/collaboration-store.test.ts - A complete fixture scope: project binding, milestones, portable catalog and history. */
 function completeSnapshot(check: ScopeCheck = positiveCheck()): RemoteSnapshot {
   const at = "2026-11-20T00:00:00.000Z";
   return {
@@ -5621,7 +5621,7 @@ describe("remote outbox lifecycle", () => {
         },
       });
 
-    // invariant: ONE refusal answers every project-member defect together — a milestone field and the
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: ONE refusal answers every project-member defect together — a milestone field and the
     // catalog-link relation — and the row that FAILED to parse never stands in for an identity, so it
     // cannot fabricate the duplicate its own diagnostic would hide.
     await expect(
@@ -5694,7 +5694,7 @@ describe("remote outbox lifecycle", () => {
   test("a project-replace freezes from a pre-fix cache with the retired catalog kind normalized to other", async () => {
     const cache = await outboxCache("outbox-retired-catalog-kind");
     const project = SELECTED_PROJECT.localProjectId;
-    // note: The v6-era cache holds this evidence already, so the fixture writes the stored snapshot
+    // see packages/engine/src/collaboration-store.test.ts - // note: The v6-era cache holds this evidence already, so the fixture writes the stored snapshot
     // directly: the ingest that once admitted the value now refuses it.
     const stored = completeSnapshot() as unknown as { project: { catalogEntities: Array<Record<string, unknown>> } };
     stored.project.catalogEntities.push({
@@ -5716,7 +5716,7 @@ describe("remote outbox lifecycle", () => {
       lane.close();
     }
 
-    // invariant: The write path parses the same evidence as the read path, so its base is the normalized
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The write path parses the same evidence as the read path, so its base is the normalized
     // one: the process no longer refuses its own project-replace over a kind it has retired.
     const operationId = "00000000-0000-4000-8000-000000000ad1";
     const frozen = await addMilestone(
@@ -5727,11 +5727,11 @@ describe("remote outbox lifecycle", () => {
       () => null,
       (error: unknown) => error as { code?: string; message?: string },
     );
-    // note: A remote write enqueues an intent, so the verb refuses with the pending state; what matters
+    // see packages/engine/src/collaboration-store.test.ts - // note: A remote write enqueues an intent, so the verb refuses with the pending state; what matters
     // here is that it got far enough to freeze a base, i.e. the retired kind did not abort it.
     expect(frozen).toMatchObject({ code: "remote.effect-pending" });
 
-    // invariant: The frozen project document carries `other`, never the retired value, and the row keeps
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The frozen project document carries `other`, never the retired value, and the row keeps
     // its identity, revision and lifecycle. The frozen request is read from the outbox row itself: it is
     // the exact bytes the host will send.
     const outbox = new DatabaseSync(cache.dbPath);
@@ -5758,7 +5758,7 @@ describe("remote outbox lifecycle", () => {
   });
 
   test("a journal document carrying project.roadmap is refused at that field path, and one without it is accepted", async () => {
-    // invariant: The frozen project document is a `version: 1` shape revised in place. The observe
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The frozen project document is a `version: 1` shape revised in place. The observe
     // submission and the journal event are separate boundaries, so this exercises the event: the
     // strict project document refuses the retired member by its own path, and the runtime parser
     // that freezes an intent refuses the same document for the same reason.
@@ -5783,7 +5783,7 @@ describe("remote outbox lifecycle", () => {
       change: { kind: "project-replace" as const, project },
     });
     const subject = completeProjectSubject();
-    // invariant: Without the member the document is the accepted shape.
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: Without the member the document is the accepted shape.
     expect(remoteReceiptDocumentSchema.safeParse({
       ...envelope(),
       outcome: { kind: "confirmed", identity: { ...providerScope(), issueId: JOURNAL_ANCHOR }, recordId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeea", event: event(subject) },
@@ -5800,7 +5800,7 @@ describe("remote outbox lifecycle", () => {
     const descriptor = remoteReceiptDocumentSchema.safeParse(withRoadmap);
     expect(descriptor.success).toBe(false);
     expect(JSON.stringify(descriptor.error?.issues)).toContain("roadmap");
-    // invariant: The runtime freeze refuses the same document at the same path.
+    // see packages/engine/src/collaboration-store.test.ts - // invariant: The runtime freeze refuses the same document at the same path.
     await expect(recordRemoteReceipt(cache.context, withRoadmap as never)).rejects.toMatchObject({
       code: "remote.input-invalid",
       message: expect.stringContaining("change.project.roadmap"),
@@ -8194,7 +8194,7 @@ describe("remote confirmed business results", () => {
     // note: A confirmed effect invalidates the read base, so the next write re-observes first.
     await reobserve(cache, 2);
 
-    // note: One milestone update, confirmed, then replayed by its own verb.
+    // see packages/engine/src/collaboration-store.test.ts - // note: One milestone update, confirmed, then replayed by its own verb.
     const renameId = "00000000-0000-4000-8000-000000000a12";
     const renameMutation = { operationId: renameId, expectedStoreRevision: observationRevision(cache.dbPath) };
     await expect(
@@ -10155,7 +10155,7 @@ function downgradeToV3(location: CollaborationLocation): void {
   }
 }
 
-/** note: The roadmap table a pre-v7 lane carried: a rewound lane must hold it for the predecessor proof. */
+/** see packages/engine/src/collaboration-store.test.ts - The roadmap table a pre-v7 lane carried: a rewound lane must hold it for the predecessor proof. */
 const ROADMAP_TABLE_DDL = `create table project_roadmaps(
   project_id text primary key,
   project_kind text not null default 'project' check (project_kind = 'project'),
