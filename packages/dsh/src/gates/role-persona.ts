@@ -135,6 +135,7 @@ import {
   type LiveConfigRef,
 } from './_shared.ts'
 import { ROLE_ID_PATTERN, subagentRoleIds } from './agent-personas.ts'
+import { fallbacksMounted } from './fallbacks-probe.ts'
 import { legacyAssignmentShape } from '@mstar-harness/engine'
 
 /** Logger label for the role-persona channel (dsh logger naming: `<scope>/<subject>`). */
@@ -1291,6 +1292,50 @@ function takeResolvedCarrier(): AssignmentSourceResult | undefined {
 }
 
 /**
+ * The `dsh-llm-fallbacks` dispatch-role bridge. That plugin resolves a
+ * child's role from a bold/plain `**Execute as**: <id>` line in the prompt's
+ * leading header region — never from front matter — and its header region
+ * ends at the first `---` line. A front-matter document therefore resolves no
+ * role there, so the role's fallback chain, persona and notice row are
+ * skipped. When the fallbacks capability is mounted, prepend ONE header line
+ * its reader sees BEFORE the opening fence; the document below is untouched,
+ * so this channel and the dispatch gate keep reading the front matter.
+ *
+ * shortcut: the fallbacks reader understands only the body-label header,
+ * upgrade: remove this bridge once dsh-llm-fallbacks resolves `execute_as`.
+ *
+ * @param roleId - the canonical role id (already normalized).
+ */
+function fallbacksRoleBridge(roleId: string): PromptBlockView {
+  return { type: 'text', text: `**Execute as**: ${roleId}\n` }
+}
+
+function bridgedRoleIdOf(prompt: string): string | undefined {
+  const value = parseAssignmentFields(prompt).executeAs
+  return value === undefined ? undefined : normalizeRoleFieldValue(value)
+}
+
+/**
+ * The role id the fallbacks bridge may deliver for one gate verdict: a role
+ * this channel itself NORMALIZED (`repair`) always bridges — the prompt was
+ * already rewritten, so leaving the fallbacks reader blind would only split
+ * the two role consumers — while a `pass`/`canonical` declaration bridges
+ * only on a start the gate POLICED (`canonicalBridge`), so `roleGate: off`
+ * and the harness/provider exemptions keep the caller prompt byte-identical.
+ * see packages/dsh/README.md (Fallbacks dispatch-role bridge)
+ *
+ * @param decision - the gate verdict for this start.
+ * @param prompt - the resolved prompt text.
+ * @param canonicalBridge - the gate policed this start (harness, known
+ *   provider, mode not `off`).
+ */
+function bridgeableRoleId(decision: RoleGateDecision, prompt: string, canonicalBridge: boolean): string | undefined {
+  if (decision.kind === 'repair') return decision.roleId
+  if (decision.kind === 'pass' && decision.reason === 'canonical' && canonicalBridge) return bridgedRoleIdOf(prompt)
+  return undefined
+}
+
+/**
  * Wrap one `ctx.subagents` read value: non-objects and non-runtime shapes
  * (the service is absent) pass through untouched. The wrapper is a
  * prototype-delegating object whose OWN `startActivation` merges the role's
@@ -1329,6 +1374,8 @@ function wrapSubagentsService(
     let gated = spec
     let carrier: SubagentActivationSpecView = spec
     let decision: RoleGateDecision
+    let bridgeContext = false
+    let canonicalBridge = false
     try {
       // The child's EFFECTIVE start directory — an omitted/relative cwd
       // inherits the parent's CURRENT directory (the working-directory
@@ -1351,15 +1398,27 @@ function wrapSubagentsService(
       carrier = assignmentSource.ok && assignmentSource.text !== carrierText
         ? foldPromptText(spec, assignmentSource.text)
         : spec
+      const mode = readRoleGate()
+      const harnessProject = isHarnessProject(startDirectory)
+      const providerKnown = service.getProvider(spec.provider) !== undefined
       decision = evaluateRoleGate({
         request: carrier,
-        mode: readRoleGate(),
+        mode,
         cwd: startDirectory,
-        harnessProject: isHarnessProject(startDirectory),
-        providerKnown: service.getProvider(spec.provider) !== undefined,
+        harnessProject,
+        providerKnown,
         declaredRoleIds,
         assignmentSource,
       })
+      // Only a start the gate actually POLICED may receive the fallbacks
+      // bridge line for a canonical declaration. A canonical pass
+      // short-circuits ahead of the harness and provider exemptions, and
+      // `off` never refuses — so the verdict alone cannot tell an exempted
+      // start from a policed one. A repaired role always bridges: the gate
+      // already rewrote that prompt, under `off` too.
+      // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
+      bridgeContext = harnessProject && providerKnown
+      canonicalBridge = bridgeContext && mode !== 'off'
     } catch {
       // Contained fail-open: an unreadable request/provider is a pathological
       // caller object, and the merge below reads the same fields under its
@@ -1395,6 +1454,15 @@ function wrapSubagentsService(
       // Contained like the gate's degrade path: the merge aborts, the
       // ORIGINAL spec reaches the service — the start is never affected.
       log('warn', `role preset merge degraded to pass-through (subagent start unaffected): ${errorMessage(error)}`)
+    }
+    // The optional fallbacks plugin reads its role from the body-label header,
+    // not from front matter — bridge the declaration it cannot see; the
+    // verdict decides which declarations may bridge (see
+    // {@link bridgeableRoleId}).
+    // see packages/dsh/README.md (Fallbacks dispatch-role bridge)
+    if (fallbacksMounted(ctx) && bridgeContext) {
+      const roleId = bridgeableRoleId(decision, promptText(merged), canonicalBridge)
+      if (roleId !== undefined) merged = { ...merged, prompt: [fallbacksRoleBridge(roleId), ...merged.prompt] }
     }
     return service.startActivation(merged)
   }
