@@ -1609,29 +1609,30 @@ describe('the project milestone rollup feeds the gate from the store', () => {
     }
   }
 
-  async function seedProjectWithMilestones(harnessDir: string, milestones: readonly string[]): Promise<void> {
+  async function seedProjectWithMilestones(harnessDir: string, projectId: string, title: string, milestones: readonly string[]): Promise<void> {
     await registerCatalogEntity({ harnessDir }, {
       kind: 'project',
-      id: '_default',
-      title: 'Default project',
+      id: projectId,
+      title,
       rootKind: 'projects',
-      relativePath: '_default',
+      relativePath: projectId,
       lifecycle: 'active',
-    }, { operationId: 'seed-gate-project', actor: 'project-manager' })
+    }, { operationId: `seed-gate-project-${projectId}`, actor: 'project-manager' })
     for (const [index, name] of milestones.entries()) {
-      await addMilestone({ harnessDir }, { projectId: '_default', name, effortSessions: null, ordinal: index }, {
-        operationId: `seed-gate-milestone-${index}`,
+      await addMilestone({ harnessDir }, { projectId, name, effortSessions: null, ordinal: index }, {
+        operationId: `seed-gate-milestone-${projectId}-${index}`,
         expectedStoreRevision: await observedRevision(harnessDir),
       })
     }
   }
+
 
   it('a project with stored milestones answers a present source carrying their names', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-'))
     const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedStore(harnessDir)
-    await seedProjectWithMilestones(harnessDir, ['P1 foundation', 'Release the panel'])
+    await seedProjectWithMilestones(harnessDir, '_default', 'Default project', ['P1 foundation', 'Release the panel'])
     const app = booted = await bootApp({ root, harnessDir })
 
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
@@ -1647,11 +1648,8 @@ describe('the project milestone rollup feeds the gate from the store', () => {
     const harnessDir = join(root, '.mstar')
     await mkdir(harnessDir, { recursive: true })
     await seedStore(harnessDir)
-    await seedProjectWithMilestones(harnessDir, ['P1 foundation'])
-    // see packages/dsh/tests/catalog.spec.ts - // A missing milestone table is exactly the refusal class the gate must
-    // disclose: the catalog (projects) still reads, but the milestone query
-    // cannot answer — so it is unavailable, never the same empty success as a
-    // project that genuinely holds no milestones.
+    await seedProjectWithMilestones(harnessDir, '_default', 'Default project', ['P1 foundation'])
+    // see packages/dsh/tests/catalog.spec.ts - // A missing milestone table is exactly the refusal class the gate must disclose: the one milestone-name read cannot answer, so it is unavailable, never the same empty success as a project that genuinely holds no milestones.
     const lane = new DatabaseSync(collaborationDbPathAt(harnessDir))
     try {
       lane.exec('drop table project_milestones')
@@ -1665,5 +1663,20 @@ describe('the project milestone rollup feeds the gate from the store', () => {
     expect(state.project.milestones).toEqual([])
     expect(state.project.milestoneSource.kind).toBe('unavailable')
     expect(state.project.milestoneSource.diagnostic).not.toBeNull()
+  })
+
+  it('two projects answer their milestone names in project-then-ordinal order from one read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-two-'))
+    const harnessDir = join(root, '.mstar')
+    await mkdir(harnessDir, { recursive: true })
+    await seedStore(harnessDir)
+    await seedProjectWithMilestones(harnessDir, '_default', 'Default project', ['P1 foundation', 'Release the panel'])
+    await seedProjectWithMilestones(harnessDir, 'second', 'A second project', ['Earlier'])
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    if (state === null) throw new Error('expected a state section')
+    expect(state.project.milestones).toEqual(['Earlier', 'P1 foundation', 'Release the panel'])
+    expect(state.project.milestoneSource).toEqual({ kind: 'present', diagnostic: null })
   })
 })

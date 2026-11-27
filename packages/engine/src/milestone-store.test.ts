@@ -13,10 +13,13 @@ import {
   createRemoteScope,
   positiveCheck,
   REMOTE_IDS,
+  SECOND_IDS,
+  secondCheck,
+  secondSnapshot,
   submission,
 } from "./remote-scope.fixture.js";
 import { addMilestone, MilestoneError, readMilestonesOn, updateMilestone } from "./milestone-store.js";
-import { queryMilestones } from "./milestone-store.js";
+import { queryMilestoneNames, queryMilestones } from "./milestone-store.js";
 import { withStoreRead } from "./store-read.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
 
@@ -210,6 +213,64 @@ describe("milestone store", () => {
     mkdirSync(missing.harnessDir!,{recursive:true});
     await expect(updateMilestone(missing,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-initialized"});
   });
+  test("the milestone-name read returns every project's names in project-then-ordinal order", async () => {
+    const ordinals: Array<[string, string, number]> = [
+      [projectId, "Test first", 100],
+      [projectId, "Test second", 101],
+      [otherProjectId, "Other first", 100],
+      [otherProjectId, "Other second", 101],
+    ];
+    let current = revision();
+    for (const [subject, name, ordinal] of ordinals) {
+      const added = await addMilestone(context, { projectId: subject, name, effortSessions: null, ordinal }, { operationId: crypto.randomUUID(), expectedStoreRevision: current });
+      current = added.storeRevision;
+    }
+    const envelope = await withStoreRead(context, queryMilestoneNames());
+    const rows = db
+      .prepare("select project_id, name, ordinal, milestone_id from project_milestones where project_id in (?, ?) order by milestone_id")
+      .all(projectId, otherProjectId) as Array<{ project_id: string; name: string; ordinal: number; milestone_id: string }>;
+    // see packages/engine/src/milestone-store.test.ts - The shared fixture already carries milestones, so the expectation derives them from the same ordering contract: project title first, then ordinal, then milestone_id.
+    const expected = [
+      ...rows.filter((row) => row.project_id === otherProjectId).sort((a, b) => a.ordinal - b.ordinal || (a.milestone_id < b.milestone_id ? -1 : 1)),
+      ...rows.filter((row) => row.project_id === projectId).sort((a, b) => a.ordinal - b.ordinal || (a.milestone_id < b.milestone_id ? -1 : 1)),
+    ].map((row) => ({ projectId: row.project_id, name: row.name }));
+    expect(envelope.data.milestones).toEqual(expected);
+    const positions = envelope.data.milestones.filter((entry) => entry.name.startsWith("Other ") || entry.name.startsWith("Test "));
+    expect(positions.map(({ name, projectId: subject }) => [subject, name])).toEqual([
+      [otherProjectId, "Other first"],
+      [otherProjectId, "Other second"],
+      [projectId, "Test first"],
+      [projectId, "Test second"],
+    ]);
+    expect(envelope.collaboration?.scope).toEqual({ kind: "repository", key: "milestone-names:repository" });
+  });
+  test("a staged lane refuses the milestone-name read through the existing envelope", async () => {
+    const staged = checkout("milestone-store-names-staged");
+    mkdirSync(staged.harnessDir!, { recursive: true });
+    await initializeCollaborationStore(resolveCollaborationLocation(staged));
+    await expect(withStoreRead(staged, queryMilestoneNames())).rejects.toMatchObject({ code: "collaboration.not-active" });
+  });
+  test("an issue-only project without a catalog project row refuses the milestone-name read, milestone or not", async () => {
+    const absent = "names-absent-project";
+    const insertIssue = (id: string) =>
+      db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,milestone_id,disposition,issue_ref) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,null,'open',?)").run(id, absent, id, mintIssueRef());
+    insertIssue("I-NAMES-ABSENT-1");
+    try {
+      // see packages/engine/src/store-read.ts - issue-only project, no milestones: the per-project read this names read replaces refused `milestone.project-not-found`, so the joined read refuses instead of answering with an empty list.
+      await expect(withStoreRead(context, queryMilestoneNames())).rejects.toMatchObject({ code: "milestone.project-not-found", message: `[milestone.project-not-found] Project ${absent} does not exist.` });
+      // note: enforcement only lives on store-opened connections, so this legacy-shape row is staged with FKs off — it is the residue an older store can already hold.
+      db.exec("pragma foreign_keys=OFF");
+      db.prepare("insert into project_milestones(milestone_id,project_id,name,ordinal,created_at,updated_at) values('M-NAMES-ABSENT',?,'Absent milestone',0,'now','now')").run(absent);
+      db.exec("pragma foreign_keys=ON");
+      // see packages/engine/src/store-read.ts - issue-only project carrying a milestone: the same refusal, never a silent omission of the row.
+      await expect(withStoreRead(context, queryMilestoneNames())).rejects.toMatchObject({ code: "milestone.project-not-found", message: `[milestone.project-not-found] Project ${absent} does not exist.` });
+    } finally {
+      db.prepare("delete from project_milestones where milestone_id='M-NAMES-ABSENT'").run();
+      db.prepare("delete from issues where id='I-NAMES-ABSENT-1'").run();
+    }
+    await expect(withStoreRead(context, queryMilestoneNames())).resolves.toBeDefined();
+  });
+
 });
 
 // ---------------------------------------------------------------------------
@@ -307,4 +368,40 @@ describe("remote milestones", () => {
       withStoreRead(context, queryMilestones(REMOTE_IDS.projectId, "milestone-absent")),
     ).rejects.toMatchObject({ code: "milestone.not-found" });
   });
+  test("a remote checkout answers every selected project's milestone names in one read", async () => {
+    const fixture = createRemoteScope(root, "remote-milestone-names");
+    const commit = fixture.publish({
+      projects: [
+        {
+          localProjectId: REMOTE_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: REMOTE_IDS.providerProjectId,
+          journalIssueId: REMOTE_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+        {
+          localProjectId: SECOND_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: SECOND_IDS.providerProjectId,
+          journalIssueId: SECOND_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+      ],
+    });
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit, 3, [secondCheck()]));
+    const checkA = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, checkA, completeSnapshot(checkA), 0));
+    const checkB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, checkB, secondSnapshot(checkB), 0));
+
+    const envelope = await withStoreRead(context, queryMilestoneNames());
+    expect(envelope.data.milestones).toEqual([{ projectId: REMOTE_IDS.projectId, name: "First delivery" }]);
+    expect(envelope.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+  });
+
 });
