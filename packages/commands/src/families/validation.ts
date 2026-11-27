@@ -244,13 +244,15 @@ function launchDirectoryPaths(command: (typeof verbs)[number], input: Input, con
 const codeExtensions: Record<string, true> = Object.fromEntries(CODE_FILE_EXTENSIONS.map((ext) => [ext, true]));
 const provenanceExtensions: Record<string, true> = { ".md": true, ".ts": true };
 /** why: `iteration` names ONE document — the iteration's own compass — so its
- * selector is that filename, and it governs a named file as much as a walk. */
+ * selector is that filename, and it governs a named file as much as a walk.
+ * see skills/mstar-iteration/references/iteration-artifact-boundaries.md */
 const isCompass = (file: string): boolean => path.basename(file) === "delivery-compass.md";
 /** why: a forced type selects its files — an extension set for the
  * dialect-shaped types, and the compass filename for `iteration`, whose
  * subject is one known document rather than every Markdown file a walk sees.
  * `--type code` must collect only code: a SKILL.md the same walk sees carries
- * fixtures and prose the code rules do not describe. */
+ * fixtures and prose the code rules do not describe.
+ * see skills/mstar-iteration/references/iteration-artifact-boundaries.md */
 const typeAccept: Partial<Record<LintType, (file: string) => boolean>> = {
   code: (file) => codeExtensions[path.extname(file).toLowerCase()] === true,
   provenance: (file) => provenanceExtensions[path.extname(file).toLowerCase()] === true,
@@ -881,6 +883,7 @@ async function execute(id: string, input: Input, context: InvocationContext): Pr
         // why: `iteration` names ONE document, so a file the caller names is
         // no more a compass than one a walk sees — `--type iteration` on a
         // note must check nothing, never run the compass rule over prose.
+        // see skills/mstar-iteration/references/iteration-artifact-boundaries.md
         const selected = !isDir && forced === "iteration" && !isCompass(abs) ? [] : undefined;
         const targets = selected ?? (!isDir ? [abs] : accept === undefined ? collectTargets(abs) : collectTargets(abs, accept));
         // why: `--diff-base` is the ratchet - a finding is reported only when

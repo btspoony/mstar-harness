@@ -324,7 +324,7 @@ describe("plan command family", () => {
  */
 async function residualFixture(
   name: string,
-  options: { collaboration?: "active" | "absent" } = {},
+  options: { collaboration?: "active" | "absent"; earlierPlans?: readonly string[] } = {},
 ): Promise<{ root: string; harness: string; workflow: string; plan: string; ctx: InvocationContext }> {
   const root = mkdtempSync(path.join(os.tmpdir(), `plan-${name}-`));
   roots.push(root);
@@ -365,7 +365,11 @@ async function residualFixture(
       started_at: "2026-09-26T00:00:00Z",
       updated_at: "2026-09-26T00:00:00Z",
       branch: { base: "main" },
-      plans: [{ id: plan, plan_id: plan, title: "Plan A", file: `plans/${plan}.md`, status: "Todo", metadata: { project_id: "_default" } }],
+      // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+      plans: [
+        ...(options.earlierPlans ?? []).map((id) => ({ id, plan_id: id, title: id, file: `plans/${id}.md`, status: "Done", metadata: { project_id: "_default" } })),
+        { id: plan, plan_id: plan, title: "Plan A", file: `plans/${plan}.md`, status: "Todo", metadata: { project_id: "_default" } },
+      ],
     } as never,
     expected: initialized.token,
     operationId: `create-${name}`,
@@ -478,10 +482,11 @@ describe("plan residual-add / residual-close composite commands", () => {
   });
 
   test("a coordination.layer-unpublished refusal maps to the compass-row repair, not to re-submitted evidence", async () => {
-    const data = await residualFixture("layer-unpublished-recovery");
+    const data = await residualFixture("layer-unpublished-recovery", { earlierPlans: ["p-earlier"] });
     // Register the compass pointer and write a compass whose `## Plans` marks an
     // EARLIER plan Done with no `## PR stack` row: the completion refuses before
     // any evidence or Git proof, so this exercises the transport mapping only.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     const compassRef = "iterations/iter-layer/delivery-compass.md";
     const compassPath = path.join(data.harness, compassRef);
     mkdirSync(path.dirname(compassPath), { recursive: true });
@@ -519,7 +524,12 @@ describe("plan residual-add / residual-close composite commands", () => {
     expect(recovery).toContain("## PR stack");
     expect(recovery).toContain("retry mstar plan complete");
     // The cause is a missing RECORD, so the repair is the row, not more evidence.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     expect(recovery).not.toContain("Delivery-route evidence");
     expect(recovery).not.toContain("mstar workflow evidence");
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+    expect(recovery).toContain("--integration-base-sha");
+    expect(recovery).toContain("--integration-result-sha");
+    expect(recovery).toContain("same --operation id");
   });
 });

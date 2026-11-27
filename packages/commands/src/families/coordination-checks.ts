@@ -116,10 +116,16 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           // no `## PR stack` table at all is the same missing rows — the table
           // is one row per plan layer, so its absence leaves every Done plan
           // unrecorded and is refused the same way.
+          // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
           const layerViolations = lintIterationCompass(compassText).violations;
           const entryViolations = [...base.entry.violations, ...layerViolations];
           const entry = { ...base.entry, ok: entryViolations.length === 0, violations: entryViolations };
-          const violations = base.allPlansDone ? [...entryViolations, ...base.exit.violations] : [];
+          // A `## Plans` header the rule cannot read verifies nothing at all, so
+          // it refuses in every window: a reminder is an obligation not yet met,
+          // while an unreadable table is an obligation that cannot be stated.
+          // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+          const unverifiable = layerViolations.some((item) => item.code === "lint.iteration.plans-header-missing");
+          const violations = base.allPlansDone || unverifiable ? [...entryViolations, ...base.exit.violations] : [];
           const gate = { ...base, entry, violations, ok: violations.length === 0 };
           return gate.ok
             ? ok(id, { transition: gate.transition, entry: gate.entry, exit: gate.exit })

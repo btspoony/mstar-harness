@@ -1587,14 +1587,14 @@ export function lintStrategySections(docText: string): GateResult {
 }
 
 /** One compass table: its header cells and data rows, in document order. A
- * separator row (`|---|---|`) is formatting, not a row. */
+ * separator row (`|---|---|`) is formatting, not a row.
+ * see https://spec.commonmark.org/0.31.2/#tables */
 type CompassTable = { header: string[]; rows: string[][] };
 
-/** why: the table under the heading, not every pipe row until the next
- * heading — a later table in the same section is another document's example,
- * never a row of this one. Prose or blank lines may precede the table, so a
- * section is scanned until the first row starts the table; from there the
- * table ends at the first blank or non-row line, or at the next heading. */
+/** The table under the heading, not every pipe row until the next heading: a
+ * later table in the same section is another document's example, never a row
+ * of this one. Prose or blank lines may precede the table.
+ * see https://spec.commonmark.org/0.31.2/ */
 function compassTable(lines: readonly string[], name: string): CompassTable | null {
   const start = lines.findIndex((line) => line.trim().startsWith("## ") && hasSectionName([line.trim().slice(3).trim()], name));
   if (start < 0) return null;
@@ -1617,7 +1617,8 @@ function compassTable(lines: readonly string[], name: string): CompassTable | nu
 }
 
 /** One table row's cells. `\|` is cell CONTENT — a display pipe in a name — not
- * a column separator, so a name cannot shift a neighbouring column's value. */
+ * a column separator, so a name cannot shift a neighbouring column's value.
+ * see https://spec.commonmark.org/0.31.2/#tables */
 function rowCells(line: string): string[] {
   return line
     .replace(/^\|/, "")
@@ -1629,7 +1630,8 @@ function rowCells(line: string): string[] {
 /** A cell's comparable text: bold WRAPPING the whole cell is formatting, but a
  * code span's contents are literal once its backticks are gone (CommonMark
  * keeps them verbatim, spaces included), so `_p1_`, `**p1**` and `p1` stay
- * distinct ids. */
+ * distinct ids.
+ * see https://spec.commonmark.org/0.31.2/#code-spans */
 function cellText(cell: string): string {
   let text = cell.trim();
   const code = /^(`+)(.*)\1$/s;
@@ -1645,7 +1647,8 @@ function cellText(cell: string): string {
 
 /** Index of the named column, or -1. Every consumed column is identified by
  * NAME: a reworded or missing header is a malformed table, never a licence to
- * read a neighbouring column's value as this one. */
+ * read a neighbouring column's value as this one.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
 function columnIndex(header: readonly string[], name: string): number {
   return header.findIndex((cell) => cellText(cell).toLowerCase() === name.toLowerCase());
 }
@@ -1653,69 +1656,66 @@ function columnIndex(header: readonly string[], name: string): number {
 export type IterationCompassOptions = {
   /**
    * Stop the `## Plans` scan AT this plan id, exclusive: only rows above it are
-   * judged. A completion uses this to check the plans completed before it — its
-   * own layer is published after compound, so a self-check would deadlock. An
-   * id the table does not carry scans every row, like the unfiltered rule; a
-   * completion that needs an anchor must therefore treat an absent one as
-   * "no earlier window" rather than as "everything".
+   * judged. The lint exposes this so a caller can inspect one earlier window;
+   * an id the table does not carry scans every row, like the unfiltered rule.
+   * Completion does not use it — it derives its window from the workflow's plan
+   * rows, never from a compass status cell.
+   * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
    */
   untilPlanId?: string;
 };
 
-/**
- * The `Done` plans of a compass that no `## PR stack` row accounts for, in
- * table order, and whether the compass carries that section at all. An absent
- * section is zero rows, never an exemption: the Done plans it should have named
- * are exactly the ids returned, so no caller can mistake "no table" for
- * "nothing to record".
- *
- * `headerMissing` says the section exists but its table has no `Accountable
- * plan` column, so it accounts for nothing: zero rows is the safe reading — a
- * row under another header proves nothing.
- */
-function unaccountedDonePlans(
-  lines: readonly string[],
-  options: IterationCompassOptions,
-): { sectionPresent: boolean; headerMissing: boolean; anchored: boolean; plans: string[] } {
-  const stack = compassTable(lines, "PR stack");
-  const plans = compassTable(lines, "Plans");
-  const accountableColumn = stack === null ? -1 : columnIndex(stack.header, "Accountable plan");
-  const headerMissing = stack !== null && accountableColumn < 0;
-  if (plans === null) return { sectionPresent: stack !== null, headerMissing, anchored: false, plans: [] };
-  const idColumn = columnIndex(plans.header, "plan_id");
-  const statusColumn = columnIndex(plans.header, "Status");
-  const accountable = new Set<string>();
-  if (stack !== null && accountableColumn >= 0) {
-    for (const row of stack.rows) accountable.add(cellText(row[accountableColumn] ?? ""));
-  }
-  const unpublished: string[] = [];
-  let anchored = false;
-  for (const row of plans.rows) {
-    const planId = idColumn < 0 ? "" : cellText(row[idColumn] ?? "");
-    if (options.untilPlanId !== undefined && planId === options.untilPlanId) {
-      anchored = true;
-      break;
-    }
-    if (planId === "" || statusColumn < 0 || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
-    if (accountable.has(planId)) continue;
-    unpublished.push(planId);
-  }
-  return { sectionPresent: stack !== null, headerMissing, anchored, plans: unpublished };
+/** The `## Plans` columns both layer rules read by name. A table that renames
+ * or drops one states no plan id or no Done status, so neither rule can verify
+ * an obligation from it.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+const PLANS_REQUIRED_COLUMNS = ["plan_id", "Status"] as const;
+
+/** The `## Plans` columns this table spells differently or not at all.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+function missingPlansColumns(plans: CompassTable): string[] {
+  return PLANS_REQUIRED_COLUMNS.filter((name) => columnIndex(plans.header, name) < 0);
 }
 
-/** The Done plan ids no `## PR stack` row accounts for, for callers that
- * refuse with their own code and need the ids rather than the violations. An
- * absent section yields the same ids: it accounts for no plan at all.
+/** The plan ids a `## PR stack` table accounts for, or `null` when its table
+ * has no `Accountable plan` column: a row under another header accounts for
+ * nothing. An absent section accounts for nothing either, as an empty set.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+function accountablePlanIds(stack: CompassTable | null): Set<string> | null {
+  if (stack === null) return new Set();
+  const column = columnIndex(stack.header, "Accountable plan");
+  if (column < 0) return null;
+  return new Set(stack.rows.map((row) => cellText(row[column] ?? "")));
+}
+
+/** What an iteration compass says about layer publication for one window.
  *
- * A caller that asked for an EARLIER window (`untilPlanId`) gets an empty
- * answer when the `## Plans` table does not carry that plan: an omitted row
- * states no order, so nothing is established to precede the completing plan.
- * Package-local: completion is the only consumer, and a public barrel entry
- * would invite a second one to reuse a window it has not reasoned about. */
-export function unpublishedCompassPlanIds(text: string, options: IterationCompassOptions = {}): readonly string[] {
-  const { anchored, plans } = unaccountedDonePlans(unfencedLines(text), options);
-  if (options.untilPlanId !== undefined && !anchored) return [];
-  return plans;
+ * Completion reads `earlierPlanIds` from the execution store — registration
+ * order and stored row status — so the compass supplies row existence only: a
+ * publication delayed by a size stop stays visible after the row is `Done`
+ * while its Status cell still lags. Completion therefore reads no `## Plans`
+ * column at all; the lint reads the compass status instead, because a
+ * file-only check has no store.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+export type EarlierLayerObligation =
+  | { ok: true }
+  | { ok: false; reason: "section-missing" }
+  | { ok: false; reason: "header-missing" }
+  | { ok: false; reason: "unpublished"; planIds: readonly string[] };
+
+/** Judge the layer obligation of the plans that precede a completing plan.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+export function earlierLayerObligation(
+  text: string,
+  input: { earlierPlanIds: readonly string[] },
+): EarlierLayerObligation {
+  if (input.earlierPlanIds.length === 0) return { ok: true };
+  const stack = compassTable(unfencedLines(text), "PR stack");
+  const accountable = accountablePlanIds(stack);
+  if (accountable === null) return { ok: false, reason: "header-missing" };
+  const planIds = input.earlierPlanIds.filter((planId) => !accountable.has(planId));
+  if (planIds.length === 0) return { ok: true };
+  return stack === null ? { ok: false, reason: "section-missing" } : { ok: false, reason: "unpublished", planIds };
 }
 
 /**
@@ -1725,15 +1725,47 @@ export function unpublishedCompassPlanIds(text: string, options: IterationCompas
  * inspected — not readiness, not the PR column's shape, not repo columns, not
  * row order. A `—` PR cell still counts as a row (an empty integration range
  * needs no PR).
+ *
+ * A `## Plans` table that cannot be read by column name verifies nothing, so it
+ * is a named violation rather than an empty obligation.
  * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
  */
 export function lintIterationCompass(text: string, options: IterationCompassOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
-  const { sectionPresent, headerMissing, plans: found } = unaccountedDonePlans(unfencedLines(text), options);
-  // A compass with no `## Plans` table records no layer obligation either; the
-  // registration and compass-shape checks own that absence. The missing section
-  // is a layer finding only when a Done plan needs a row it cannot have.
-  if (!sectionPresent && found.length > 0) {
+  const lines = unfencedLines(text);
+  const plans = compassTable(lines, "Plans");
+  const missing = plans === null ? [] : missingPlansColumns(plans);
+  if (missing.length > 0) {
+    const names = missing.map((name) => `"${name}"`).join(" and ");
+    violations.push(
+      violation(
+        "medium",
+        "lint.iteration.plans-header-missing",
+        `the compass "## Plans" table carries no ${names} column, so no plan layer obligation can be verified (pr-stack.md \u00a7 Records)`,
+        `restore the "## Plans" table's \`| plan_id | Name | Status | Notes |\` header, naming ${names}`,
+      ),
+    );
+    return { ok: false, violations };
+  }
+  if (plans === null) return { ok: true, violations };
+  const stack = compassTable(lines, "PR stack");
+  const accountable = accountablePlanIds(stack);
+  const headerMissing = accountable === null;
+  const found: string[] = [];
+  const idColumn = columnIndex(plans.header, "plan_id");
+  const statusColumn = columnIndex(plans.header, "Status");
+  for (const row of plans.rows) {
+    const planId = cellText(row[idColumn] ?? "");
+    if (options.untilPlanId !== undefined && planId === options.untilPlanId) break;
+    if (planId === "" || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
+    if (accountable?.has(planId) === true) continue;
+    found.push(planId);
+  }
+  // A compass with no `## PR stack` table records no layer obligation either;
+  // the registration and compass-shape checks own that absence. The missing
+  // section is a layer finding only when a Done plan needs a row it cannot have.
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+  if (stack === null && found.length > 0) {
     violations.push(
       violation(
         "medium",
@@ -1746,6 +1778,7 @@ export function lintIterationCompass(text: string, options: IterationCompassOpti
   }
   // An existing section whose table carries no `Accountable plan` column
   // accounts for nothing: the repair is the header, not a row under another one.
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
   for (const planId of found) {
     violations.push(
       violation(
@@ -1769,7 +1802,8 @@ export function lintIterationCompass(text: string, options: IterationCompassOpti
 
 /** A fence toggle line: three or more backticks or tildes, plus its info
  * string (CommonMark: at most three leading spaces; four or more is an
- * indented code block, not a fence). Shared by both document-layer checks. */
+ * indented code block, not a fence). Shared by both document-layer checks.
+ * see https://spec.commonmark.org/0.31.2/#fenced-code-blocks */
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /** Toggle line numbers (1-based) of every fence open or close. An odd count
@@ -1797,7 +1831,8 @@ function fenceLines(text: string): number[] {
 
 /** The document's lines outside fenced code blocks: a `## ` line quoted in a
  * fence is example text, not a section. An unclosed fence hides the tail, and
- * that tail is bounded by the document itself — never by an unbounded sentinel. */
+ * that tail is bounded by the document itself — never by an unbounded sentinel.
+ * see https://spec.commonmark.org/0.31.2/#fenced-code-blocks */
 function unfencedLines(text: string): string[] {
   const lines = text.split(/\r?\n/);
   const fenced = new Set<number>();

@@ -137,7 +137,8 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     recovery: id === "plan.complete" && code === "coordination.layer-unpublished"
       // The refusal proves a RECORD is missing, not that a PR is: the repair is
       // the compass row, and the same completion then succeeds.
-      ? "Record the layer row for each plan named by the refusal in the compass `## PR stack` table: a real layer PR, `\u2014` for an empty integration range, or the iteration's already-open aggregate PR reused per plan. Then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> with the same operation id."
+      // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+      ? "Record the layer row for each plan named by the refusal in the compass `## PR stack` table: a real layer PR, `\u2014` for an empty integration range, or the iteration's already-open aggregate PR reused per plan. Then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> with the same --operation id, reusing the --integration-base-sha and --integration-result-sha pair you already supplied; this is the same completion, never a bare retry that re-triggers the SHA validation."
       : id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_KIND_UNREGISTERED"
         ? "The workflow declares no delivery kind, and the kind is fixed at registration. Close it honestly with mstar workflow lifecycle --workflow <workflow-id> --status failed --reason <text>, then register a replacement workflow with the correct declared delivery kind."
         : id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE"

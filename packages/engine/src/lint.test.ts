@@ -339,6 +339,7 @@ ${COMPASS_STACK_HEAD}`);
     expect(result.violations[0]?.code).toBe("lint.iteration.pr-stack-missing-row");
     expect(result.violations[0]?.message).toContain('"p-first"');
     // The repair is the header, never a cell under a different column name.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     expect(result.violations[0]?.message).toContain('"Accountable plan" column');
     expect(result.violations[0]?.fix).toContain("Accountable plan");
   });
@@ -380,6 +381,7 @@ ${COMPASS_STACK_HEAD}`;
     // The LINT has no anchor to find, so it scans the whole table. That is the
     // unfiltered rule, not a safe completion window: `plan complete` must not
     // read this as "everything precedes me" (see execution-workflow.test.ts).
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     expect(lintIterationCompass(compass, { untilPlanId: "p9-absent" }).violations).toHaveLength(2);
   });
 
@@ -399,8 +401,39 @@ ${COMPASS_STACK_HEAD}`;
     expect(all.violations[0]?.message).toContain('"p2-board"');
     // The earlier-plan window is not widened by the absent table: only the
     // plan above the completing one is named.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     const earlier = lintIterationCompass(compass, { untilPlanId: "p2-board" });
     expect(earlier.violations[0]?.message).toContain('"p1-store"');
     expect(earlier.violations[0]?.message).not.toContain('"p2-board"');
+  });
+
+  test("a Plans table missing a consumed header is a named violation, never an empty obligation", () => {
+    for (const [header, missing] of [
+      ["| plan_id | Name | State |", "Status"],
+      ["| id | Name | Status |", "plan_id"],
+    ] as const) {
+      const result = lintIterationCompass(`# Iteration compass
+
+## Plans
+
+${header}
+|---|---|---|
+| p1-store | Store | Done |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR |
+|---|---|---|
+| s1 | p1-store | o/r #6 |
+`);
+      expect(result.ok).toBe(false);
+      expect(result.violations.map((violation) => violation.code)).toEqual(["lint.iteration.plans-header-missing"]);
+      expect(result.violations[0]?.message).toContain(`"${missing}"`);
+      expect(result.violations[0]?.fix).toContain(missing);
+      // The unreadable column would otherwise read as "no Done plan", so it
+      // must never be reported as a satisfied obligation.
+      // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+      expect(result.violations[0]?.code).not.toBe("lint.iteration.pr-stack-missing-row");
+    }
   });
 });

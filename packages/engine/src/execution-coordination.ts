@@ -38,7 +38,7 @@ import {
   type PlanPrepareConfig,
   type PreparedCoordination,
 } from "./coordination-write.js";
-import { unpublishedCompassPlanIds } from "./lint.js";
+import { earlierLayerObligation } from "./lint.js";
 import {
   ExecutionPinConflictError,
   assertEvidenceInsidePlanArea,
@@ -1802,24 +1802,25 @@ export function deliveryRouteOf(snapshot: WorkflowSnapshot): DeliveryRoute {
 
 /**
  * The iteration layer-publication reminder (`pr-stack.md` § Records): the
- * plans that complete EARLIER in the compass than this one, and are already
- * Done with no `## PR stack` row, refuse the completion. The completing plan is
- * never judged — its own layer is published after compound, so a self-check
- * would deadlock. A compass with no `## PR stack` section at all has no row for
- * any plan either, so it refuses the same way while any earlier plan is Done;
- * with no earlier Done plan there is nothing to publish and it does not.
+ * plans registered EARLIER in this workflow and already `Done` with no
+ * `## PR stack` row refuse the completion. The completing plan is never judged —
+ * its own layer is published after compound, so a self-check would deadlock.
  *
- * The earlier window is only as wide as the `## Plans` table states it: when
- * that table carries no row for the completing plan, the body establishes no
- * order and the check is SKIPPED rather than widened to every row. A missing
- * row is a compass omission, not evidence that every other Done plan precedes
- * this one.
+ * The earlier window comes from the workflow snapshot's plan rows — their
+ * registration order and stored status — because that is the execution
+ * authority: a publication held by a size stop stays visible while the compass
+ * `Status` cell still lags, and reading that cell would let the lagging document
+ * hide an unpaid obligation. The compass therefore supplies row existence only.
  *
  * `compass_ref` is the workflow's registered harness-relative pointer, resolved
  * against the control harness root exactly as `mstar workflow compass-ref`
  * stores it. An unset pointer or an unreadable file skips the check: locating
  * the compass is the registration/compass checks' business, and this reminder
  * never invents a second refusal for a document it cannot read.
+ *
+ * A `## Plans` header the check cannot read states no order, so it refuses as
+ * unverifiable rather than reading as "no earlier plan".
+ * see skills/mstar-iteration/references/pr-stack.md
  */
 function assertEarlierLayersPublished(context: ExecutionContext, snapshot: WorkflowSnapshot, planId: string): void {
   const ref = snapshot.compass_ref;
@@ -1832,13 +1833,34 @@ function assertEarlierLayersPublished(context: ExecutionContext, snapshot: Workf
   } catch {
     return;
   }
-  const unpublished = unpublishedCompassPlanIds(text, { untilPlanId: planId });
-  if (unpublished.length === 0) return;
+  const earlierPlanIds: string[] = [];
+  for (const row of snapshot.plans) {
+    const id = typeof row.id === "string" ? row.id : row.plan_id;
+    if (id === planId) break;
+    if (typeof id === "string" && id !== "" && row.status === "Done") earlierPlanIds.push(id);
+  }
+  const obligation = earlierLayerObligation(text, { earlierPlanIds });
+  if (obligation.ok) return;
+  const details = { plan_id: planId, workflow_id: snapshot.id, compass_ref: ref, reason: obligation.reason };
+  if (obligation.reason === "header-missing") {
+    throw new CoordinationError(
+      "coordination.layer-unpublished",
+      "The compass `## PR stack` table carries no `Accountable plan` column, so no row records a plan layer and rows added under another header are ignored; restore the table's header, then record the missing layer rows and retry the same completion.",
+      details,
+    );
+  }
+  if (obligation.reason === "section-missing") {
+    throw new CoordinationError(
+      "coordination.layer-unpublished",
+      "The compass carries no `## PR stack` section, so no layer record names any plan's publication; add that section and one row per Done plan, then retry the same completion.",
+      details,
+    );
+  }
   throw new CoordinationError(
     "coordination.layer-unpublished",
     "An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass `## PR stack` table and retry the same completion. " +
       "The row names a real layer PR, or `\u2014` for an empty range, or the iteration's already-open aggregate PR; a compass without that section needs it added first, with one row per Done plan.",
-    { plan_id: planId, workflow_id: snapshot.id, unpublished_plan_ids: unpublished, compass_ref: ref },
+    { ...details, unpublished_plan_ids: obligation.planIds },
   );
 }
 
@@ -2290,9 +2312,7 @@ async function captureCompletionWitnesses(
     );
   }
   assertNoIntegrationContamination({ snapshot, planId: read.planId, integration: operation.integration, what: "complete" });
-  // invariant: An iteration row is the only route whose layers are published one
-  // per accountable plan, so only there does an earlier unpublished layer refuse
-  // this completion. A standalone development/report-only plan is untouched.
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
   if (snapshot.type === "iteration" && route === "integration") {
     assertEarlierLayersPublished(context, snapshot, read.planId);
   }

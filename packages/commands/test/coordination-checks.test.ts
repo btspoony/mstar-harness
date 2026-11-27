@@ -397,7 +397,8 @@ plans:
   });
 
   /** A compass whose `## Plans` table marks `donePlanId` Done. `stack: null`
-   * omits the `## PR stack` section entirely (the aggregate-rollout shape). */
+   * omits the `## PR stack` section entirely (the aggregate-rollout shape).
+   * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
   function layerCompass(file: string, input: {
     frontmatterPlans: readonly string[];
     tablePlans: ReadonlyArray<[string, string]>;
@@ -526,6 +527,32 @@ plans:
           message: expect.stringContaining('"p-earlier"'),
         })]),
       });
+    }
+  });
+
+  test("a Plans table with an unreadable header refuses in the phase-2 window too", async () => {
+    const cwd = tempRoot();
+    const { harness, planId } = await activeWorkflow(cwd, "wf-layers-plans-header");
+    const compass = path.join(cwd, "delivery-compass.md");
+    layerCompass(compass, {
+      frontmatterPlans: [planId],
+      tablePlans: [[planId, "InProgress"]],
+      stack: null,
+    });
+    // A renamed status column states no Done plan at all, so the reminder has
+    // nothing to read: that is unverifiable, not satisfied.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+    writeFileSync(compass, readFileSync(compass, "utf8").replace("| plan_id | Name | Status | Notes |", "| plan_id | Name | State | Notes |"));
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-layers-plans-header", compass, harness } as never,
+      context(cwd),
+    );
+    expect(result.status).toBe("refused");
+    if (result.status === "refused") {
+      const gate = result.details?.gate as { violations: Array<{ code: string; message?: string }> };
+      expect(gate.violations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "lint.iteration.plans-header-missing", message: expect.stringContaining('"Status"') }),
+      ]));
     }
   });
 
