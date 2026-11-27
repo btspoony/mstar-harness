@@ -1,8 +1,8 @@
 # Command reference
 
-The slash commands this repository ships live in [`commands/`](../commands). This page indexes all eight: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
+The slash commands this repository ships live in [`commands/`](../commands). This page indexes all nine: what each one does, the argument form it accepts, which sibling to reach for, and the skill that owns its semantics.
 
-Two boundaries hold across the page. All eight are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
+Two boundaries hold across the page. All nine are **user entry points** — a command boots `project-manager` in your current session, and none of them is a subagent target: a leaf executor that receives one refuses it on role grounds. And this page is a **router, not a second protocol home** — every behavioural rule stays with its owning skill, while the `mstar-harness` binary reference — the `plan` verbs, flags and exit codes — stays with the **`mstar-use-cli`** skill, and install / `init` / `doctor` with [`INSTALL.md`](../INSTALL.md).
 
 
 A registered legacy leaf that is not a regular file (a FIFO, socket or device) refuses by type and names its recovery instead of blocking the command. The imported source also participates in the operation identity: repeating one `--operation-id` over changed legacy bytes refuses as a conflict rather than replaying a receipt that describes bytes this run never read, while an unchanged repeat still returns its retained receipt. The v1 route converts from the same descriptor-verified register bytes it classified, and each source hash is taken where the bytes were read, so the receipt describes the input the run consumed. A refused workflow source is always addressable by `--ack-skip-workflow <id>`: an unconvertible plan row refuses as that workflow's source rather than aborting the upgrade, a converted v1 lifecycle whose converted plan rows cannot be imported refuses under its own original id, and a `workflows/` entry that sources nothing behaves like an absent tree. A v1 canonical compass is not a workflow source, so the acknowledgement cannot address it: it is read through the same bounded probe, and a non-regular or swapped-in link refuses by name with both supported repairs (replace it with a regular file to keep the grouping, or remove it to convert those plans as standalone rows) plus the route that starts without importing any legacy source (`store init --harness <new-empty-control-root>`, existing data untouched). Root `status.json` `residual_findings` are not imported by `store upgrade`: the receipt states their count and the supported route (a project register document or the issue verbs) instead of dropping them silently. When a DSH refusal follows a committed execution import, its message and the command's recovery field both name the execution acknowledgement the retry also needs. Both source digests are ordered by code unit, never by the process locale, so the same bytes keep the same identity across machines.
@@ -65,6 +65,7 @@ Workflow notes are ordinary admitted append facts, not execution authority. Curr
 | [`/iteration-loop`](#iteration-loop) | The same lifecycle end to end, autonomous lock, minimal human intervention | `mstar-iteration` |
 | [`/codebase-audit`](#codebase-audit) | Read-only survey of a codebase → a prioritized review report | `mstar-audit` |
 | [`/codebase-comment-cleanup`](#codebase-comment-cleanup) | Triage every code comment into delete / ADR / issue / keep-with-shape, ratcheted per PR | `mstar-coding-behavior` |
+| [`/codebase-arch-governance`](#codebase-arch-governance) | Converge a codebase toward its ideal shape in closed, verified batches | `mstar-coding-behavior` |
 | [`/amazing-test-audit`](#amazing-test-audit) | Read-only test-suite audit → findings to delete / repair / consolidate tests | `mstar-audit` (`tests` focus) |
 | [`/amazing-pr-review`](#amazing-pr-review) | Read-only pre-merge review of a PR / branch / diff → one verdict | `mstar-audit` (`pr` variant) |
 | [`/amazing-e2e-check`](#amazing-e2e-check) | Explicitly requested E2E / browser / device / deployment verification | `mstar-e2e` |
@@ -163,6 +164,22 @@ Runtime sequence → `mstar-iteration/references/phase-2-worktree-lease.md`; fie
 **Gate** — no repo-wide comment ban ships: the per-PR `--diff-base` ratchet is the ban's equivalent. It reads only the comments a diff touches, so an untouched *unclassified* comment never trips it, and CI asserts no whole-corpus count — a lower bound cannot distinguish a detector regression from a genuine cleanup, so the detector itself is pinned by `packages/cli/test/lint-cli.test.ts`.
 
 **Defined in** — [`commands/codebase-comment-cleanup.md`](../commands/codebase-comment-cleanup.md); semantics → `mstar-coding-behavior` (`references/comments.md`, `references/comment-cleanup.md`); Decision Record promotion → `mstar-doc-corpus` → `references/adr.md`.
+
+## /codebase-arch-governance
+
+```text
+/codebase-arch-governance [path|subsystem] [dry-run]
+```
+
+**Purpose** — converge the codebase toward the shape its current requirements would have produced, one closed batch at a time. A batch takes the move with the lowest total complexity, migrates every caller, deletes the replaced path, proves behaviour preserved against a baseline, and lands the settled rule on the strongest available constraint. An abstraction added without migrating its callers is rejected at Acceptance, never counted as progress.
+
+**When** — the shape itself is the problem: one semantic implemented several ways, a concept scattered across callers, forwarding layers, or a convention held only by prose. `/codebase-audit` reports the same surfaces read-only and produces plans; this entry executes those batches under the normal plan gates. `/codebase-comment-cleanup` is the same idea for comments alone.
+
+**Args** — a `path|subsystem` token narrows the round; `dry-run` is a read-only exit that publishes the prioritised batches with their measured baseline, then stops.
+
+**Stop conditions** — no candidate survives the rejected-move list with a proven net reduction, the run budget is reached, the next move needs a product or architecture decision or a destructive migration (captured as an issue, then skipped), or no behaviour baseline can be established for that surface.
+
+**Defined in** — [`commands/codebase-arch-governance.md`](../commands/codebase-arch-governance.md); semantics → `mstar-coding-behavior` (`references/architecture-governance.md`); structural decisions → `mstar-doc-corpus` → `references/adr.md`.
 
 ## /amazing-test-audit
 

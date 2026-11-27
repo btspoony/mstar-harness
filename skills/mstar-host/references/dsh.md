@@ -394,7 +394,7 @@ through the agent-flow ledger (§ Agent-flow ledger).
 | Surface | Path / invocation |
 |---------|-------------------|
 | Plugin skills | Skill **name** via the mstar skill-local provider (`ctx.skills`); canonical `$DSH_BUNDLED_SKILL_DIR/<name>` |
-| Plugin commands | The eight bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` |
+| Plugin commands | The nine bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/codebase-arch-governance`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
 ## Command delivery (dsh host, updated 2026-08-11)
