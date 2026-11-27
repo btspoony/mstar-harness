@@ -461,8 +461,7 @@ describe('the shell holds the open record and the project detail mounts', () => 
   })
 
   it('project detail mounts the milestone body and two tabs with Issues default', () => {
-    // The project-detail read answers the milestone grouping directly (the
-    // `milestones` view), not an aggregated overview.
+    // see packages/engine/src/store-read.ts - the project-detail read answers the milestone view.
     const milestones = { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 }
     const markup = render(
       { view: 'project-detail', id: 'proj-1', state: envelope(milestones) },
@@ -508,7 +507,7 @@ describe('the shell holds the open record and the project detail mounts', () => 
 describe('the dsh assign picker — pending reads show loading, only a refusal is failed', () => {
   const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
   const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
-  // The project-detail read answers the milestone grouping directly.
+  // see packages/engine/src/store-read.ts - the project-detail read answers the milestone view.
   const OVERVIEW = {
     projectId: 'proj-1',
     milestones: [

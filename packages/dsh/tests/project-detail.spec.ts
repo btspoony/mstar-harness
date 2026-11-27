@@ -19,7 +19,7 @@ import { ProjectDetailDestination } from '../src/client/panel/destinations.tsx'
 const projection = { generation: 1, freshness: 'current', builtAt: null, checkedAt: '', diagnostics: [] }
 const envelope = (data: unknown) => ({ kind: 'ok' as const, envelope: { data, projection } })
 
-/** note: The project-detail read answers the milestone grouping itself, not an overview. */
+/** see packages/engine/src/store-read.ts - the project-detail read answers the milestone grouping. */
 const MILESTONES = { projectId: 'proj-1', milestones: [], issues: [], unassignedIssues: 0 }
 
 const PROJECTS = {
@@ -91,8 +91,7 @@ describe('project detail — one absence authority and the degraded member arms'
   })
 
   it('a degraded read keeps its own arm and reason', () => {
-    // The milestone read is the page's own read, so its refusal is the page's refusal:
-    // the reason travels verbatim and nothing is drawn as an empty board.
+    // see packages/dsh/src/client/panel/destinations.tsx - the read's refusal is the page's refusal.
     const degraded = { kind: 'unavailable' as const, reason: 'the milestone read could not be completed' }
     const markup = renderState(degraded)
     expect(markup).toContain('the milestone read could not be completed')

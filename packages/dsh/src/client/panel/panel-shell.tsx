@@ -974,9 +974,8 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
     client: panelSnapshot,
     sessionId: wireSession,
     cwd,
-    // why: only a WALKING walk has a next page. A `complete` nonempty walk has an offset equal
-    // to the rows already read, so requesting it would ask for one page past the end and then
-    // discard the answer (the step ignores it); a `failed` walk has its own retry control.
+    // see docs/specs/architecture/overview.md - only a WALKING walk has a next page: a complete
+    // walk's offset already equals the rows read, and a failed walk has its own retry control.
     view: detail !== null && detail.view === 'project-detail' && walk.kind === 'walking' ? 'issues' : null,
     ...(detail !== null && detail.view === 'project-detail'
       ? { params: { project: detail.id, disposition: 'open', limit: '200', ...(assignableOffset === 0 ? {} : { offset: String(assignableOffset) }) } }

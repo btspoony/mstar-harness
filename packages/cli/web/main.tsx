@@ -877,28 +877,20 @@ export function ProjectDetailDestination(props: { address: Address; feature: Pro
       // transport failure → retain the operation for a replay.
       const followUp = milestoneWriteFollowUp(request, result);
       if (!followUp.retainOperation) operationIds.settled();
-      // why: the accepted draft is cleared HERE, not left to the forms' own verdict effect. An
-      // accepted write re-reads the overview, and that re-read unmounts the forms in the same
-      // batched render the verdict arrives in — their follow-up never observes it, and the
-      // re-mounted create form would re-seed from the draft the save already committed.
+      // see docs/specs/architecture/overview.md - the draft is cleared HERE: the accepted write's
+      // re-read unmounts the forms in the same batched render the verdict arrives in.
       if (result.status === "ok") drafts.clear(milestoneDraftTargetKey(projectId, draftTargetOf(request)));
-      // One pure transition: the reload/refresh tokens, the surface's verdict and the
-      // operation's fate are all its output — nothing here decides any of them.
+      // see packages/cli/web/projects-data.ts - one pure transition owns the whole verdict.
       setPageState((current) => applyMilestoneFollowUp(current, followUp));
     });
   }
 
-  /**
-   * The draft entry one write targets: the create form's shared key, or the milestone's own.
-   * An assignment moves an issue, so no milestone draft belongs to it.
-   */
+  /** see packages/ui/src/screens/ProjectDetail.tsx - the draft entry one write targets. */
   function draftTargetOf(request: MilestoneMutationRequest): string {
     return request.verb === "create" ? "create" : request.verb === "assign" ? "assign" : request.milestoneId;
   }
 
-  // The head's identity comes from the same list read the Projects destination
-  // renders, so the two can never disagree; a project the list does not carry
-  // gets the route's own id and nothing invented beside it.
+  // see packages/ui/src/view-model/projects.ts - the head's identity comes from the projects list.
   const identity = (() => {
     if (props.projects.kind === "ready" && props.projects.model.rows.kind === "populated") {
       const row = props.projects.model.rows.value.find((candidate) => candidate.projectId === projectId);

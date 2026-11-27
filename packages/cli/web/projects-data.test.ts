@@ -130,7 +130,7 @@ const overviewEnvelope = (data: OverviewDTO, extra: Record<string, unknown> = {}
   ...extra,
 });
 
-/** note: The standalone milestone view's envelope: the DTO itself, with no execution block. */
+/** see packages/engine/src/store-read.ts - the standalone milestone view's envelope. */
 const milestonesEnvelope = (data: MilestoneRead, extra: Record<string, unknown> = {}) => ({
   data,
   projection,
@@ -241,8 +241,7 @@ describe("the milestone read", () => {
   test("a degraded member keeps its own arm and reason", async () => {
     const degraded = (async () =>
       new Response(
-        // A degraded read is the read's own refusal: the route fails, so the body
-        // reports the failure rather than an empty plan.
+        // see packages/cli/web/projects-data.ts - a degraded read is the route's own refusal.
         JSON.stringify({ error: { code: "collaboration.not-initialized", message: "the milestone read could not be completed" } }),
         { status: 503, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;

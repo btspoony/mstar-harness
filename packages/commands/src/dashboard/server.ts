@@ -70,9 +70,7 @@ function fail(code: string, message: string): ApiFailure {
 function statusForCode(code: string): number {
   if (code === "usage") return 400;
   if (code === "issue.not-found" || code === "not-found") return 404;
-  // invariant: An optimistic-concurrency conflict is a routine outcome of the CAS verbs, not a
-  // server fault: a caller that sees 409 knows to re-read and retry, while 500 would say the
-  // route itself is broken. Every family spells the code the same way (`<domain>.revision-conflict`).
+  // see docs/specs/architecture/overview.md - a CAS conflict is a routine outcome, not a server fault.
   if (code.endsWith(".revision-conflict")) return 409;
   // invariant: An unavailable required source is service-unavailable, never a 404 that
   // claims the record does not exist.
@@ -127,20 +125,13 @@ function escapeHtmlAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-/** The largest milestone request body the route accepts; one small JSON object. */
+/** see packages/commands/src/dashboard/server.ts - readJsonBody enforces this bound. */
 const MILESTONE_BODY_LIMIT = 16_384;
 
-/** How long a client may take to finish sending a milestone body before the route stops waiting. */
+/** see docs/specs/architecture/overview.md - the bound on waiting for a milestone request body. */
 const MILESTONE_BODY_DEADLINE_MS = 10_000;
 
-/**
- * A request body as JSON, refused as a usage error when absent, oversized, slow or
- * unparsable.
- *
- * This runs OUTSIDE the serialized request queue: a paused upload must not hold the
- * queue every other dashboard read shares. The deadline bounds the wait for the same
- * reason the byte limit bounds the memory — one stalled client cannot pin a slot.
- */
+/** see docs/specs/architecture/overview.md - the body is read outside the serialized queue. */
 async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -172,7 +163,7 @@ async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, u
   }
 }
 
-/** One typed field, or a usage refusal naming it. */
+/** see packages/commands/src/dashboard/server.ts - one typed field, or a usage refusal. */
 function requireField<T>(body: Record<string, unknown>, field: string, test: (value: unknown) => value is T): T {
   const value = body[field];
   if (!test(value)) throw new SddScriptError(`the milestone request requires a valid ${field}`, 2);
@@ -182,16 +173,7 @@ function requireField<T>(body: Record<string, unknown>, field: string, test: (va
 const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
 const isCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 
-/**
- * Execute one posted milestone mutation through the engine verbs.
- *
- * The route is a transport: the verb, the operation id and the observed store
- * revision come from the caller (the project page hashes the revision of the
- * read that rendered its forms), and every validation - the name, the ordinal,
- * the status vocabulary, the milestone's emptiness, the issue's revision - is
- * the engine's. A revision mismatch answers `milestone.revision-conflict`, which
- * the page turns back into a re-read.
- */
+/** see packages/engine/src/milestone-store.ts - the route is a transport; the engine owns validation. */
 async function writeMilestoneRequest(
   context: StoreContext,
   body: Record<string, unknown>,
@@ -243,19 +225,10 @@ async function writeMilestoneRequest(
   }
 }
 
-/**
- * Validate the optional project selector against its OWN catalog row before listening.
- *
- * The check is scoped to the requested id: reading the whole `projects` list and looking
- * the id up there would make the dashboard refuse whenever ANY selected project is
- * unreadable — a remote-mode refusal has to be about the project the reader asked for,
- * not about a sibling it never named.
- */
+/** see packages/engine/src/store-read.ts - the selector is proved against its own catalog row. */
 async function assertProjectExists(context: StoreContext, projectId: string): Promise<void> {
   const found = await readProjectCatalogRow(context, projectId);
-  // invariant: The `projects` view also infers ids from issues and synthesizes an item for
-  // them with `lifecycle: null`. Only a catalog-backed row satisfies `--project`: an
-  // issue-only id names no project the dashboard can read.
+  // see packages/engine/src/store-read.ts - only a catalog-backed row satisfies `--project`.
   if (found === null) {
     throw new Error(`Unknown project ${JSON.stringify(projectId)}: no catalog project row exists. ` + "Check the id with `mstar catalog list` and retry.");
   }
@@ -292,10 +265,8 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   };
 
   const server = http.createServer((req, res) => {
-    // invariant: Only the REQUEST WORK is serialized. The guards (host, origin, token, route) are
-    // pure header comparisons, and a request BODY is drained here, before the queue: a paused or
-    // slow upload must not hold the one slot every unrelated read waits on. `body` is read once,
-    // outside the queue, and handed to the work closure.
+    // see docs/specs/architecture/overview.md - only the request work is serialized; the body is
+    // drained outside the queue so a slow upload cannot hold the slot every read waits on.
     void (async () => {
       const admitted = admitRequest(req, res);
       if (admitted === null) return;
@@ -318,10 +289,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     });
   });
 
-  /**
-   * The transport guards, answered before any work is queued: loopback Host, same Origin,
-   * a valid token, and a parseable URL. `null` means the guard already answered the request.
-   */
+  /** see docs/specs/architecture/overview.md - the transport guards, answered before any work is queued. */
   function admitRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -410,11 +378,8 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // Route resolution (including the encoded-traversal id refusal) happens
     // before any store access, and its usage throws become structured 400s.
     try {
-      // `/api/milestones` is the one path that carries BOTH halves: POST is the write
-      // surface (the project page's milestone mutations, with the engine verbs owning
-      // validation and the optimistic-concurrency guard) and GET is the plain milestone
-      // read the project page's body renders. They are separate views of one resource,
-      // not one method with a fallback.
+      // see docs/specs/architecture/overview.md - /api/milestones carries both halves: POST is
+      // the write route, GET the milestone read the project page's body renders.
       if (pathname === "/api/milestones" && method === "POST") {
         if (body === null) {
           sendJson(res, 400, fail("usage", "the milestone route requires one JSON object body"), requestHead);

@@ -305,12 +305,7 @@ function metaRecord(dbPath: string): {
   }
 }
 
-/**
- * note: Is the lane FREE — no other handle holding a write lock? `BEGIN EXCLUSIVE` is the
- * cheapest honest answer: it takes the lane's write lock, publishes nothing, and gives it
- * back. A fixture that leaves a connection open fails this, which is the point: the failure
- * names the fixture, not the verb's bounded wait.
- */
+/** see packages/engine/src/collaboration-store.ts - `BEGIN EXCLUSIVE` proves no handle holds the lane. */
 function laneIsFree(dbPath: string): boolean {
   const db = new DatabaseSync(dbPath);
   try {
@@ -2161,20 +2156,16 @@ describe("collaboration remote schema ladder", () => {
       journalBytes = existsSync(`${snapshotDir}/collaboration.db-journal`)
         ? statSync(`${snapshotDir}/collaboration.db-journal`).size
         : 0;
-      // note: The PRODUCTION boundary is proven from the COPY, never by opening a second connection on
-      // the live lane: a probe opened here is one more handle contending for the lane the interrupted
-      // call's own rollback still holds, which is the `store.busy` this case used to race. The copied
-      // snapshot answers the same question - the committed v6 schema, with nothing of the rebuild
-      // published - because it was taken inside the open transaction.
+      // see packages/engine/src/collaboration-store.ts - the boundary is proven from the COPY taken
+      // inside the open transaction, never by opening a second connection on the live lane.
       outsideTables = v6Tables;
       journalHasDroppedTable =
         journalBytes > 0 &&
         readFileSync(`${snapshotDir}/collaboration.db-journal`).includes(Buffer.from("CREATE TABLE project_roadmaps"));
       throw new Error("crash-seam");
     });
-    // invariant: Every handle this fixture opened is closed before the upgrade runs, and the lane is
-    // proven FREE rather than assumed free: an exclusive BEGIN succeeds here, so the verb below reaches
-    // the seam instead of answering `store.busy` past its bounded wait.
+    // see packages/engine/src/collaboration-store.ts - the lane is proven FREE, not assumed free, so
+    // the verb below reaches the seam instead of answering `store.busy`.
     expect(laneIsFree(location.dbPath)).toBe(true);
     try {
       await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toThrow(/crash-seam/);
@@ -2182,13 +2173,7 @@ describe("collaboration remote schema ladder", () => {
       setCollaborationRoadmapRemovalGapForTest(undefined);
     }
 
-    // invariant: The capture is a genuinely interrupted rebuild and is INDEPENDENT of this process:
-    // the rollback journal holds the dropped table's own pre-image DDL (a DELETE journal stores
-    // pre-images, so an absent or unrelated journal could not carry that text), and it was copied out
-    // of the live lane while the production transaction held it.
-    // note: The database file itself is not asserted to differ from the pristine bytes: in a DELETE
-    // journal the predecessor's pages may stay in place, so the journal - not the file - is the
-    // pre-image, and the recovery proof below is what establishes that the copy is mid-transaction.
+    // see packages/engine/src/collaboration-store.ts - the journal, not the file, is the pre-image; the copy was taken inside the transaction.
     expect(captured).toContain(snapshotPath);
     expect(journalBytes).toBeGreaterThan(0);
     expect(journalHasDroppedTable).toBe(true);
@@ -2217,13 +2202,8 @@ describe("collaboration remote schema ladder", () => {
       recovered.close();
     }
 
-    // invariant: The replay starts from the recovered snapshot ALONE, on a lane path NOTHING else in
-    // this process has opened. The interrupted checkout's lane is abandoned outright (never restored
-    // onto, never reopened): the copy is written to a SECOND fresh home's lane, which resolves the
-    // same repository key and mode from the same synthetic origin, so the receipt and the binding
-    // checks below still prove the recovered generation while no earlier handle - the aborted upgrade's
-    // connection or the probe that read the v6 metadata - can hold the target past the bounded wait.
-    // A restored-over lane still races that way, which is the `store.busy` this case used to hit.
+    // see packages/engine/src/collaboration-store.ts - the replay runs on a SECOND fresh home's lane,
+    // a path no earlier handle has opened: same repository key, so the receipt still proves the copy.
     const replayHome = join(ROOT, `crash-replay-${sequence++}`);
     mkdirSync(replayHome, { recursive: true });
     resolvedHome = replayHome;
@@ -2231,14 +2211,12 @@ describe("collaboration remote schema ladder", () => {
     const replayLocation = locationAt(repo);
     expect(replayLocation.repoKey).toBe(location.repoKey);
     expect(replayLocation.dbPath).not.toBe(location.dbPath);
-    // note: The storage tree is created PRIVATE, the way the lane's own initializer makes it:
-    // a plain recursive `mkdir` lands at 0755 and the admission refuses it before any read.
+    // see packages/engine/src/collaboration-store.ts - the lane refuses a non-private storage tree.
     mkdirSync(dirname(replayLocation.dbPath), { recursive: true, mode: 0o700 });
     for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${replayLocation.dbPath}${suffix}`, { force: true });
     copyFileSync(snapshotPath, replayLocation.dbPath);
     chmodSync(replayLocation.dbPath, 0o600);
-    // note: The recovered copy is the same generation the interrupted call held, so the binding this
-    // checkout holds is the one its own metadata row proves: store id and epoch come from the copy.
+    // see packages/engine/src/collaboration-store.ts - the binding is proved against the copy's own store id and epoch.
     writeCollaborationBinding(replayContext, {
       repoKey: replayLocation.repoKey,
       mode: replayLocation.mode,
@@ -2252,7 +2230,7 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(replayLocation.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
     const db = new DatabaseSync(replayLocation.dbPath);
     try {
-      // invariant: The reclassified row keeps its revision and its registration instant.
+      // see packages/engine/src/collaboration-store.ts - the reclassified row keeps its revision and registration instant.
       expect(db.prepare("select document_kind, revision, registered_at from catalog_entities where id = 'doc-r'").get()).toEqual({
         document_kind: "other",
         revision: 7,

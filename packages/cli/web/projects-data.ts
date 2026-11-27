@@ -185,8 +185,7 @@ export async function readProjectMilestones(
     // what the project owns, so the read fails rather than claiming nothing is there.
     const gap = requiredCollaborationRefusal(envelope);
     if (gap !== null) return { status: "error", message: gap };
-    // note: The read answers the grouping directly; the arm resolves it as the
-    // `read` member the overview used to carry.
+    // see packages/ui/src/view-model/projects.ts - the arm resolves this read as a `read` member.
     return {
       status: "ready",
       milestones: milestonesArm({ state: "read", data: envelope.data }),

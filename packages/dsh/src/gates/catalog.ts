@@ -926,10 +926,7 @@ function selectionErrorState(
   }
 }
 
-/**
- * The project rollup uses only milestone records read from the store authority.
- * The issue counts are independent and remain available if that read fails.
- */
+/** see packages/engine/src/store-read.ts - the rollup uses only store-read milestone records. */
 function projectRollupSource(milestones: ProjectMilestoneFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
   return {
     milestones: milestones.names,
@@ -986,8 +983,8 @@ const UNREAD_STORE_FACTS: StoreFacts = {
 /**
  * Read the store-backed milestone rollup once, retaining project then ordinal order.
  *
- * The project set comes from the `projects` dashboard view, not from `listCatalog`: the
- * catalog's registered rows carry checkout-relative locations a remote observation does
+ * see packages/engine/src/store-read.ts - the project set comes from the `projects` view, not
+ * `listCatalog`, whose rows carry checkout-relative locations a remote observation does
  * not have, so `listCatalog` refuses in remote mode and the gate would report milestones
  * unavailable on every remote checkout. The view answers both modes, and each project's
  * milestones then come from the one milestone read, which is execution-free.
@@ -1009,7 +1006,7 @@ async function readProjectMilestoneFacts(context: StoreContext): Promise<Project
   }
 }
 
-/** One refresh's open-issue rollup, milestone rollup, and knowledge digest. */
+/** see packages/dsh/src/gates/catalog.ts - one refresh's rollup and knowledge digest. */
 async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
   const milestones = await readProjectMilestoneFacts(context)

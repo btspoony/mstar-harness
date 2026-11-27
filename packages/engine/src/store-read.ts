@@ -432,8 +432,7 @@ export type DashboardViewData = {
   "iteration-detail": IterationDTO | null;
   projects: ProjectListDTO;
   "issue-flow": IssueFlow;
-  /** note: The project's milestone grouping on its own: collaboration data only, so a
-   *  fresh clone (or a remote-only checkout) can render milestones without an execution store. */
+  /** see packages/engine/src/store-read.ts - collaboration-only: no execution store needed. */
   milestones: MilestoneRead;
   overview: OverviewDTO;
 };
@@ -448,9 +447,7 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   "iteration-detail": { needsProjection: true },
   projects: { needsProjection: false },
   "issue-flow": { needsProjection: false },
-  // note: Pure collaboration (the milestone tables and the issue membership they count):
-  // no projection and no execution store, so a fresh clone or a remote checkout still
-  // renders milestones.
+  // see packages/engine/src/store-read.ts - purely collaboration, so no projection and no execution store.
   milestones: { needsProjection: false },
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
@@ -861,14 +858,7 @@ function issuePageKey(filter: IssueFilter): string {
   ].join(":");
 }
 
-/**
- * why: Which sources each view reads and whether it requires them (contract
- * §Read/Completeness): issue/catalog/milestone views are pure collaboration;
- * workflow/iteration views require execution and disclose an
- * optional catalog association; the overview needs both of its combined counts.
- * A project filter is catalog data, so it makes the optional collaboration
- * source required -- an unfiltered list may still render without it.
- */
+/** see docs/specs/architecture/overview.md - which sources each view reads and requires. */
 function viewSources(view: DashboardView, filters: DashboardFilters): ViewSources {
   const projectId = text(filters.projectId);
   // invariant: A project-narrowed query declares exactly the projects it contributes,
@@ -901,8 +891,7 @@ function viewSources(view: DashboardView, filters: DashboardFilters): ViewSource
     case "issue-flow":
       return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
     case "milestones": {
-      // invariant: A milestone grouping belongs to one project: without an id there is
-      // nothing to group, so the read refuses rather than answering every project's rows.
+      // see packages/engine/src/store-read.ts - a milestone grouping belongs to one project.
       if (projectId === null) usage("the milestones view requires a project");
       return {
         collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
@@ -1658,7 +1647,7 @@ export async function readProjectCatalogRow(
   return envelope.data;
 }
 
-/** note: A single-project catalog read: collaboration only, with no list to page or join. */
+/** see packages/engine/src/store-read.ts - a single-project catalog read: collaboration only. */
 function queryProjectRow(projectId: string): StoreReadQuery<ProjectListDTO["items"][number] | null> {
   return {
     view: "projects",
@@ -1674,7 +1663,7 @@ function queryProjectRow(projectId: string): StoreReadQuery<ProjectListDTO["item
   };
 }
 
-/** The catalog-backed row for one id; an issue-only id is `null` (no catalog row exists). */
+/** see packages/engine/src/store-read.ts - `null` when no catalog row backs the id. */
 function projectRowOn(db: StoreDb, projectId: string): ProjectListDTO["items"][number] | null {
   const row = db
     .prepare(
@@ -1691,7 +1680,7 @@ function projectRowOn(db: StoreDb, projectId: string): ProjectListDTO["items"][n
   };
 }
 
-/** The same row from a remote snapshot's portable catalog: identity only, and `null` when absent. */
+/** see packages/engine/src/collaboration-remote-read.ts - the same row from the admitted snapshot. */
 function remoteProjectRow(view: RemoteReadView, projectId: string): ProjectListDTO["items"][number] | null {
   return remoteProjectListItem(view, projectId);
 }

@@ -643,8 +643,7 @@ describe("the milestone write route", () => {
       operationId: "op-stale",
       expectedStoreRevision: revision,
     });
-    // A CAS conflict is the route's routine outcome: 409 tells the caller to re-read and
-    // retry, where 500 would claim the route itself broke.
+    // see packages/commands/src/dashboard/server.ts - a CAS conflict is 409, so the caller re-reads and retries.
     expect(stale.status).toBe(409);
     const refusal = JSON.parse(stale.body) as { error: { code: string; message: string } };
     expect(refusal.error.code).toBe("milestone.revision-conflict");
@@ -906,8 +905,7 @@ describe("the milestone write route", () => {
   });
 
   test("the milestone read answers without an execution store", async () => {
-    // A clone whose checkout holds collaboration data but never initialized `store.db`:
-    // the milestone body must still render, because its facts are collaboration data.
+    // see packages/engine/src/store-read.ts - the milestone body renders with no execution store.
     const { dir, context } = await workspace("milestone-read-no-execution-");
     await registerCatalogEntity(
       context,
@@ -920,7 +918,7 @@ describe("the milestone write route", () => {
       { projectId: "proj-solo", name: "Ships alone", effortSessions: null, ordinal: 0 },
       { operationId: "solo-milestone", expectedStoreRevision: revision },
     );
-    // Remove the execution authority: nothing about the milestone body may depend on it.
+    // see packages/engine/src/store-read.ts - nothing about the milestone body may depend on the execution authority.
     rmSync(join(dir, ".mstar", "store.db"), { force: true });
     const server = await start(dir);
     try {
@@ -940,11 +938,10 @@ describe("the milestone write route", () => {
       { kind: "project", id: "proj-wanted", title: "Wanted", rootKind: "projects", relativePath: "proj-wanted" },
       { operationId: "selector-scope-wanted", actor: "dashboard-test" },
     );
-    // The requested project is registered, so the server starts: the check must not
-    // consult a sibling's readability the caller never named.
+    // see packages/commands/src/dashboard/server.ts - the selector check reads only the requested project's own row.
     const server = await start(dir, { project: "proj-wanted" });
     await server.close();
-    // An id with no catalog row is still refused.
+    // see packages/commands/src/dashboard/server.ts - an id with no catalog row is still refused.
     await expect(start(dir, { project: "proj-never-registered" })).rejects.toThrow(/no catalog project row exists/);
   });
 
@@ -952,7 +949,7 @@ describe("the milestone write route", () => {
     const { dir } = await workspace("milestone-body-deadline-");
     const server = await start(dir);
     const base = new URL(server.url);
-    // Open a POST and never finish its body: the upload is still in flight.
+    // see packages/commands/src/dashboard/server.ts - the body is read outside the queue, under its own deadline.
     const pending = http.request({
       host: "127.0.0.1",
       port: Number(base.port),
@@ -961,13 +958,11 @@ describe("the milestone write route", () => {
       headers: { "content-type": "application/json", host: `127.0.0.1:${base.port}` },
     });
     pending.on("error", () => {
-      /* the deadline or the teardown below closes it; neither is this test's subject */
+      /* see packages/commands/src/dashboard/server.ts - the deadline or the teardown below closes it. */
     });
     pending.write("{");
     try {
-      // An unrelated read must answer WHILE that upload is unfinished. Reading the body
-      // outside the shared queue is what makes this pass; inside it, this read would
-      // wait for the stalled client.
+      // see packages/commands/src/dashboard/server.ts - an unrelated read answers while that upload is unfinished.
       const read = await Promise.race([
         raw(new URL("/api/projects", server.url).href),
         new Promise<{ status: number }>((resolve) => setTimeout(() => resolve({ status: 0 }), 4_000)),
@@ -995,8 +990,7 @@ describe("the milestone write route", () => {
     );
     const server = await start(dir);
     try {
-      // GET on the milestone path is the READ half, not a write: it answers the
-      // milestone view like any other dashboard read, and needs no execution store.
+      // see packages/engine/src/store-read.ts - GET on the milestone path is the read half and needs no execution store.
       const read = await raw(new URL("/api/milestones?project=proj", server.url).href);
       const body = JSON.parse(read.body) as { data?: { projectId?: string } };
       expect([read.status, body.data?.projectId]).toEqual([200, "proj"]);
