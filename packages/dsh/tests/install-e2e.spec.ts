@@ -50,8 +50,7 @@
  *       installed deployment. The artifact bundle keeps the entry's frozen
  *       export surface (no probe symbol exported), so the pin observes the
  *       probe's contract structurally: canary dispatch + brand stamp +
- *       unchanged wrapper key surface. Step 4b pins the surface on the
- *       locally packed artifact unconditionally.
+ *       unchanged wrapper key surface.
  *   6. The HOST config-stack re-composition is modeled (the real app's
  *      HMR/typert path): the fallbacks effective readback reads the row
  *      config captured at apply time, so after the seed write the host
@@ -75,6 +74,7 @@ import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { load as parseYaml } from 'js-yaml'
 import { bootApp, startInfo, type BootResult, type FakeSettingsRegistry } from './harness.ts'
 import { fallbacksService } from '../src/gates/fallbacks-probe.ts'
 import { subagentRoleIds } from '../src/gates/agent-personas.ts'
@@ -297,6 +297,19 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     expect(resolve(mstarSpec!.replace(/^file:/, '')), 'the installed row resolves to this invocation’s tarball').toBe(resolve(localTarball!))
     const lockText = readFileSync(join(profileDir(dshHome), 'pnpm-lock.yaml'), 'utf8')
     expect(lockText.includes(`specifier: file:${localTarball}`), 'the lockfile records this invocation’s tarball as the mstar specifier').toBe(true)
+    const lockParsed: unknown = parseYaml(lockText)
+    let lockVersion: string | undefined
+    if (typeof lockParsed === 'object' && lockParsed !== null && 'importers' in lockParsed && typeof lockParsed.importers === 'object' && lockParsed.importers !== null && '.' in lockParsed.importers) {
+      const rootImporter: unknown = lockParsed.importers['.']
+      if (typeof rootImporter === 'object' && rootImporter !== null && 'dependencies' in rootImporter && typeof rootImporter.dependencies === 'object' && rootImporter.dependencies !== null && '@mstar-harness/dsh' in rootImporter.dependencies) {
+        const mstarEntry: unknown = rootImporter.dependencies['@mstar-harness/dsh']
+        if (typeof mstarEntry === 'object' && mstarEntry !== null && 'version' in mstarEntry && typeof mstarEntry.version === 'string') {
+          lockVersion = mstarEntry.version
+        }
+      }
+    }
+    expect(lockVersion, 'the lockfile records a resolved mstar version').toBeDefined()
+    expect(resolve(profileDir(dshHome), lockVersion!.replace(/^file:/, '')), 'the lockfile resolution points at this invocation’s tarball').toBe(resolve(localTarball!))
     const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
     expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after the local overwrite').toBe(1)
     expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after the local overwrite').toBe(1)

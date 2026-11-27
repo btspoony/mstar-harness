@@ -54,7 +54,7 @@ export async function packAndProbe(args: PackProbeArgs): Promise<PackProbeResult
       const packReport: unknown = JSON.parse(packProc.stdout)
       if (Array.isArray(packReport)) {
         const entry: unknown = packReport[0]
-        if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string' && entry.filename !== '' && basename(entry.filename) === entry.filename) {
+        if (typeof entry === 'object' && entry !== null && 'filename' in entry && typeof entry.filename === 'string' && entry.filename !== '' && basename(entry.filename) === entry.filename && entry.filename !== '.' && entry.filename !== '..') {
           packFilename = entry.filename
         }
       }

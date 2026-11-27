@@ -102,6 +102,21 @@ console.log(JSON.stringify([{ filename: '../../evil.tgz' }]))
     }
   })
 
+  test('a pack report naming the bare parent .. is rejected as a malformed report', async () => {
+    const dotdotNpm = join(fixtureRoot, 'npm-dotdot.js')
+    await writeFile(dotdotNpm, `#!/usr/bin/env bun
+console.log(JSON.stringify([{ filename: '..' }]))
+`)
+    await chmod(dotdotNpm, 0o755)
+    const result = await packAndProbe({ ...baseArgs(), npmBin: dotdotNpm })
+    try {
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.reason).toContain('no filename in the pack report')
+    } finally {
+      await rm(result.packRoot, { recursive: true, force: true })
+    }
+  })
+
   test('the successful path hands the pack root to the caller untouched', async () => {
     const result = await packAndProbe({ ...baseArgs(), npmBin: npmFixture, dshBin: dshFixture })
     if (!result.ok) throw new Error(`expected a successful probe with fixture binaries, got skip: ${result.reason}`)
