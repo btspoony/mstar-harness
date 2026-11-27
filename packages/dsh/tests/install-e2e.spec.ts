@@ -2,17 +2,13 @@
  * Task 1 — installed-deployment e2e  the
  * REAL user install loop, closed end to end.
  *
- *   1. skip-guard — three prerequisites: `dsh` bin on PATH, registry
- *      reachability for the `init` and `dsh-llm-fallbacks` rows, and a
- *      current local `@mstar-harness/dsh` build that packs and installs
- *      by `file:`. A missing prerequisite SKIPS with the reason printed
- *      (never a silent green); a skip is NOT AC-3 evidence.
+ * Pipeline:
+ *   1. skip-guard — `dsh` bin on PATH + registry reachability. A missing
+ *      prerequisite SKIPS with the reason printed (never a silent green);
+ *      a skip is NOT AC-3 evidence.
  *   2. Temp `DSH_HOME`; the REAL CLI (`packages/cli` `init --target dsh`)
  *      installs both plugin rows (`@mstar-harness/dsh` + `dsh-llm-fallbacks`)
- *      through the dsh profile surface (`dsh plugin --profile web add …`),
- *      then the locally packed tarball overwrites the registry
- *      `@mstar-harness/dsh` row — the deployment under test is the local
- *      build, never the registry build.
+ *      through the dsh profile surface (`dsh plugin --profile web add …`).
  *   3. Installed-state probe: `--dump-config` rows + the installed package
  *      layout (node-linker hoisted, `autoInstallPeers: false` — peers are
  *      NOT materialized; the host provides the seam packages, exactly the
@@ -48,11 +44,7 @@
  *       read must resolve to the branded wrapper — the probe contract
  *       (`probeRolePersonaSeam`'s branded-`ok` inputs) proven ON the
  *       installed deployment. The artifact bundle keeps the entry's frozen
- *       export surface (no probe symbol exported), so the pin observes the
- *       probe's contract structurally — see
- *       packages/dsh/src/gates/role-persona.ts `evaluateSeamProbe` — the
- *       outcome table this pin's canary dispatch + brand stamp + wrapper
- *       key-surface assertions classify on the installed deployment.
+ *       export surface (no probe symbol exported).
  *   6. The HOST config-stack re-composition is modeled (the real app's
  *      HMR/typert path): the fallbacks effective readback reads the row
  *      config captured at apply time, so after the seed write the host
