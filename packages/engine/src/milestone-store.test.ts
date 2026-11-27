@@ -235,16 +235,13 @@ describe("milestone store", () => {
       ...rows.filter((row) => row.project_id === projectId).sort((a, b) => a.ordinal - b.ordinal || (a.milestone_id < b.milestone_id ? -1 : 1)),
     ].map((row) => ({ projectId: row.project_id, name: row.name }));
     expect(envelope.data.milestones).toEqual(expected);
-    const positions = envelope.data.milestones
-      .map((entry, index) => ({ ...entry, index }))
-      .filter((entry) => entry.name.startsWith("Other ") || entry.name.startsWith("Test "));
+    const positions = envelope.data.milestones.filter((entry) => entry.name.startsWith("Other ") || entry.name.startsWith("Test "));
     expect(positions.map(({ name, projectId: subject }) => [subject, name])).toEqual([
       [otherProjectId, "Other first"],
       [otherProjectId, "Other second"],
       [projectId, "Test first"],
       [projectId, "Test second"],
     ]);
-    expect(positions.map(({ index }) => index)).toEqual([...positions.map(({ index }) => index)].sort((a, b) => a - b));
     expect(envelope.collaboration?.scope).toEqual({ kind: "repository", key: "milestone-names:repository" });
   });
   test("a staged lane refuses the milestone-name read through the existing envelope", async () => {
@@ -252,6 +249,26 @@ describe("milestone store", () => {
     mkdirSync(staged.harnessDir!, { recursive: true });
     await initializeCollaborationStore(resolveCollaborationLocation(staged));
     await expect(withStoreRead(staged, queryMilestoneNames())).rejects.toMatchObject({ code: "collaboration.not-active" });
+  });
+  test("an issue-only project without a catalog project row refuses the milestone-name read, milestone or not", async () => {
+    const absent = "names-absent-project";
+    const insertIssue = (id: string) =>
+      db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,milestone_id,disposition,issue_ref) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,null,'open',?)").run(id, absent, id, mintIssueRef());
+    insertIssue("I-NAMES-ABSENT-1");
+    try {
+      // see packages/engine/src/store-read.ts - issue-only project, no milestones: the per-project read this names read replaces refused `milestone.project-not-found`, so the joined read refuses instead of answering with an empty list.
+      await expect(withStoreRead(context, queryMilestoneNames())).rejects.toMatchObject({ code: "milestone.project-not-found", message: `[milestone.project-not-found] Project ${absent} does not exist.` });
+      // note: enforcement only lives on store-opened connections, so this legacy-shape row is staged with FKs off — it is the residue an older store can already hold.
+      db.exec("pragma foreign_keys=OFF");
+      db.prepare("insert into project_milestones(milestone_id,project_id,name,ordinal,created_at,updated_at) values('M-NAMES-ABSENT',?,'Absent milestone',0,'now','now')").run(absent);
+      db.exec("pragma foreign_keys=ON");
+      // see packages/engine/src/store-read.ts - issue-only project carrying a milestone: the same refusal, never a silent omission of the row.
+      await expect(withStoreRead(context, queryMilestoneNames())).rejects.toMatchObject({ code: "milestone.project-not-found", message: `[milestone.project-not-found] Project ${absent} does not exist.` });
+    } finally {
+      db.prepare("delete from project_milestones where milestone_id='M-NAMES-ABSENT'").run();
+      db.prepare("delete from issues where id='I-NAMES-ABSENT-1'").run();
+    }
+    await expect(withStoreRead(context, queryMilestoneNames())).resolves.toBeDefined();
   });
 
 });

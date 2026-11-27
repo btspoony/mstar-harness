@@ -379,9 +379,15 @@ export function queryMilestones(projectId: string, milestoneId?: string): StoreR
 /** see packages/engine/src/store-read.ts - one read answers every project's milestone names in the order the `projects` view lists projects, then by `ordinal`, then by `milestone_id`. */
 export type MilestoneNamesRead = { milestones: Array<{ projectId: string; name: string }> };
 
-/** see packages/engine/src/store-read.ts - the local statement keeps the `projects` view's project set (catalog projects plus projects that hold issues) and its order. */
+/** see packages/engine/src/store-read.ts - the local statement keeps the `projects` view's project set (catalog projects plus projects that hold issues) and its order; an issue-only project the catalog never registered refuses with `milestone.project-not-found`, exactly as the per-project read this names read replaces did, instead of answering with an empty or truncated list. */
 export function readMilestoneNamesOn(db: StoreDb): MilestoneNamesRead {
   guard(db);
+  const absent = db.prepare(
+    `select distinct i.project_id as id from issues i
+     where not exists (select 1 from catalog_entities c where c.kind = 'project' and c.id = i.project_id)
+     order by i.project_id asc`,
+  ).get() as { id: unknown } | undefined;
+  if (absent !== undefined) project(db, String(absent.id));
   const rows = db.prepare(
     `with project_ids as (
        select id from catalog_entities where kind = 'project'
