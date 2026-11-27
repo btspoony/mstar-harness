@@ -162,7 +162,7 @@ Mirror delivery is split by design: the engine records run leases and results (`
 
 ## Verified acceptance
 
-Each criterion of the [collaboration-authority ADR](../../adr/proposed/architecture/2026-11-21-collaboration-state-authority.md) names one owning executable scenario. `packages/cli/test/collaboration-acceptance.test.ts` maps them: it runs each named case in its own `bun test` child under `--reporter=junit` and fails when that case did not execute, was skipped, or failed, so a renamed or deleted proof fails by name instead of leaving the suite green. It adds no assertions of its own except where no owner exists — the delete-and-reclone of criterion 1 — and a case that duplicates an existing one is not written. The unsupported-move refusal also runs there, but as boundary-only evidence outside the owner map: it proves a refusal, never criterion 7.
+Each criterion of the [collaboration-authority ADR](../../adr/implemented/architecture/2026-11-21-collaboration-state-authority.md) names one owning executable scenario. `packages/cli/test/collaboration-acceptance.test.ts` maps them: it runs each named case in its own `bun test` child under `--reporter=junit` and fails when that case did not execute, was skipped, or failed, so a renamed or deleted proof fails by name instead of leaving the suite green. It adds no assertions of its own except where no owner exists — the delete-and-reclone of criterion 1 — and a case that duplicates an existing one is not written. The unsupported-move refusal also runs there, but as boundary-only evidence outside the owner map: it proves a refusal, never criterion 7.
 
 | ADR criterion | Owning scenario | Status |
 | --- | --- | --- |

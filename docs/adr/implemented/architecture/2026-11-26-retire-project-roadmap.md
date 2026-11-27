@@ -62,7 +62,7 @@ review_after: 2026-12-10
 
 ## Candidates
 
-- ? split the export into two files — docs/adr/proposed/architecture/2026-11-21-collaboration-state-authority.md
+- ? split the export into two files — docs/adr/implemented/architecture/2026-11-21-collaboration-state-authority.md
 - ? re-triage the panel locale drift — I-004202
 ```
 
@@ -107,7 +107,7 @@ The milestone timeline and the milestone write forms of the dashboard project sc
 
 ### Relationship to the collaboration authority record
 
-The [collaboration authority record](../../proposed/architecture/2026-11-21-collaboration-state-authority.md) lists roadmaps among the data collaboration owns — in its Problem, in "Separate the domains", in the `remote` fidelity paragraph and in the "All read models and gates" criterion. This decision removes roadmaps from all four sites: collaboration owns issues, milestones and portable identity, not roadmap prose. Nothing else in that record changes, and the board sits on the execution side of its split by design.
+The [collaboration authority record](../../implemented/architecture/2026-11-21-collaboration-state-authority.md) lists roadmaps among the data collaboration owns — in its Problem, in "Separate the domains", in the `remote` fidelity paragraph and in the "All read models and gates" criterion. This decision removes roadmaps from all four sites: collaboration owns issues, milestones and portable identity, not roadmap prose. Nothing else in that record changes, and the board sits on the execution side of its split by design.
 
 ## Alternatives considered
 

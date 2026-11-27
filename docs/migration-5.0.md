@@ -1,6 +1,6 @@
 # Migrating to Morning Star 5.0
 
-This page is the operator path from a 4.8.x harness to the 5.0 collaboration authority: what breaks, the exact ladder, a worked cutover with synthetic receipts, how to bind and observe a provider-selected repository, how to rebind, how to back up and restore the split authority, and how to recover from the refusals these flows return. It states the behaviour this build implements; the durable contract is [collaboration-authority.md](specs/architecture/collaboration-authority.md) and the decision record is [the collaboration authority ADR](adr/proposed/architecture/2026-11-21-collaboration-state-authority.md).
+This page is the operator path from a 4.8.x harness to the 5.0 collaboration authority: what breaks, the exact ladder, a worked cutover with synthetic receipts, how to bind and observe a provider-selected repository, how to rebind, how to back up and restore the split authority, and how to recover from the refusals these flows return. It states the behaviour this build implements; the durable contract is [collaboration-authority.md](specs/architecture/collaboration-authority.md) and the decision record is [the collaboration authority ADR](adr/implemented/architecture/2026-11-21-collaboration-state-authority.md).
 
 Everything below is a command an operator runs. No step needs source knowledge, and no step requires editing a database by hand.
 
