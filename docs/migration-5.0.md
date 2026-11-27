@@ -10,10 +10,10 @@ Every step below is a command an operator runs; none needs source knowledge, and
 | --- | --- | --- |
 | Split state | Collaboration rows live in a user-level `collaboration.db`; `{HARNESS_DIR}/store.db` keeps execution state. | [The ladder](#the-ladder) |
 | Reviewed cutover | `plan`, `apply` and `activate` replace an in-place upgrade; `store upgrade` alone stops at `collaboration.cutover-required`. | [The ladder](#the-ladder) |
-| Required mode | No `[collaboration]` mode in `.mstarc` refuses repository-scoped store verbs. | [Before you start](#before-you-start) |
+| Required mode | No `[collaboration]` mode in `.mstarc` refuses repository-scoped store verbs. | [What breaks in 5.0](#what-breaks-in-50) |
 | 4.9.x access ends | The released 4.9.x build refuses the fenced store with `store.schema-unsupported`. | [What breaks in 5.0](#what-breaks-in-50) |
 | Milestone effort | `effort_sessions` replaces `target`; an existing date becomes unestimated and never comes back. | [What breaks in 5.0](#what-breaks-in-50) |
-| Roadmap removed | `mstar roadmap export` must run on 4.9.x, once per project; 5.0 drops the domain. | [Before you start](#before-you-start) |
+| Roadmap removed | `mstar roadmap export` must run on 4.9.x, once per project; 5.0 drops the domain. | [What breaks in 5.0](#what-breaks-in-50) |
 | No rollback | Publication leaves no dual-write window; the retained pre-fence image is the only copy. | [Backup and restore](#backup-and-restore) |
 
 ## What breaks in 5.0
