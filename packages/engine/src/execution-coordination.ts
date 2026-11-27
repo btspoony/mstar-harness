@@ -1856,7 +1856,7 @@ function assertEarlierLayersPublished(context: ExecutionContext, snapshot: Workf
     // reachability: manual — the message names the runtime block ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
     throw new CoordinationError(
       "coordination.layer-unpublished",
-      `The compass \`## PR stack\` table carries no \`Accountable plan\` column, so no row records a plan layer and rows added under another header are ignored; the earlier Done plans left unrecorded are ${blocking}. Add that column and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.`,
+      `The compass \`## PR stack\` table carries no \`Accountable plan\` column, so no row records a plan layer and rows added under another header are ignored; the earlier Done plans left unrecorded are ${blocking}. Add that column and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --integration-base-sha <base> --integration-result-sha <result> (same --operation id).`,
       details,
     );
   }
@@ -1864,15 +1864,16 @@ function assertEarlierLayersPublished(context: ExecutionContext, snapshot: Workf
     // reachability: manual — the message names the runtime block ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
     throw new CoordinationError(
       "coordination.layer-unpublished",
-      `The compass carries no \`## PR stack\` section, so no layer record names any plan's publication; the earlier Done plans left unrecorded are ${blocking}. Add that section and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.`,
+      `The compass carries no \`## PR stack\` section, so no layer record names any plan's publication; the earlier Done plans left unrecorded are ${blocking}. Add that section and one row per plan, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --integration-base-sha <base> --integration-result-sha <result> (same --operation id).`,
       details,
     );
   }
   // Only the plans this reason leaves unrecorded; see skills/mstar-iteration/references/pr-stack.md
   const unrecorded = obligation.planIds.map((id) => `"${id}"`).join(", ");
+  // reachability: manual — the message names the runtime unrecorded plan ids, so no statically provable command can live in it; see skills/mstar-iteration/references/pr-stack.md
   throw new CoordinationError(
     "coordination.layer-unpublished",
-    `An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass \`## PR stack\` table and retry the same completion. The unrecorded plans are ${unrecorded}. ` +
+    `An earlier Done plan of this iteration has no PR stack row, so no layer record names its publication; add that row to the compass \`## PR stack\` table, then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> --integration-base-sha <base> --integration-result-sha <result> (same --operation id). The unrecorded plans are ${unrecorded}. ` +
       "The row names a real layer PR, or `\u2014` for an empty range, or the iteration's already-open aggregate PR; a compass without that section needs it added first, with one row per Done plan.",
     { ...details, unpublished_plan_ids: obligation.planIds },
   );

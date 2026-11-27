@@ -5028,6 +5028,10 @@ describe("execution-workflow: iteration layer publication on complete", () => {
     // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     expect(refusal.message).toContain("add that row to the compass");
     expect(refusal.message).toContain("\u2014");
+    // The completion validates the integration SHAs, so a literal retry must
+    // carry them; a bare `--file` retry fails before the repaired compass reads.
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+    expect(refusal.message).toContain("--integration-base-sha <base> --integration-result-sha <result>");
     // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
     expect(refusalFootprint(fixture.context)).toEqual(before);
   });
@@ -5089,6 +5093,8 @@ describe("execution-workflow: iteration layer publication on complete", () => {
     expect(refusal.message).toContain("`Accountable plan` column");
     expect(refusal.message).toContain("ignored");
     expect(refusal.message).toContain('"p-earlier"');
+    // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+    expect(refusal.message).toContain("--integration-base-sha <base> --integration-result-sha <result>");
   });
 
   test("an earlier store row Done with a lagging compass status still refuses the completion", async () => {
