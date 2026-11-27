@@ -347,6 +347,18 @@ plans:
   - ${planId}
 end_date: "2026-09-02"
 ---
+
+## Plans
+
+| plan_id | Name | Status | Notes |
+|---|---|---|---|
+| ${planId} | ${planId} title | Done | |
+
+## PR stack
+
+| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |
+|---|---|---|---|---|---|---|
+| s1 | ${planId} | o/r #6 | layer <- main | a -> b | landed | merged |
 `);
     const result = await definition("iteration.gate").execute({
       workflow: "wf-active-done",
@@ -384,11 +396,12 @@ plans:
     });
   });
 
-  /** A compass whose `## Plans` table marks `donePlanId` Done. */
+  /** A compass whose `## Plans` table marks `donePlanId` Done. `stack: null`
+   * omits the `## PR stack` section entirely (the aggregate-rollout shape). */
   function layerCompass(file: string, input: {
     frontmatterPlans: readonly string[];
     tablePlans: ReadonlyArray<[string, string]>;
-    stack: readonly string[];
+    stack: readonly string[] | null;
     closed?: boolean;
   }): void {
     writeFileSync(file, [
@@ -409,12 +422,14 @@ plans:
       "|---|---|---|---|",
       ...input.tablePlans.map(([id, status]) => `| ${id} | ${id} title | ${status} | |`),
       "",
-      "## PR stack",
-      "",
-      "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |",
-      "|---|---|---|---|---|---|---|",
-      ...input.stack,
-      "",
+      ...(input.stack === null ? [] : [
+        "## PR stack",
+        "",
+        "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |",
+        "|---|---|---|---|---|---|---|",
+        ...input.stack,
+        "",
+      ]),
     ].join("\n"));
   }
 
@@ -435,7 +450,10 @@ plans:
     if (result.status === "ok") {
       expect(result.data.entry).toMatchObject({
         ok: false,
-        violations: expect.arrayContaining([expect.objectContaining({ code: "lint.iteration.pr-stack-missing-row" })]),
+        violations: expect.arrayContaining([expect.objectContaining({
+          code: "lint.iteration.pr-stack-missing-row",
+          message: expect.stringContaining('"p-earlier"'),
+        })]),
       });
     }
   });
@@ -455,6 +473,60 @@ plans:
       context(cwd),
     );
     expect(result).toMatchObject({ status: "refused", code: "lint.iteration.pr-stack-missing-row" });
+    if (result.status === "refused") {
+      const gate = result.details?.gate as { violations: Array<{ code: string; message?: string }> };
+      expect(gate.violations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "lint.iteration.pr-stack-missing-row", message: expect.stringContaining(`"${planId}"`) }),
+      ]));
+    }
+  });
+
+  test("a compass with no PR stack section blocks the phase-3 window and names the Done plan", async () => {
+    const cwd = tempRoot();
+    const { harness, planId } = await activeWorkflow(cwd, "wf-layers-section-phase3", true);
+    const compass = path.join(cwd, "delivery-compass.md");
+    layerCompass(compass, {
+      frontmatterPlans: [planId],
+      tablePlans: [[planId, "Done"]],
+      stack: null,
+      closed: true,
+    });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-layers-section-phase3", compass, harness, branch: "integration/test", integration: "integration/test", target: "main" } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "refused", code: "lint.iteration.pr-stack-missing-section" });
+    if (result.status === "refused") {
+      const gate = result.details?.gate as { violations: Array<{ code: string; message?: string }> };
+      expect(gate.violations).toEqual(expect.arrayContaining([
+        expect.objectContaining({ code: "lint.iteration.pr-stack-missing-section", message: expect.stringContaining(`"${planId}"`) }),
+      ]));
+    }
+  });
+
+  test("a compass with no PR stack section reports in the phase-2 window without blocking", async () => {
+    const cwd = tempRoot();
+    const { harness, planId } = await activeWorkflow(cwd, "wf-layers-section-phase2");
+    const compass = path.join(cwd, "delivery-compass.md");
+    layerCompass(compass, {
+      frontmatterPlans: [planId],
+      tablePlans: [[planId, "InProgress"], ["p-earlier", "Done"]],
+      stack: null,
+    });
+    const result = await definition("iteration.gate").execute(
+      { workflow: "wf-layers-section-phase2", compass, harness } as never,
+      context(cwd),
+    );
+    expect(result).toMatchObject({ status: "ok", data: { transition: "phase-2-execute" } });
+    if (result.status === "ok") {
+      expect(result.data.entry).toMatchObject({
+        ok: false,
+        violations: expect.arrayContaining([expect.objectContaining({
+          code: "lint.iteration.pr-stack-missing-section",
+          message: expect.stringContaining('"p-earlier"'),
+        })]),
+      });
+    }
   });
 
   test("a complete PR stack passes both windows", async () => {

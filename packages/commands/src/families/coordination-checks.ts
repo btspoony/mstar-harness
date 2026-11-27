@@ -113,11 +113,10 @@ export function getCoordinationChecksCommandDefinitions(): readonly CommandDefin
           // `## PR stack` row. It rides the entry checklist, so the phase-2
           // window reports it without blocking execution while the phase-3
           // window, whose verdict is entry+exit, refuses on it. A compass with
-          // no `## PR stack` table at all is the lint surface's own finding —
-          // the aggregate-PR rollout legitimately carries none — so the gate
-          // only reports a Done plan whose layer row is missing.
-          const layerViolations = lintIterationCompass(compassText).violations
-            .filter((item) => item.code === "lint.iteration.pr-stack-missing-row");
+          // no `## PR stack` table at all is the same missing rows — the table
+          // is one row per plan layer, so its absence leaves every Done plan
+          // unrecorded and is refused the same way.
+          const layerViolations = lintIterationCompass(compassText).violations;
           const entryViolations = [...base.entry.violations, ...layerViolations];
           const entry = { ...base.entry, ok: entryViolations.length === 0, violations: entryViolations };
           const violations = base.allPlansDone ? [...entryViolations, ...base.exit.violations] : [];

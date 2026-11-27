@@ -1652,22 +1652,23 @@ export type IterationCompassOptions = {
 
 /**
  * The `Done` plans of a compass that no `## PR stack` row accounts for, in
- * table order. `null` when the compass carries no `## PR stack` section at all
- * — that absence is the lint's own finding, never a per-plan one, so a caller
- * that only judges earlier plans has nothing to say about it.
+ * table order, and whether the compass carries that section at all. An absent
+ * section is zero rows, never an exemption: the Done plans it should have named
+ * are exactly the ids returned, so no caller can mistake "no table" for
+ * "nothing to record".
  */
-function unpublishedCompassPlans(
+function unaccountedDonePlans(
   lines: readonly string[],
   options: IterationCompassOptions,
-): string[] | null {
+): { sectionPresent: boolean; plans: string[] } {
   const stack = compassTable(lines, "PR stack");
-  if (stack === null) return null;
   const plans = compassTable(lines, "Plans");
-  if (plans === null) return [];
+  if (plans === null) return { sectionPresent: stack !== null, plans: [] };
   const idColumn = columnIndex(plans.header, "plan_id", 0);
   const statusColumn = columnIndex(plans.header, "Status", 2);
-  const accountableColumn = columnIndex(stack.header, "Accountable plan", 1);
-  const accountable = new Set(stack.rows.map((row) => cellText(row[accountableColumn] ?? "")));
+  const accountable = stack === null
+    ? new Set<string>()
+    : new Set(stack.rows.map((row) => cellText(row[columnIndex(stack.header, "Accountable plan", 1)] ?? "")));
   const unpublished: string[] = [];
   for (const row of plans.rows) {
     const planId = cellText(row[idColumn] ?? "");
@@ -1676,13 +1677,14 @@ function unpublishedCompassPlans(
     if (accountable.has(planId)) continue;
     unpublished.push(planId);
   }
-  return unpublished;
+  return { sectionPresent: stack !== null, plans: unpublished };
 }
 
-/** The plan ids {@link lintIterationCompass} would report, for callers that
- * refuse with their own code and need the ids rather than the violations. */
+/** The Done plan ids no `## PR stack` row accounts for, for callers that
+ * refuse with their own code and need the ids rather than the violations. An
+ * absent section yields the same ids: it accounts for no plan at all. */
 export function unpublishedCompassPlanIds(text: string, options: IterationCompassOptions = {}): readonly string[] {
-  return unpublishedCompassPlans(unfencedLines(text), options) ?? [];
+  return unaccountedDonePlans(unfencedLines(text), options).plans;
 }
 
 /**
@@ -1696,13 +1698,16 @@ export function unpublishedCompassPlanIds(text: string, options: IterationCompas
  */
 export function lintIterationCompass(text: string, options: IterationCompassOptions = {}): GateResult {
   const violations: ValidationResult[] = [];
-  const found = unpublishedCompassPlans(unfencedLines(text), options);
-  if (found === null) {
+  const { sectionPresent, plans: found } = unaccountedDonePlans(unfencedLines(text), options);
+  // A compass with no `## Plans` table records no layer obligation either; the
+  // registration and compass-shape checks own that absence. The missing section
+  // is a layer finding only when a Done plan needs a row it cannot have.
+  if (!sectionPresent && found.length > 0) {
     violations.push(
       violation(
         "medium",
         "lint.iteration.pr-stack-missing-section",
-        'the compass carries no "## PR stack" section, so no plan layer can be recorded (pr-stack.md \u00a7 Records)',
+        `the compass carries no "## PR stack" section, so no plan layer can be recorded (pr-stack.md \u00a7 Records); the Done plans it leaves unrecorded are ${found.map((planId) => `"${planId}"`).join(", ")}`,
         "restore the `## PR stack` table with its `Accountable plan` column, then add one row per plan layer",
       ),
     );

@@ -318,4 +318,25 @@ ${COMPASS_STACK_HEAD}`;
     expect(lintIterationCompass(compass, { untilPlanId: "p1-store" })).toEqual({ ok: true, violations: [] });
     expect(lintIterationCompass(compass, { untilPlanId: "p9-absent" }).violations).toHaveLength(2);
   });
+
+  test("an absent PR stack section leaves every Done plan unrecorded, and the window still bounds it", () => {
+    const compass = `# Iteration compass
+
+## Plans
+
+| plan_id | Name | Status |
+|---|---|---|
+| p1-store | Store | Done |
+| p2-board | Board | Done |
+`;
+    const all = lintIterationCompass(compass);
+    expect(all.violations.map((violation) => violation.code)).toEqual(["lint.iteration.pr-stack-missing-section"]);
+    expect(all.violations[0]?.message).toContain('"p1-store"');
+    expect(all.violations[0]?.message).toContain('"p2-board"');
+    // The earlier-plan window is not widened by the absent table: only the
+    // plan above the completing one is named.
+    const earlier = lintIterationCompass(compass, { untilPlanId: "p2-board" });
+    expect(earlier.violations[0]?.message).toContain('"p1-store"');
+    expect(earlier.violations[0]?.message).not.toContain('"p2-board"');
+  });
 });

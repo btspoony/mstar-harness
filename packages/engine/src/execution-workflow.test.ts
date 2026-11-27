@@ -4904,11 +4904,13 @@ describe("execution-workflow-reopen: \u00A74.2 a closed lifecycle returns to run
  * (docs/adr/proposed/process/2026-11-27-iteration-layer-publication-lint.md)
  * ------------------------------------------------------------------------ */
 
-/** The fixture's compass with a real `## Plans` / `## PR stack` body. */
+/** The fixture's compass with a real `## Plans` / `## PR stack` body. A `null`
+ * stack omits the section entirely: the aggregate-rollout shape the rule has to
+ * refuse while an earlier Done plan has no row. */
 function writeLayerCompass(
   fixture: Fixture,
   plans: ReadonlyArray<[string, string]>,
-  stack: readonly string[],
+  stack: readonly string[] | null,
 ): void {
   writeText(fixture.compassPath, [
     "---",
@@ -4928,12 +4930,14 @@ function writeLayerCompass(
     "|---|---|---|---|",
     ...plans.map(([id, status]) => `| ${id} | ${id} title | ${status} | |`),
     "",
-    "## PR stack",
-    "",
-    "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |",
-    "|---|---|---|---|---|---|---|",
-    ...stack,
-    "",
+    ...(stack === null ? [] : [
+      "## PR stack",
+      "",
+      "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |",
+      "|---|---|---|---|---|---|---|",
+      ...stack,
+      "",
+    ]),
   ].join("\n"));
 }
 
@@ -4989,6 +4993,24 @@ describe("execution-workflow: iteration layer publication on complete", () => {
     // A reminder refused before any write: the row, the workflow and the ledger
     // are exactly as they were.
     expect(workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("a compass with no PR stack section refuses the completion while an earlier plan is Done", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-no-section", ["p-earlier"]);
+    writeLayerCompass(fixture, [["p-earlier", "Done"], [PLAN_ID, "InProgress"]], null);
+    const before = workflowFootprint(fixture.context);
+    const refusal = await refusalOf(() => mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete));
+    expect(refusal.code).toBe("coordination.layer-unpublished");
+    expect(refusal.details).toMatchObject({ plan_id: PLAN_ID, unpublished_plan_ids: ["p-earlier"] });
+    expect(refusal.message).toContain("a compass without that section needs it added first");
+    expect(workflowFootprint(fixture.context)).toEqual(before);
+  });
+
+  test("a compass with no PR stack section does not refuse the first plan, which has no earlier Done plan", async () => {
+    const { fixture, complete } = await iterationCompletion("layer-no-section-first", []);
+    writeLayerCompass(fixture, [[PLAN_ID, "InProgress"]], null);
+    const completed = await mutateExecutionPlan(domainContext(fixture.context, fixture.coordinatorCaller), complete);
+    expect(completed.data.plan.status).toBe("Done");
   });
 
   test("the same completion passes once the earlier plan's PR stack row exists", async () => {
