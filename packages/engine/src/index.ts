@@ -1359,6 +1359,7 @@ export type {
   MilestoneReceipt,
   MilestoneIssueDTO,
   MilestoneRead,
+  MilestoneNamesRead,
 } from "./milestone-store.js";
 export {
   MilestoneError,
@@ -1367,6 +1368,7 @@ export {
   removeMilestone,
   readMilestonesOn,
   queryMilestones,
+  queryMilestoneNames,
 } from "./milestone-store.js";
 export type {
   ExecutionDiagnosticExport,
