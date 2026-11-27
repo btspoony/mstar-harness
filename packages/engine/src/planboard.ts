@@ -296,12 +296,13 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
           answers.set(id, { kind: "disposition", disposition: "absent" });
           continue;
         }
-        if (code === "issue.scope-refused") {
-          answers.set(id, { kind: "refusal", code });
+        const refusal = refusalOf(error);
+        if (refusal.kind === "refusal") {
+          // see packages/engine/src/planboard.ts - // A per-id answer: this line is unverified and the next id still reads.
+          answers.set(id, refusal);
           continue;
         }
         // see packages/engine/src/planboard.ts - // A lane-level cause: no later id can answer differently.
-        const refusal = refusalOf(error);
         for (const remaining of ids) if (!answers.has(remaining)) answers.set(remaining, refusal);
         return answers;
       }

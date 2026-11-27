@@ -21,6 +21,9 @@ import {
   createRemoteScope,
   positiveCheck,
   REMOTE_IDS,
+  SECOND_IDS,
+  secondCheck,
+  secondSnapshot,
   submission,
 } from "./remote-scope.fixture.js";
 import { captureIssue, closeIssue, type CaptureInput, type MutationContext } from "./issue.js";
@@ -480,6 +483,57 @@ describe("planboard findings against a store", () => {
     const findings = (await checkPlanboard(context)).findings;
     expect(pairs(findings)).toEqual([{ code: "stale", line: 3 }]);
     expect(findings[0]!.issueId).toBe(REMOTE_IDS.issueRef);
+  });
+
+  test("a remote per-id refusal answers only its own line and the loop keeps resolving", async () => {
+    const fixture = createRemoteScope(ROOT, "planboard-remote-per-id");
+    const commit = fixture.publish({
+      projects: [
+        {
+          localProjectId: REMOTE_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: REMOTE_IDS.providerProjectId,
+          journalIssueId: REMOTE_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+        {
+          localProjectId: SECOND_IDS.projectId,
+          provider: "linear",
+          workspaceId: REMOTE_IDS.workspaceId,
+          teamId: REMOTE_IDS.teamId,
+          projectId: SECOND_IDS.providerProjectId,
+          journalIssueId: SECOND_IDS.journalIssueId,
+          writerId: REMOTE_IDS.writerId,
+        },
+      ],
+    });
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit, 3, [secondCheck()]));
+    const checkA = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, checkA, completeSnapshot(checkA), 0));
+    // see packages/engine/src/planboard.test.ts - // note: Project B declares a stream gap, so a reference that must read every
+    // selected project refuses for its own line only; a display id refuses on its own rule.
+    const checkB = secondCheck();
+    await ingestRemoteObservation(context, submission(commit, checkB, secondSnapshot(checkB, "partial"), 0));
+
+    board(
+      context.harnessDir,
+      [
+        "review_after: 2099-01-01",
+        "## Captured",
+        `- ${REMOTE_IDS.issueRef} \u2014 blocks on the second project's declared gap`,
+        "- I-000001 \u2014 a display id no remote snapshot addresses",
+      ].join("\n"),
+    );
+    const findings = (await checkPlanboard(context)).findings;
+    // see packages/engine/src/planboard.test.ts - // invariant: A per-id refusal is that line's own answer; the loop keeps going,
+    // so the next line reports the cause it actually hit rather than the previous line's.
+    expect(findings.map(({ code, line, issueId, storeCode }) => ({ code, line, issueId, storeCode }))).toEqual([
+      { code: "unverified", line: 3, issueId: REMOTE_IDS.issueRef, storeCode: "collaboration.observation-incomplete" },
+      { code: "unverified", line: 4, issueId: "I-000001", storeCode: "issue.scope-refused" },
+    ]);
   });
 });
 
