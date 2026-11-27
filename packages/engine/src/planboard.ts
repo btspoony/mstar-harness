@@ -246,6 +246,14 @@ const LANE_REFUSAL_CODES = new Set([
   "remote.unavailable",
 ]);
 
+/** see packages/engine/src/planboard.ts - // note: TEST-ONLY seam: the public fixture cannot stage a per-id refusal followed by a resolving line, because every reference read spans all selected projects (a partial project refuses them all) and a duplicate reference is refused by the generation-wide unique index. A regression replaces the single line's read only. Production runs without a reader. */
+let remoteIssueReadForTest: ((view: RemoteReadView, id: string) => RemoteIssueRead) | undefined;
+export function setRemoteIssueReadForTest(
+  reader: ((view: RemoteReadView, id: string) => RemoteIssueRead) | undefined,
+): void {
+  remoteIssueReadForTest = reader;
+}
+
 function refusalOf(error: unknown): IssueAnswer {
   const code = (error as { code?: unknown } | null)?.code;
   const stable = typeof code === "string" ? code : "store.unreadable";
@@ -286,7 +294,7 @@ async function answersFor(context: StoreContext, ids: readonly string[]): Promis
     }
     for (const id of ids) {
       try {
-        const read = remoteIssueRead(view, id);
+        const read = (remoteIssueReadForTest ?? remoteIssueRead)(view, id);
         // see packages/engine/src/planboard.ts - // note: A provider-only answer is no MStar subject, so the line names an
         // issue this store does not hold.
         answers.set(id, { kind: "disposition", disposition: read.kind === "native" ? "absent" : read.detail.disposition });
