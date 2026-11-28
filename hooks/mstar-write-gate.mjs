@@ -761,12 +761,6 @@ function recordObservedSelector(context, seen) {
     rmSync(tmp, { force: true });
   }
 }
-function readableGeneration(raw) {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw))
-    return;
-  const value = raw.generation;
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
 function remoteBindingRecorded(context) {
   try {
     const raw = JSON.parse(readFileSync3(join4(context.harnessDir, COLLABORATION_BINDING_FILE), "utf8"));
@@ -787,15 +781,22 @@ function resolvePublishedSelector(context, mainRoot, repoKey, mode, declaredMode
     }
     return null;
   }
-  recordObservedSelector(context, { repoKey, selectorCommit: commit });
-  const payload = selectorPayload(mainRoot, commit);
+  let payload;
+  try {
+    payload = selectorPayload(mainRoot, commit);
+  } catch (error) {
+    recordObservedSelector(context, { repoKey, selectorCommit: commit });
+    throw error;
+  }
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit)
     selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  const generation = readableGeneration(payload);
-  if (generation !== undefined)
-    recordObservedSelector(context, { repoKey, selectorCommit: commit, generation });
   const selector = parseSelector(payload, repoKey, mode, declaredMode);
+  recordObservedSelector(context, {
+    repoKey,
+    selectorCommit: commit,
+    generation: selector.generation
+  });
   return {
     commit,
     generation: selector.generation,

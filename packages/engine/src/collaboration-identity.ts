@@ -494,12 +494,6 @@ function recordObservedSelector(context: StoreContext, seen: SelectorObservation
   }
 }
 
-function readableGeneration(raw: unknown): number | undefined {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const value = (raw as Record<string, unknown>).generation;
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 function remoteBindingRecorded(context: StoreContext): boolean {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(context.harnessDir, COLLABORATION_BINDING_FILE), "utf8"));
@@ -530,13 +524,21 @@ function resolvePublishedSelector(
     }
     return null;
   }
-  recordObservedSelector(context, { repoKey, selectorCommit: commit });
-  const payload = selectorPayload(mainRoot, commit);
+  let payload: unknown;
+  try {
+    payload = selectorPayload(mainRoot, commit);
+  } catch (error) {
+    recordObservedSelector(context, { repoKey, selectorCommit: commit });
+    throw error;
+  }
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  const generation = readableGeneration(payload);
-  if (generation !== undefined) recordObservedSelector(context, { repoKey, selectorCommit: commit, generation });
   const selector = parseSelector(payload, repoKey, mode, declaredMode);
+  recordObservedSelector(context, {
+    repoKey,
+    selectorCommit: commit,
+    generation: selector.generation,
+  });
   return {
     commit,
     generation: selector.generation,
