@@ -120,7 +120,6 @@ function findRepoRoot(): string {
   }
 }
 
-/** Extract the first ```gitignore fence from a skill file. */
 function gitignoreFence(skillPath: string): string {
   const content = readFileSync(skillPath, "utf8");
   const block = /```gitignore\n([\s\S]*?)```/.exec(content);
@@ -1581,8 +1580,6 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
       expect(result.severity).toBe("medium");
-      // The diagnostic reports the .mstar/ set, which is the process root
-      // alone: tracked results live outside it.
       expect(result.message).toContain(".mstar/");
       expect(emitGitignoreSnippet().split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#")))
         .toEqual([".mstar/"]);

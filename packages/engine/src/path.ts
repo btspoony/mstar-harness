@@ -1137,6 +1137,7 @@ export function emitGitignoreSnippet(): string {
  * so its rules do not declare. `.mstarc` alone does not declare either. This
  * is a mechanical line scan — no escaping, glob, precedence or custom-root
  * semantics.
+ * see skills/mstar-conventions/references/git-tracking-and-gitignore.md
  */
 const HARNESS_ROOT_DECLARATION = /^!?\/?\.mstar(?:\/|$)/;
 
@@ -1195,8 +1196,6 @@ export function validateGitignore(root: string): ValidationResult {
       .map((line) => line.trim())
       .filter((line) => line.length > 0),
   );
-  // Every canonical entry itself states a `.mstar/` root declaration, so an
-  // undeclared file cannot hold any of them.
   const missing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
   return {
     ok: false,

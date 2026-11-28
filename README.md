@@ -115,7 +115,7 @@ A **development** delivery runs each plan through plan-level QC — three indepe
 
 An iteration locks direction with you, runs that cycle for every plan it takes on, publishes layer PRs during execute, and closes out once; without one, the cycle runs for a single plan. A verification or report-only deliverable ends at its agreed completion, with no PR or merge. Plan completion, merge-ready and merged are different facts: delivery ends only at a verified merge plus Workflow Close Out. Merging is a separate authorization — `owner-gated`, `reviewed-auto` (a settled, posted `ship it` at the current head), or `reviewed-bot` (the attached bot's newest passing review on that head; a missing policy goes back to Phase 1). Branch cleanup is a separate post-close step.
 
-The engine checks the mechanically checkable parts: state transitions, branch/worktree alignment, dispatch preconditions, plan and issue bookkeeping. Checks are advisory unless `enforcement: hard` is set. Process state lives in `.mstar/`, ignored by the scaffold's canonical `.gitignore` snippet; the installer does not touch `.gitignore`.
+The engine checks the mechanically checkable parts: state transitions, branch/worktree alignment, dispatch preconditions, plan and issue bookkeeping. Checks are advisory unless `enforcement: hard` is set, and whether a violation can actually block depends on the host. Process state lives in `.mstar/`, ignored by the scaffold's canonical `.gitignore` snippet; the installer does not touch `.gitignore`.
 
 ## Dashboard
 

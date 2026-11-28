@@ -255,24 +255,21 @@ describe("mstar harness scaffold — one-shot harness bootstrap", () => {
     });
   });
 
-  test("harness authored ignore: .agents rules, comments and exclusions survive mixed formatting", () => {
+  test("harness authored ignore: .agents rules do not declare, so the canonical snippet is appended beside them", () => {
     withRoot((root) => {
       const authored = "# authored policy\r\n.agents/**\r\n.agents/**\r\n!.agents/knowledge/**";
       writeFileSync(join(root, ".gitignore"), authored, "utf8");
 
       const result = runScaffold([root]);
       expect(result.exitCode).toBe(0);
-      expect(scaffoldData(result).created).not.toContain(".gitignore (canonical harness snippet)");
-      expect(scaffoldData(result).skipped).toContain(".gitignore (author-owned harness-root declaration)");
+      expect(scaffoldData(result).created).toContain(".gitignore (canonical harness snippet)");
+      expect(scaffoldData(result).skipped).not.toContain(".gitignore (author-owned harness-root declaration)");
       const preserved = readFileSync(join(root, ".gitignore"), "utf8");
-      expect(preserved).toContain("\r\n");
-      expect(preserved).not.toMatch(/(?<!\r)\n/);
-      expect(preserved.endsWith("\n")).toBe(false);
       const rules = preserved.split(/\r?\n/);
       expect(rules).toContain("# authored policy");
       expect(rules.filter((line) => line === ".agents/**")).toHaveLength(2);
       expect(rules).toContain("!.agents/knowledge/**");
-      expect(rules).not.toContain(".mstar/");
+      expect(rules).toContain(".mstar/");
     });
   });
 

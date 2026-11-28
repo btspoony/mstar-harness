@@ -116,7 +116,7 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 迭代先与你锁定方向，对承接的每个 plan 跑一遍上述循环，执行期间按层发布 PR，最后统一收尾；不跑迭代时只为一个 plan 执行。验证或 report-only 交付物在约定完成条件时结束，没有 PR 或合并。plan 完成、merge-ready 与已合并是三件不同的事：只有核实合并并走完 Workflow Close Out，交付才结束。是否合并是单独的授权 —— `owner-gated`、`reviewed-auto`（当前 head 上有 settled、已 posted 的 `ship it`）或 `reviewed-bot`（挂载 bot 在该 head 上最新一次过门 review；未记录 policy 会回到 Phase 1）。分支清理是收尾之后的显式动作。
 
-引擎校验可机械校验的部分：状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。默认 advisory，除非设置 `enforcement: hard`。过程状态存放在 `.mstar/`，由 scaffold 的规范 `.gitignore` 片段忽略；安装器不改动 `.gitignore`。
+引擎校验可机械校验的部分：状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。默认 advisory，除非设置 `enforcement: hard`；能否真正阻断取决于宿主。过程状态存放在 `.mstar/`，由 scaffold 的规范 `.gitignore` 片段忽略；安装器不改动 `.gitignore`。
 
 ## Dashboard：本地看板
 
