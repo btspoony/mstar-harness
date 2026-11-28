@@ -8,7 +8,7 @@ Assume the product launched on its first day today, with today's real requiremen
 
 ## Recon
 
-No batch is selected before this recon exists; an incomplete recon blocks selection, and the round names the missing evidence instead of guessing a candidate. The recon is six inventories, one row each, answered with `file:line` evidence — or `spec:line ↔ code:line` for a deviation — and recorded in the round's plan or in the audit report the round reuses, so it adds no file type and no directory:
+No batch is selected before this recon exists; an incomplete recon blocks selection, and the round names the missing evidence instead of guessing a candidate. The recon is six inventories, one row each, answered with `file:line` evidence — or `spec:line ↔ code:line` for a deviation — and recorded in the governance round's plan — the plan that carries this round's batch rows — or in the audit report the round reuses, so it adds no file type and no directory; a `dry-run` writes nothing and returns it instead:
 
 | Inventory | The question it answers | Evidence |
 |---|---|---|
@@ -61,6 +61,7 @@ Reject a governance candidate whose only justification is one of these:
 
 The round ends when any of these holds, and the report names which one:
 
+- The recon cannot be completed: no batch is selected, and the missing evidence is named.
 - No candidate survives the rejection list with an evidence-backed net complexity reduction.
 - The round's budget is spent — the `rounds N` the invocation states, one batch when it states none, with a value that is not a positive integer refused before the first batch and both retries named. `rounds` bounds consecutive batches inside one invocation; under an iteration each batch is one of its business plans, so the iteration's own plan budget can end the work earlier. Report the completed batches and the remaining pool, not a partial batch.
 - The next move needs a product decision, an architecture decision, or a destructive migration: capture it per `mstar-project-governance` § Issue capture and end the round. A later run needs that decision and the captured issue; the captured decision is not authority to act on it.

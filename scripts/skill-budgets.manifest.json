@@ -23,7 +23,7 @@
   { "file": "skills/mstar-branch-worktree/references/parallel-writable-pre-dispatch.md", "maxLines": 70 },
   { "file": "skills/mstar-branch-worktree/references/worktree-cleanup.md", "maxLines": 50 },
   { "file": "skills/mstar-coding-behavior/SKILL.md", "maxLines": 76 },
-  { "file": "skills/mstar-coding-behavior/references/architecture-governance.md", "maxLines": 80 },
+  { "file": "skills/mstar-coding-behavior/references/architecture-governance.md", "maxLines": 76 },
   { "file": "skills/mstar-coding-behavior/references/comment-cleanup.md", "maxLines": 70 },
   { "file": "skills/mstar-coding-behavior/references/comments.md", "maxLines": 70 },
   { "file": "skills/mstar-coding-behavior/references/constraint-ladder.md", "maxLines": 40 },
