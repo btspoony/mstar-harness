@@ -538,8 +538,8 @@ function gitProbe(mainRoot, args) {
 function selectorUnavailable(cause) {
   throw new CollaborationIdentityError("remote.selector-unavailable", `${cause}. A remote selection is proven only by a live lookup of ${AUTHORITY_REF} at the canonical origin, so no ` + `authority was selected: restore access to that remote (publishing the reviewed selector when it is genuinely ` + `missing), then re-run`);
 }
-function selectorStale(cause) {
-  throw new CollaborationIdentityError("collaboration.stale-binding", `${cause}. Inspect the published selector and this checkout's binding with mstar path resolve, then complete the ` + `reviewed remote bind for this checkout; nothing was read as collaboration authority`);
+function selectorStale(cause, recovery) {
+  throw new CollaborationIdentityError("collaboration.stale-binding", `${cause}. ${recovery ?? "Inspect the published selector and this checkout's binding with mstar path resolve, then " + "complete the reviewed remote bind for this checkout; nothing was read as collaboration authority"}`);
 }
 function lookupSelector(mainRoot) {
   let out;
@@ -774,10 +774,10 @@ function resolvePublishedSelector(context, mainRoot, repoKey, mode, declaredMode
   if (commit === null) {
     const seen = observedSelector(context);
     if (seen !== null && seen.repoKey === repoKey) {
-      selectorStale(`This checkout observed selector ${seen.selectorCommit}` + `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`);
+      selectorStale(`This checkout observed selector ${seen.selectorCommit}` + `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`, SELECTOR_ABSENT_RECOVERY);
     }
     if (remoteBindingRecorded(context)) {
-      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`, SELECTOR_ABSENT_RECOVERY);
     }
     return null;
   }
@@ -886,6 +886,7 @@ var SAFE_SEGMENT;
 var SAFE_REPO_ID;
 var DEFAULT_PORT;
 var SAFE_HOST;
+var SELECTOR_ABSENT_RECOVERY;
 var LINEAR_ID;
 var CANONICAL_SHA256;
 var GIT_OBJECT_ID;
@@ -905,6 +906,7 @@ var init_collaboration_identity = __esm(() => {
   SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
   DEFAULT_PORT = { "https:": "443", "http:": "80", "ssh:": "22" };
   SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
+  SELECTOR_ABSENT_RECOVERY = `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin to keep this checkout remote, or declare ` + `'mode=local' in ${MSTARC_FILE} when it no longer should be; the reviewed and observe verbs cannot bind a ref that ` + `the origin does not publish, so bind is not the recovery here`;
   LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
   GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;

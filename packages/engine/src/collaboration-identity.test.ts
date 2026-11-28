@@ -550,6 +550,7 @@ describe("remote selector resolution", () => {
     const deleted = refusal(() => resolveAt(repo));
     expect(deleted.code).toBe("collaboration.stale-binding");
     expect(deleted.message).toContain(commit);
+    expect(deleted.message).toContain("Re-publish");
   });
 
   test("a malformed published selector refuses remote selection", () => {

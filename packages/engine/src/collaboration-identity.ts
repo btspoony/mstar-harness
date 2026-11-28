@@ -250,13 +250,18 @@ function selectorUnavailable(cause: string): never {
   );
 }
 
-function selectorStale(cause: string): never {
+function selectorStale(cause: string, recovery?: string): never {
   throw new CollaborationIdentityError(
     "collaboration.stale-binding",
-    `${cause}. Inspect the published selector and this checkout's binding with mstar path resolve, then complete the ` +
-      `reviewed remote bind for this checkout; nothing was read as collaboration authority`,
+    `${cause}. ${recovery ?? "Inspect the published selector and this checkout's binding with mstar path resolve, then " +
+      "complete the reviewed remote bind for this checkout; nothing was read as collaboration authority"}`,
   );
 }
+
+const SELECTOR_ABSENT_RECOVERY =
+  `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin to keep this checkout remote, or declare ` +
+  `'mode=local' in ${MSTARC_FILE} when it no longer should be; the reviewed and observe verbs cannot bind a ref that ` +
+  `the origin does not publish, so bind is not the recovery here`;
 
 function lookupSelector(mainRoot: string): string | null {
   let out: string;
@@ -517,10 +522,14 @@ function resolvePublishedSelector(
       selectorStale(
         `This checkout observed selector ${seen.selectorCommit}` +
           `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
       );
     }
     if (remoteBindingRecorded(context)) {
-      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+      selectorStale(
+        `This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
+      );
     }
     return null;
   }
@@ -682,10 +691,14 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
       selectorStale(
         `This checkout observed selector ${seen.selectorCommit}` +
           `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
       );
     }
     if (remoteBindingRecorded(context)) {
-      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+      selectorStale(
+        `This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
+      );
     }
     return;
   }
