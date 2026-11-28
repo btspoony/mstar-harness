@@ -31,6 +31,10 @@ Start from the user's original outcome, not from the machinery already built.
 - Centralize and reuse sources of truth for prompts, contracts, and data instead of copying them; do not invent an abstraction framework to do so.
 - Mark a deliberate bounded shortcut with `simplify:` and its ceiling/bound. For an unavoidable workaround, explain why, label it `simplify:` or `temporary:`, and record its bound in the existing plan/status artifact before claiming completion. A `temporary` marker must cite that artifact.
 
+### Architecture governance rounds
+
+A round whose target is the codebase's **shape** — parallel implementations of one semantic, one concept scattered across callers, layers that forward instead of hiding, a settled rule held only by prose — is judged by `references/architecture-governance.md`, not by how many files it can touch.
+
 ### Agent-facing products
 
 Treat ordinary agent mistakes as expected usage. Prioritize **discoverability, fault tolerance, and information fidelity**:
@@ -64,6 +68,7 @@ Completion means the requested behavior meets its acceptance criteria, supported
 - `references/evidence-selection.md` — load when choosing which checks evidence a change, or judging whether a result is enough to claim done.
 - `references/test-reliability.md` — load when the change adds, reviews or diagnoses a test that owns a port, process, clock, temporary root, global state or async teardown.
 - `references/constraint-ladder.md` — load when a correction recurs, to pick the strongest constraint that survives it.
+- `references/architecture-governance.md` — load when a change's target is the codebase's shape rather than one feature: the seven properties and their owners, batch selection by total complexity, closed-batch conditions, rejected moves, stop conditions.
 - `references/comments.md` + `references/comment-cleanup.md` — load the first when judging whether a comment should exist or which shape it needs; the second when triaging an existing comment corpus.
 - Only when working under Morning Star lifecycle or assignments, follow the existing authorities: `mstar-harness-core` (lifecycle, safeguards, gates, and Done ownership), `mstar-roles` (identity and Assignment skill-preset selection), and `mstar-branch-worktree` / `mstar-dispatch-gates` (assigned checkout and delegation authority when applicable).
 

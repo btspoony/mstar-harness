@@ -5,7 +5,12 @@ import { retireCodexQaAgent } from "../src/adapters/codex-agent-files";
 
 const adapterUrl = new URL("../src/adapters/codex.ts", import.meta.url).href;
 const repoAgents = new URL("../../../codex/agents/", import.meta.url).pathname;
+const repoCommands = new URL("../../../commands/", import.meta.url).pathname;
 const names = fs.readdirSync(repoAgents).filter((name) => name.endsWith(".toml"));
+const commandNames = fs
+  .readdirSync(repoCommands)
+  .filter((name) => name.endsWith(".md"))
+  .map((name) => name.slice(0, -".md".length));
 
 const legacyQa = `name = "qa-engineer"
 description = "Morning Star QA Engineer: test planning, automated tests, verification evidence, and acceptance validation."
@@ -40,7 +45,7 @@ function fixture(prefix = "codex-agent-test-") {
   fs.writeFileSync(path.join(source, ".codex-plugin/plugin.json"), "{}");
   fs.cpSync(repoAgents, path.join(source, "codex/agents"), { recursive: true });
   fs.mkdirSync(path.join(source, "commands"));
-  for (const name of ["iteration-start", "iteration-drive", "iteration-loop", "codebase-audit", "codebase-comment-cleanup", "amazing-test-audit", "amazing-pr-review", "amazing-e2e-check"]) {
+  for (const name of commandNames) {
     fs.writeFileSync(path.join(source, "commands", `${name}.md`), "command");
   }
   fs.mkdirSync(path.join(root, "bin"));
