@@ -278,7 +278,6 @@ function asCatalogLifecycle(value: unknown): CatalogLifecycle {
 
 type CatalogInputs = {
   catalogRevision: number | null;
-  /** note: The execution revision the bindings were read at (same transaction). */
   executionRevision: number | null;
   bindings: Array<{ workflowId: string; rootKind: CatalogRootKind; relativePath: string }>;
   compassDocs: Array<{
@@ -289,13 +288,11 @@ type CatalogInputs = {
     rootKind: CatalogRootKind;
     relativePath: string;
   }>;
-  /** note: Set when the collaboration catalog could not be read at all. */
   unavailable: { code: string; message: string } | null;
 };
 
 type CatalogDocumentRow = { id: string; rootKind: CatalogRootKind; relativePath: string; documentKind: string; lifecycle: string; revision: number };
 
-/** invariant: A refusal's stable code (the capture reports it, never a guess). */
 function catalogRefusalCode(error: unknown): string {
   if (typeof error === "object" && error !== null && "code" in error) {
     const { code } = error;
@@ -304,14 +301,6 @@ function catalogRefusalCode(error: unknown): string {
   return "collaboration.unreadable";
 }
 
-/**
- * invariant: The catalog side of a capture, composed from its two owning sources: the
- * portable catalog rows/revision live in the collaboration store, while the
- * checkout-specific execution bindings stay in the execution store. Each is
- * read once, on its own connection; no cross-file SQL and no transaction spans
- * the two. A collaboration catalog that cannot be read is reported as
- * unavailable so the capture blocks instead of publishing guessed rows.
- */
 async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> {
   const empty: CatalogInputs = { catalogRevision: null, executionRevision: null, bindings: [], compassDocs: [], unavailable: null };
 
@@ -320,9 +309,6 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
     const handle = await openCollaborationStore(context, "read");
     try {
       const db = handle.db;
-      // invariant: One source-local snapshot: the revision and every catalog row this
-      // capture renders come from the same instant, so a competing catalog
-      // write cannot pair old rows with a newer revision.
       db.exec("begin deferred");
       const meta = db.prepare("select catalog_revision from collaboration_meta where id = 1").get() as
         | { catalog_revision?: unknown }
@@ -416,12 +402,6 @@ async function readCatalogInputs(context: StoreContext): Promise<CatalogInputs> 
   };
 }
 
-/**
- * invariant: The checkout-specific bindings AND the execution revision stay in the
- * execution store, read in ONE source-local transaction: the revision a capture
- * reports is the revision the bindings were read at, so a binding that moves
- * cannot be published under a newer stamp.
- */
 async function readExecutionBindings(
   context: StoreContext,
 ): Promise<{ bindings: CatalogInputs["bindings"]; revision: number | null }> {
@@ -452,7 +432,6 @@ async function readExecutionBindings(
       try {
         handle.db.exec("rollback");
       } catch {
-        // note: connection-level failure during rollback -- nothing was committed
       }
       throw error;
     }
@@ -584,9 +563,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   const inputs = await readCatalogInputs(context);
   const capturedExecutionRevision = inputs.executionRevision;
   if (inputs.unavailable !== null) {
-    // invariant: The collaboration catalog is a declared input: an unreadable one blocks
-    // publication with its own code instead of publishing rows whose compass
-    // membership and pins were never observed.
     const sources: ProjectionSourceDigest[] = [];
     return {
       formatVersion: PROJECTION_FORMAT_VERSION,
@@ -915,13 +891,6 @@ async function captureExecutionProjectionSources(context: StoreContext): Promise
   }
 }
 
-/**
- * Fingerprint (contract §5): SHA-256 over the sorted
- * `(canonical source key, existence/readability state, SHA-256 of the raw
- * bytes)` tuples, plus the projection format version and the collaboration
- * catalog revision (the catalog identity the compass paths and pin revisions
- * came from). mtime and size are deliberately absent.
- */
 function computeSourceSetHash(catalogRevision: number | null, sources: ProjectionSourceDigest[]): string {
   const tuples = sources
     .map((source) => [source.sourceKey, source.state, source.sha256 ?? "-"].join("\u0000"))
@@ -1475,11 +1444,6 @@ function selectWhereIn<T>(db: StoreDb, sql: (placeholders: string) => string, id
   return rows;
 }
 
-/**
- * invariant: The collaboration catalog revision this instant, or null when the optional
- * catalog source is unreadable. Publication compares capture.publish-order
- * evidence separately from the execution transaction, never inside it.
- */
 async function currentCatalogRevision(context: StoreContext): Promise<number | null> {
   try {
     const handle = await openCollaborationStore(context, "read");
@@ -1514,9 +1478,6 @@ async function attemptPublication(context: StoreContext, capture: ProjectionCapt
   try {
     assertProjectionTables(handle);
     db.exec("begin immediate");
-    // invariant: Arm/authority agreement, decided INSIDE the publication transaction: a
-    // capture must not publish after the execution authority left active.
-    // A store below migration 4 has no execution_meta and cannot activate.
     const executionMetaTable = db
       .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'execution_meta'")
       .get() as { n?: number } | undefined;

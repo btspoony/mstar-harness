@@ -1,26 +1,3 @@
-/**
- * `Overview` — the project's landing view model.
- *
- * Fact set, fixed by IA §8.2 (and nothing else):
- *
- *  - **all** active workflows, one compact row each (id, kind, phase,
- *    `done/total`, status);
- *  - open residuals by severity: **five rows always**, zeros included, with a
- *    reconciling total;
- *  - **up to three** milestones (status, effort sessions, progress, open count);
- *  - the latest iteration (id, compass status, plan count, the five gate steps
- *    with the current one marked);
- *  - the issue-flow series: cumulative captured and retired per dated bucket, the
- *    dated open count beside the store's recorded open, and the undated-event count;
- *  - the projection state.
- *
- * The flow series is mapped, not recomputed: every number comes from
- * `overview.issueFlow` (contract §6), including the "dated history closes at N" gap.
- *
- * Deliberately absent, per IA §8.1: the identity line's version and
- * `{HARNESS_DIR}`, and every counter (`storeRevision`, `catalogRevision`,
- * `builtAt`, `checkedAt`).
- */
 import type { IssueFlow, IterationDTO, IterationGateStep, OverviewDTO, ResidualCounts } from "@mstar-harness/engine";
 import type { Resolved } from "./state.ts";
 import { resolveMember } from "./state.ts";

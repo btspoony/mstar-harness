@@ -86,8 +86,6 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const paths = error !== null && typeof error === "object" && "paths" in error && Array.isArray(error.paths)
     ? error.paths as string[]
     : [];
-  // note: An engine-authored refusal carries the durable facts of its own outcome; a remote
-  // enqueue's operation id and state are exactly what the caller must not lose.
   const engineDetails = error !== null && typeof error === "object" && "details" in error
     && error.details !== null && typeof error.details === "object" && !Array.isArray(error.details)
     ? error.details as Record<string, unknown>
@@ -99,8 +97,6 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
   let code = `${id}.internal-error`;
   if (error !== null && typeof error === "object" && "code" in error && typeof error.code === "string") code = error.code;
   return refusalEnvelope({ command: id, status: "refused", code, exitCode: 1, message, details , recovery: code === "remote.effect-pending"
-    // invariant: A durable enqueue is never a catalog success: the recorded outbox state is
-    // the outcome, and the same verb replays only after its provider intent is settled.
     ? "The write is durably enqueued, not a catalog success. Inspect it with mstar store collaboration remote outbox-show --harness <abs> --operation <intent-id>, dispatch the one permit with mstar store collaboration remote outbox-dispatch --harness <abs> --operation <intent-id>, record the provider result with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->, then reissue this same verb with the same operation id."
     : id === "catalog.discover"
         ? "Set readable repository roots and resolve any inaccessible paths. Run mstar catalog discover."

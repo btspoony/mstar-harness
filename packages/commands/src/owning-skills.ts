@@ -4,7 +4,6 @@
  * is a name only — the skill owns the semantics, never the envelope.
  */
 
-/** note: Family defaults: one owning skill for the whole `<prefix>.*` group, where the prefix is one or more dot segments. */
 const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   persist: "mstar-artifacts",
   workflow: "mstar-artifacts",
@@ -19,8 +18,6 @@ const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   // skill that owns those points owns the verb.
   planboard: "mstar-iteration",
   store: "mstar-conventions",
-  // why: The remote lane's procedure (provider-authoritative collaboration driven by the host's
-  // Linear MCP) is owned by the skill that documents it; other store verbs keep mstar-conventions.
   "store.collaboration.remote": "mstar-remote-collaboration",
   sdd: "mstar-sdd",
   audit: "mstar-audit",

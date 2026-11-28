@@ -63,7 +63,6 @@ function issueRow(id: string): { project_id: string; identity_key: string; miles
 function operation(operationId: string): unknown {
   return db.prepare("select 1 from collaboration_operations where operation_id = ?").get(operationId);
 }
-/** note: One record's stable reference, the value a move carries to the destination unchanged. */
 function carriedRef(issueId: string): string {
   const row = db.prepare("select issue_ref from issues where id = ?").get(issueId);
   if (row === null || typeof row !== "object") throw new Error(`${issueId} returned no row`);
@@ -71,10 +70,6 @@ function carriedRef(issueId: string): string {
   if (typeof value !== "string") throw new Error(`${issueId} carries no issue_ref`);
   return value;
 }
-/**
- * invariant: A destination lane is user-level, so this file's fixtures must never reach the
- * operator's `~/.mstar`: one spy serves the whole file, installed before the first lane exists.
- */
 const HOME = join(root, "user-home");
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(async () => {
@@ -411,7 +406,6 @@ describe("issue project move", () => {
 });
 
 describe("issue move --to-authority", () => {
-  /** note: One ACTIVE destination lane of its own `repoKey`, holding the project the move names. */
   async function destinationLane(projectId: string, suffix = ""): Promise<string> {
     const repoKey = `github.com/acme/issue-move-dest-${projectId}${suffix}`;
     const location = collaborationLocationOfRepoKey(repoKey, "local");
@@ -450,14 +444,12 @@ describe("issue move --to-authority", () => {
       destinationIssueId: "I-000001",
     });
     expect(receipt.issueRef).toMatch(/^mstar:issue:/);
-    // invariant: The source record is deleted here and the destination holds the same reference.
     expect(db.prepare("select count(*) as n from issues where id = ?").get(issue.issueId)).toEqual({ n: 0 });
     const destination = collaborationLocationOfRepoKey(repoKey, "local");
     const landed = await readCollaborationStage(destination, ({ db: lane }) =>
       lane.prepare("select id, project_id, issue_ref from issues").all(),
     );
     expect(landed).toEqual([{ id: "I-000001", project_id: "p-authority-dest", issue_ref: receipt.issueRef }]);
-    // invariant: The same command replays; it neither publishes twice nor mints a second record.
     expect(await moveIssue(context, issue.issueId, { projectId: "p-authority-dest", reason: "another authority", toAuthority: repoKey }, mutation))
       .toEqual({ ...receipt, resumedFrom: "published" });
   }, 60_000);
@@ -479,7 +471,6 @@ describe("issue move --to-authority", () => {
       ),
     ).rejects.toMatchObject({ code: "milestone.revision-conflict" });
     expect(issueRow(issue.issueId).project_id).toBe(projectA);
-    // invariant: A stale store view never reaches the freeze, so the move leaves no row at all.
     expect(
       db.prepare("select count(*) as n from issue_moves where operation_id = 'move-staged-stale'").get(),
     ).toEqual({ n: 0 });
@@ -501,8 +492,6 @@ describe("issue move --to-authority", () => {
       destinationProject: "p-authority-fence",
       reason: "fenced",
     });
-    // invariant: The lane's trigger is the fence, and the issue-domain entry restates its abort as the
-    // partial outcome naming the move, so the operator resumes that move instead of retrying a write.
     const refused = await appendOccurrence(
       context,
       issue.issueId,
@@ -526,8 +515,6 @@ describe("issue move --to-authority", () => {
       db.prepare("select count(*) as n from occurrences where occurrence_key = 'occ-during-fence'").get(),
     ).toEqual({ n: 0 });
 
-    // invariant: A SECOND move of the same record refuses at the ledger's own read, naming the move
-    // that already holds it: one record never has two blocking rows.
     await expect(
       moveIssue(
         context,
@@ -539,9 +526,6 @@ describe("issue move --to-authority", () => {
   }, 60_000);
 
   test("the same public command resumes from every persisted phase with its own stale arguments", async () => {
-    // invariant: Finding 1 through the PUBLIC route: the operator reissues the command they ran,
-    // `--expect` and `--expect-store` included. Those values are spent by the first run, so a resume
-    // that re-applied them would leave every interrupted move unresumable.
     for (const stop of ["staged", "verified", "switched"] as const) {
       const issue = await captureIssue(
         context,
@@ -602,8 +586,6 @@ describe("issue move --to-authority", () => {
       destinationProject: "p-authority-reuse",
       reason: "original",
     });
-    // invariant: A reuse aimed elsewhere is refused before any destination action, so the frozen
-    // payload is never copied into a lane the original request did not choose.
     await expect(
       moveIssue(
         context,
@@ -621,8 +603,6 @@ describe("issue move --to-authority", () => {
   }, 60_000);
 
   test("discard requires the issue-write seat and refuses without mutating", async () => {
-    // invariant: Finding 4 — `--discard` unfreezes a record, so it is an issue write and needs the
-    // same seat the move needs. A leaf actor must be refused before anything is touched.
     const issue = await captureIssue(
       context,
       capture(projectA, "occ-discard-seat", { sourceIdentity: "review/discard", rootCauseKey: "root-discard", acceptanceKey: "accept-discard" }),
@@ -640,17 +620,12 @@ describe("issue move --to-authority", () => {
     });
     const before = issueRow(issue.issueId);
     const { discardMove } = await import("./cross-authority-move.js");
-    // note: The ENGINE entry is not the authorization point: `discardMove` takes a resolved request.
-    // The public boundary the CLI calls is `moveIssue`'s seat check, so this asserts the shared rule
-    // through the exported assertion the CLI uses.
     const { assertIssueWriteSeat } = await import("./issue.js");
     expect(() => assertIssueWriteSeat("leaf-observer")).toThrow(/issue\.scope\.refused|issue\.scope-refused/);
     expect(() => assertIssueWriteSeat("")).toThrow(/actor/);
     assertIssueWriteSeat("project-manager");
-    // invariant: Refused before the store was opened, so nothing was unfrozen.
     expect(issueRow(issue.issueId)).toEqual(before);
     expect(db.prepare("select phase from issue_moves where operation_id = 'move-discard-seat'").get()).toEqual({ phase: "staged" });
-    // note: And a discard by the holder of the seat does release the record.
     const discarded = await discardMove(context, {
       operationId: "move-discard-seat",
       actor: "project-manager",
@@ -664,8 +639,6 @@ describe("issue move --to-authority", () => {
   }, 60_000);
 
   test("a destination that already holds the reference refuses before the switch", async () => {
-    // invariant: Finding 6 through the public route: the collision is detected while this lane is
-    // still the member, so the record is never stranded in a switched-but-unadmitted state.
     const issue = await captureIssue(
       context,
       capture(projectA, "occ-collide", { sourceIdentity: "review/collide", rootCauseKey: "root-collide", acceptanceKey: "accept-collide" }),
@@ -687,11 +660,9 @@ describe("issue move --to-authority", () => {
       { actor: "project-manager", operationId: "move-collide", expectedRevision: issue.revision, expectedStoreRevision: revision() },
     ).then(() => null, (error: unknown) => error as { code?: string; details?: Record<string, unknown> });
     expect(refused?.code).toBe("collaboration.move-destination-occupied");
-    // invariant: The source is still here, still this lane's, and still writable by its own readers.
     expect(issueRow(issue.issueId)).toMatchObject({ project_id: projectA, revision: issue.revision });
     await expect(getIssue(context, issue.issueId)).resolves.toMatchObject({ id: issue.issueId });
     expect(db.prepare("select phase from issue_moves where operation_id = 'move-collide'").get()).toEqual({ phase: "verified" });
-    // invariant: The documented recovery is executable: discard the stranded attempt.
     const { discardMove } = await import("./cross-authority-move.js");
     expect(await discardMove(context, {
       operationId: "move-collide",
@@ -706,8 +677,6 @@ describe("issue move --to-authority", () => {
   }, 60_000);
 
   test("a changed reason on replay refuses through the public route and the membership keeps the staged reason", async () => {
-    // invariant: `reason` is part of the immutable request the operation id binds. A replay that
-    // changes it refuses instead of rewriting the project-move history admission records.
     const issue = await captureIssue(
       context,
       capture(projectA, "occ-reason", { sourceIdentity: "review/reason", rootCauseKey: "root-reason", acceptanceKey: "accept-reason" }),
@@ -747,7 +716,6 @@ describe("issue move --to-authority", () => {
       reason: "the staged reason",
     });
     expect(issueRow(issue.issueId).project_id).toBe(projectA);
-    // invariant: The recorded request still completes, and the membership records what it was staged with.
     expect(
       await moveIssue(
         context,

@@ -31,14 +31,11 @@ let db: StoreDb;
 const otherProjectId = "milestone-other-project";
 const projectId = "milestone-test-project";
 
-/** note: A synthetic checkout whose origin names the collaboration repository. */
 function checkout(name: string): StoreContext {
   const repo = join(root, name);
   mkdirSync(repo, { recursive: true });
   execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync("git", ["config", `url.${repo}.insteadOf`, `https://github.com/acme/${name}.git`], {
     cwd: repo,
     stdio: ["ignore", "ignore", "ignore"],
@@ -47,8 +44,6 @@ function checkout(name: string): StoreContext {
   return { harnessDir: join(repo, ".mstar") };
 }
 
-/** invariant: The private staged record flipped to active, plus the checkout binding the
- * real activation writes: an ACTIVE authority is never usable unbound. */
 function activateLocation(context: StoreContext): string {
   const location = resolveCollaborationLocation(context);
   const handle = new DatabaseSync(location.dbPath);
@@ -86,8 +81,6 @@ function revision(): number {
 
 describe("milestone store", () => {
   test("validates name, effort sessions and ordinal, and requires a catalog project", async () => {
-    // note: These are the invalid values a caller can actually submit, so the tuple is typed at the
-    // loop boundary instead of narrowing the fixture to what the declared type would already refuse.
     for (const [name,effortSessions,ordinal] of [[" ",null,0],["Valid",0,0],["Valid",1.5,0],["Valid","soon",0],["Valid",null,-1]] as unknown as Array<[string, number | null, number]>) {
       await expect(addMilestone(context,{projectId,name,effortSessions,ordinal},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"milestone.invalid-input"});
     }
@@ -163,9 +156,7 @@ describe("milestone store", () => {
     await initializeCollaborationStore(resolveCollaborationLocation(staged));
     const stagedDb = new DatabaseSync(resolveCollaborationLocation(staged).dbPath);
     try {
-      // invariant: The opener refuses a staged lane before the domain guard is reached.
       await expect(addMilestone(staged,{projectId,name:"Staged",effortSessions:null,ordinal:0},{operationId:crypto.randomUUID(),expectedStoreRevision:0})).rejects.toMatchObject({code:"collaboration.not-active"});
-      // invariant: A handle that reaches the domain guard still refuses the staged row.
       expect(() => readMilestonesOn(stagedDb,projectId)).toThrow(expect.objectContaining({code:"store.not-active"}));
     } finally {
       stagedDb.close();
@@ -183,10 +174,7 @@ describe("milestone store", () => {
     const current=revision();
     const scheduled=await addMilestone(context,{projectId,name:"Delivery counts",effortSessions:null,ordinal:9},{operationId:crypto.randomUUID(),expectedStoreRevision:current});
     const activated=await updateMilestone(context,projectId,scheduled.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:scheduled.storeRevision});
-    // note: A rollup read is not the delivery decision: it reports zero open issues...
     expect(readMilestonesOn(db,projectId,scheduled.milestoneId).milestones[0]).toMatchObject({openIssues:0});
-    // note: ...and a row written after that read, without moving the store revision,
-    // is still counted by the delivery's own collaboration transaction.
     issue("I-MILESTONE-DELIVERY","open",scheduled.milestoneId);
     await expect(updateMilestone(context,projectId,scheduled.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision})).rejects.toMatchObject({code:"milestone.open-issues"});
     db.prepare("update issues set disposition='resolved' where id='I-MILESTONE-DELIVERY'").run();
@@ -197,14 +185,11 @@ describe("milestone store", () => {
     const before=revision();
     const empty=await addMilestone(context,{projectId,name:"Empty delivery",effortSessions:null,ordinal:10},{operationId:crypto.randomUUID(),expectedStoreRevision:before});
     const activated=await updateMilestone(context,projectId,empty.milestoneId,{status:"active"},{operationId:crypto.randomUUID(),expectedStoreRevision:empty.storeRevision});
-    // why: A complete observation proves zero linked issues, so delivery passes; the
-    // rollup keeps reporting an empty milestone, not a missing one.
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({totalIssues:0,openIssues:0});
     const delivered=await updateMilestone(context,projectId,empty.milestoneId,{status:"delivered"},{operationId:crypto.randomUUID(),expectedStoreRevision:activated.storeRevision});
     expect(delivered).toMatchObject({changed:true,storeRevision:activated.storeRevision+1});
     expect(readMilestonesOn(db,projectId,empty.milestoneId).milestones[0]).toMatchObject({status:"delivered",totalIssues:0,openIssues:0,resolvedIssues:0,otherRetiredIssues:0});
 
-    // invariant: An unavailable observation is not an empty one: the same delivery refuses.
     const staged=checkout("milestone-store-delivery-staged");
     mkdirSync(staged.harnessDir!,{recursive:true});
     await initializeCollaborationStore(resolveCollaborationLocation(staged));
@@ -270,12 +255,7 @@ describe("milestone store", () => {
     }
     await expect(withStoreRead(context, queryMilestoneNames())).resolves.toBeDefined();
   });
-
 });
-
-// ---------------------------------------------------------------------------
-// note: Remote selection: milestone status is read from admitted evidence
-// ---------------------------------------------------------------------------
 
 describe("remote milestones", () => {
   test("a confirmed intent without a recorded result names a runnable outbox-show command", async () => {
@@ -286,7 +266,6 @@ describe("remote milestones", () => {
     const check = positiveCheck();
     await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
 
-    // note: The observed base the verb must be planned against: the cache's own revision.
     const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
     let revision = 0;
     try {
@@ -298,8 +277,6 @@ describe("remote milestones", () => {
       db.close();
     }
 
-    // why: An earlier release froze this write's intent without recording a business result, and
-    // the provider confirmed it. The replay must name the exact intent an operator can inspect.
     const operationId = crypto.randomUUID();
     const patch = { name: "Renamed delivery" };
     const origin = {
@@ -403,5 +380,4 @@ describe("remote milestones", () => {
     expect(envelope.data.milestones).toEqual([{ projectId: REMOTE_IDS.projectId, name: "First delivery" }]);
     expect(envelope.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
   });
-
 });

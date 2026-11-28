@@ -655,10 +655,7 @@ export function createMilestoneWrites(seats: {
   onState: (state: { busy: boolean; refusal: string | null; keepDraft?: boolean }) => void
   /** The id policy; the seat owns one instance for its lifetime. */
   ids: ReturnType<typeof writeOperationIds<{ expectedStoreRevision: number }>>
-  /** note: the identity the page was opened over — the draft key is scoped with it, never re-read later. */
   draftsProject?: string
-  /** note: an ACCEPTED write clears its target's draft entry — the stored milestone is then the
-   *  truth the form re-seeds from, and keeping the draft would resurrect the pre-write text. */
   onAccepted?: (target: string) => void
 }): MilestoneWriteChannel {
   const { client, sessionId, cwd, projectId, expectedStoreRevision: revision, reload, onState, ids, onAccepted, draftsProject } = seats
@@ -693,16 +690,6 @@ export function createMilestoneWrites(seats: {
       // conflict KEEPS the typed text even though its refusal message is present.
       keepDraft = !result.ok
       onState({ busy, refusal, keepDraft })
-      // why: reloading on an ambiguous answer would refresh the read's revision and turn the retry
-      // into a DIFFERENT request (exactly the duplicate write C1 forbids), and an input-validation
-      // refusal wrote nothing, so there is nothing to refresh — reloading there unmounts the forms
-      // mid-edit for no fact. A revision conflict is the opposite: the store moved under the open
-      // read, so the read MUST refresh — the re-armed channel then carries the new
-      // expectedStoreRevision and a resubmission can land. The gate is the engine's own refusal
-      // class (its code), never the message text.
-      // why: the draft entry is cleared HERE and not in the form's verdict effect — the
-      // reload below unmounts the forms in the same batched render the verdict arrives in,
-      // so the effect never observes the accepted write.
       if (!ambiguous && result.ok && draftTarget !== undefined) onAccepted?.(milestoneDraftTargetKey(draftsProject, draftTarget))
       if (!ambiguous && result.ok) reload()
       if (!ambiguous && !result.ok && isRevisionConflictCode(result.code)) reload()
@@ -891,9 +878,6 @@ export function PanelSeat(props: PanelSeatProps): React.ReactElement | null {
   // Focus reads the shared `overview` view once: its three project panels are
   // members of that one read, never three calls (contract C3).
   const [issueQueryState, setIssueQueryState] = React.useState<IssueQuery>(() => parseIssueQuery(''))
-  // why: the drafts live HERE, above the read subtree — a reload re-keys the reader, the
-  // project page unmounts, and the re-mounted forms seed from this store. Keyed per target:
-  // 'create' for the create form, the milestone id for each editor.
   const [milestoneDrafts] = React.useState(() => createMilestoneDraftStore())
   // The screen's query IS the read's filter set: the shared serializer produces
   // the `/api`-style parameters the engine view layer validates.

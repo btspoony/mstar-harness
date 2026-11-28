@@ -2378,9 +2378,6 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
 describe("mstar milestone assign — no execution identity required", () => {
   test("assign succeeds with no identity, replays its receipt, and refuses a non-PM actor", async () => {
     const fixture = await activeFixture("mstar-milestone-seat");
-    // invariant: The project and its finding live in the repository collaboration lane
-    // now: a direct `store.db` insert would recreate the retired combined-store
-    // shape and refuse every milestone write as a cutover candidate.
     await registerCatalogEntity(fixture.context, {
       kind: "project", id: "milestone-cli-project", title: "Milestone CLI smoke",
       rootKind: "projects", relativePath: "milestone-cli-project",
@@ -2393,8 +2390,6 @@ describe("mstar milestone assign — no execution identity required", () => {
       evidence: ["isolated fixture"], discoveredAt: "2026-09-21T00:00:00.000Z",
     }, { actor: "project-manager", operationId: "capture-milestone-cli" });
     const cliIssueId = captured.issueId;
-    // note: Milestones moved to the collaboration lane: the CAS revision the CLI
-    // checks is the lane's own revision, observed after the fixture's writes.
     const initialStoreRevision = (await readCollaborationAuthority(fixture.context)).revision;
 
     // No identity anywhere in this case: no MSTAR_EXECUTION_IDENTITY, no

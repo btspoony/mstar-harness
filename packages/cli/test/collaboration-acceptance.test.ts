@@ -41,10 +41,8 @@ import { FIXTURE_ISSUE_ID, REMOTE_PROJECT, RemoteCollaborationFixture } from "./
 
 const REPO_ROOT = resolve(import.meta.dir, "../../..");
 
-/** note: One owner case: the file that holds it and its exact title. */
 type OwnerCase = Readonly<{ file: string; title: string }>;
 
-/** note: Per-criterion owners. Criterion 7's six cases are the iteration spec's acceptance table. */
 const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
   "1. Local persistence and isolation": [
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a replacement clone with no execution DB reads the same authority" },
@@ -77,8 +75,6 @@ const OWNERS: Readonly<Record<string, readonly OwnerCase[]>> = {
     { file: "packages/omp/test/store-cutover.test.ts", title: "a missing or staged store fails closed: the register write refuses by authority, never by shape" },
   ],
   "6. Migration and rebinding": [
-    // note: The P0 released-schema regression: a source the shipped build wrote
-    // upgrades its execution schema and is still handed to the reviewed cutover.
     { file: "packages/commands/src/families/store.test.ts", title: "store.upgrade advances a combined source's execution schema before directing to the cutover" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "stage copies exact keys, history, foreign keys and revisions without activating" },
     { file: "packages/engine/src/collaboration-cutover.test.ts", title: "a crash after the claim keeps it resumable and the source unfenced" },
@@ -113,11 +109,6 @@ function escapeTitle(title: string): string {
   return title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * invariant: A delegated owner's own Git calls run under a fixture `HOME` and no system or
- * global Git config, so an ambient `GIT_DIR`, `GIT_WORK_TREE` or `GIT_CONFIG_*` can neither
- * select the repository nor redirect the configuration the scenario builds.
- */
 function childEnvironment(home: string): Record<string, string> {
   mkdirSync(home, { recursive: true });
   return {
@@ -131,17 +122,10 @@ function childEnvironment(home: string): Record<string, string> {
   };
 }
 
-/** note: The ambient environment captured before a fixture pins its own. */
 type SavedEnvironment = ReadonlyArray<readonly [string, string | undefined]>;
 
-/** note: Every key `pinFixtureGitEnvironment` sets, so a previously absent one is recorded too. */
 const PINNED_KEYS = ["HOME", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL", "GIT_TERMINAL_PROMPT"] as const;
 
-/**
- * invariant: The same isolation for the engine's in-process Git probes. Every ambient `GIT_*`
- * (so `GIT_DIR`, `GIT_WORK_TREE` and the `GIT_CONFIG_*` family) and `HOME` are replaced, so a
- * caller-set config cannot supply the origin or selector the scenario reads.
- */
 function pinFixtureGitEnvironment(home: string): SavedEnvironment {
   const saved: Array<readonly [string, string | undefined]> = [];
   const record = (key: string): void => {
@@ -151,8 +135,6 @@ function pinFixtureGitEnvironment(home: string): SavedEnvironment {
   for (const key of Object.keys(process.env)) {
     if (key.startsWith("GIT_") || key === "HOME") record(key);
   }
-  // invariant: A key that was ABSENT before is saved as `undefined`, so restore deletes it
-  // instead of leaving the fixture's value — and a fixture `HOME` — in this process.
   for (const key of PINNED_KEYS) if (!saved.some(([savedKey]) => savedKey === key)) record(key);
   Object.assign(process.env, {
     HOME: home,
@@ -170,14 +152,8 @@ function restoreEnvironment(saved: SavedEnvironment): void {
   }
 }
 
-/** note: One test case as the JUnit report recorded it. */
 type ReportedCase = Readonly<{ name: string; skipped: boolean; failed: boolean }>;
 
-/**
- * note: Run one named case in its own `bun test` child and report what the JUnit
- * file says actually executed. A missing case exits non-zero and reports nothing;
- * `executed` is the only evidence a required case ran.
- */
 function runOwnerCase(owner: OwnerCase): { executed: string[]; failures: string[]; stderr: string } {
   const dir = mkdtempSync(join(tmpdir(), "mstar-acceptance-"));
   scratchRoots.push(dir);
@@ -188,16 +164,10 @@ function runOwnerCase(owner: OwnerCase): { executed: string[]; failures: string[
       "-t", escapeTitle(owner.title),
       "--reporter=junit", `--reporter-outfile=${reportPath}`,
     ],
-    // invariant: The owner's Git calls, its engine probes and any CLI it spawns inherit this
-    // minimal environment — never the caller's `HOME`, `GIT_DIR`, `GIT_WORK_TREE` or config.
     { cwd: REPO_ROOT, env: childEnvironment(join(dir, "home")), stdout: "pipe", stderr: "pipe", timeout: 240_000 },
   );
   const stderr = child.stderr.toString();
-  // note: A child killed on this run's own deadline proves nothing about the case.
   if (child.exitCode === null) throw new Error(`${owner.file} :: "${owner.title}" did not finish within 240s\n${stderr}`);
-  // invariant: The child's own verdict is part of the evidence — a non-zero exit is a failure
-  // even when the JUnit file reports the named testcase as passing (a suite-level error, or a
-  // second failure outside this run's filter, exits non-zero).
   if (child.exitCode !== 0) {
     throw new Error(`${owner.file} :: "${owner.title}" exited ${String(child.exitCode)}\n${stderr}`);
   }
@@ -205,7 +175,6 @@ function runOwnerCase(owner: OwnerCase): { executed: string[]; failures: string[
   try {
     xml = readFileSync(reportPath, "utf8");
   } catch {
-    // note: No report at all means no case ran; the empty `executed` list fails by name below.
   }
   const cases: ReportedCase[] = xml
     .split("<testcase ")
@@ -232,12 +201,9 @@ function decodeEntities(value: string): string {
     .replace(/&amp;/g, "&");
 }
 
-/** note: One criterion's evidence: every owner case executed exactly once, and nothing failed. */
 function expectOwners(criterion: string): void {
   for (const owner of OWNERS[criterion]!) {
     const evidence = runOwnerCase(owner);
-    // invariant: A renamed, deleted or skipped owner case fails HERE by name, so a green
-    // suite can never stand in for a criterion whose proof is missing.
     if (evidence.executed.length === 1 && evidence.executed[0] === owner.title && evidence.failures.length === 0) continue;
     throw new Error(
       `${owner.file} :: "${owner.title}" did not execute — executed ${JSON.stringify(evidence.executed)}, ` +
@@ -248,17 +214,13 @@ function expectOwners(criterion: string): void {
 
 describe("collaboration authority — ADR acceptance", () => {
   test("criterion 1 — a local checkout deleted and recloned reads its seeded records with the retained user store and no execution state", async () => {
-    // note: The identity/cutover owners first, so a renamed or deleted one fails this criterion by name.
     expectOwners("1. Local persistence and isolation");
 
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-acceptance-reclone-")));
     scratchRoots.push(root);
     const home = join(root, "home");
     mkdirSync(home);
-    // invariant: The user-level store lives under a fixture HOME; the real home is never read.
     const restore = spyOn(nodeOs, "homedir").mockImplementation(() => home);
-    // invariant: The engine's own Git probes (origin and selector) read this fixture's repository
-    // and its private config, never the invoking shell's.
     const ambient = pinFixtureGitEnvironment(home);
     try {
       const git = (cwd: string, ...args: string[]): string =>
@@ -290,8 +252,6 @@ describe("collaboration authority — ADR acceptance", () => {
       const first = checkout("first");
       (await initializeStore(first)).close();
       const published = await ensureCollaborationAuthority(first);
-      // invariant: The key is the fixture's own origin, so a config redirect that supplied the
-      // same foreign origin to both clones could not satisfy this assertion.
       expect(published.repoKey).toBe("github.com/acme/acceptance-reclone");
       await captureIssue(
         first,
@@ -317,8 +277,6 @@ describe("collaboration authority — ADR acceptance", () => {
       const seeded = await listIssues(first, {});
       expect(seeded.items.map((issue) => issue.title)).toEqual(["Reclone finding"]);
 
-      // invariant: The checkout is GONE, not merely unbound: the record survives only in the
-      // retained user-level store the replacement clone resolves to.
       rmSync(first.checkoutRoot!, { recursive: true, force: true });
       expect(existsSync(first.checkoutRoot!)).toBe(false);
 
@@ -333,7 +291,6 @@ describe("collaboration authority — ADR acceptance", () => {
       });
       const recovered = await listIssues(second, {});
       expect(recovered.items.map((issue) => issue.title)).toEqual(["Reclone finding"]);
-      // invariant: Execution state is NOT restored with it — the replacement clone starts fresh.
       await expect(openStore(second, "read")).rejects.toMatchObject({ code: "store.not-initialized" });
     } finally {
       restoreEnvironment(ambient);
@@ -366,8 +323,6 @@ describe("collaboration authority — ADR acceptance", () => {
   }, 240_000);
 
   test("criterion 7 boundary only — a remote project move refuses collaboration.mode-unavailable", () => {
-    // note: The unsupported-move surface is NOT a criterion-7 pass: a move neither topology admits
-    // must refuse by code, and this keeps that refusal from regressing while the staged move exists.
     const fixture = new RemoteCollaborationFixture("acceptance-move-boundary");
     const moveOperation = "11111111-1111-4111-8111-1111111111aa";
     try {
@@ -377,8 +332,6 @@ describe("collaboration authority — ADR acceptance", () => {
       expect(sandbox.init().exitCode).toBe(0);
       expect(sandbox.observe(fixture.observe(REMOTE_PROJECT, 0)).exitCode).toBe(0);
 
-      // note: The observed source issue is the subject of the move: it must still read the same
-      // after the refusal, which is what makes the refusal non-destructive rather than silent.
       const readIssue = () =>
         sandbox.runJson([
           "issue", "show",
@@ -405,15 +358,10 @@ describe("collaboration authority — ADR acceptance", () => {
       expect(moved.exitCode).toBe(1);
       expect(moved.code).toBe("collaboration.mode-unavailable");
 
-      // invariant: The same source generation still selects the same authority — nothing was
-      // re-pointed, re-bound or advanced by the refused move.
       const statusAfter = sandbox.status();
       expect(statusAfter.data.selector).toEqual(statusBefore.data.selector);
       expect(statusAfter.data.binding).toEqual(statusBefore.data.binding);
-      // invariant: The observed issue is unchanged and still not adopted or moved.
       expect(readIssue().data).toEqual(issueBefore.data);
-      // invariant: The refusal froze no intent at all — the named operation id has no recorded
-      // intent, and the project's pending queue is empty.
       const recorded = sandbox.runJson([
         "store", "collaboration", "remote", "outbox-show",
         "--harness", sandbox.harness, "--operation", moveOperation,

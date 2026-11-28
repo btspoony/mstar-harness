@@ -1,27 +1,3 @@
-/**
- * invariant: collaboration-cutover.ts -- the one-way authority cutover from the combined
- * control store to the per-repository collaboration store.
- *
- * One reviewed manifest drives the whole state machine (Data Model - Cutover
- * state machine): `plan` reads the source and freezes the evidence, `apply`
- * copies one transactionally consistent snapshot into the canonical STAGED
- * target and verifies it, and `activate` claims the target for this exact
- * manifest, retains a verified combined recovery point, fences the source in
- * one transaction and publishes the target.
- *
- * Every durable step lives in exactly one file and is proven by its own
- * receipt, so an interrupted activation resumes instead of repeating a step:
- * a held claim is resumed while the source is provably unfenced, a committed
- * fence is reused by the same manifest, and an active target replays its own
- * publication receipt verbatim. A competing source, mode or manifest refuses
- * before either contender fences its source; nothing is guessed, merged or
- * rolled forward from a partial target.
- *
- * Bindings to the rest of the engine: `planCollaborationCutover` /
- * `applyCollaborationCutover` / `activateCollaborationCutover` are the exported
- * protocol; `fenceCollaborationCutoverSource` is the durable fence step they
- * drive (also the resume entry a fenced-but-unpublished source needs).
- */
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
@@ -107,24 +83,12 @@ export type CutoverActivationOptions = Readonly<{
   attestation: ActivationAttestation;
 }>;
 
-/**
- * note: The oldest source schema this build can extract — and it IS this iteration's newest
- * migration: extraction copies the collaboration tables' exact current columns, so a source one
- * version older is already missing columns (the effort migration retired `target` on
- * `project_milestones`) and cannot be copied. The fence advances nothing; a source below this
- * floor reaches it only through the public `store upgrade`. Pinned by name, not position: an
- * unrelated append must not silently move the boundary a planned cutover documented.
- */
 const SOURCE_SCHEMA_FLOOR = MIGRATIONS.find((migration) => migration.name === "milestone-effort-sessions")!.version;
 
-/** note: The single claim slot on the canonical target: one activation at a time. */
 const CLAIM_KEY = "collaboration-cutover-claim";
 
-/** note: The one local OS cutover lock, under the control harness root. */
 const CUTOVER_LOCK_BASENAME = "collaboration-cutover.lock";
-/** note: The recovery slot's suffix: serializes stale-lock recovery. */
 const CUTOVER_LOCK_RECOVERY_SUFFIX = ".recover";
-/** note: Bounded retries after recovering a stale lock another attempt just replaced. */
 const STALE_LOCK_ATTEMPTS = 3;
 
 type Blockers = readonly Readonly<{ code: string; subject: string }>[];
@@ -134,7 +98,6 @@ type SourceSnapshot = Readonly<{
   counts: Record<string, number>;
   digest: string;
   rows: Record<string, unknown[][]>;
-  /** note: Legacy collaboration receipts (`store_operations`), preserved into the new authority. */
   ledger: unknown[][];
 }>;
 
@@ -142,7 +105,6 @@ type SourceState = Readonly<{
   fence: CollaborationFence | null;
   snapshot: SourceSnapshot | null;
   blockers: Blockers;
-  /** invariant: Recorded execution sessions: the stop evidence the fence must be scoped to. */
   sessions: readonly { sessionId: string; state: string }[];
 }>;
 
@@ -184,17 +146,14 @@ type Prepared = Readonly<{
   target: TargetState;
 }>;
 
-/** note: Session states that are not quiesced: each needs its own stop attestation. */
 const LIVE_SESSION_STATES: Readonly<Record<string, true>> = { active: true, suspended: true };
 
-/** note: The legacy receipt columns, in the order both sides are digested. */
 const LEDGER_COLUMNS = ["operation_id", "request_hash", "result_json", "committed_at"] as const;
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
-/** invariant: Stable JSON: object keys sorted, so equal semantics always hash equally. */
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
@@ -228,17 +187,14 @@ function backupIncomplete(detail: string): StoreError {
 
 type CutoverLockOwner = Readonly<{ pid: number; host: string; startedAt: string; token: string }>;
 
-/** note: The one local cutover lock file, under the control harness root. */
 function cutoverLockPath(context: StoreContext): string {
   return join(context.harnessDir, CUTOVER_LOCK_BASENAME);
 }
 
-/** note: The recovery slot that serializes stale-lock recovery. */
 function cutoverRecoveryPath(path: string): string {
   return `${path}${CUTOVER_LOCK_RECOVERY_SUFFIX}`;
 }
 
-/** note: The recorded owner, or `null` when the file is unreadable or malformed. */
 function readCutoverLock(path: string): CutoverLockOwner | null {
   let raw: string;
   try {
@@ -259,7 +215,6 @@ function readCutoverLock(path: string): CutoverLockOwner | null {
   return { pid, host, startedAt, token };
 }
 
-/** note: Signal 0 probes existence; only a permission verdict means the PID is alive. */
 function processIsAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -315,29 +270,14 @@ function cutoverRecoveryRefusal(label: string, recoveryPath: string, holder: Cut
   );
 }
 
-/** note: Release one lock file only when it still carries this attempt's token. */
 function releaseCutoverLockFile(path: string, token: string): void {
   try {
     const held = readCutoverLock(path);
     if (held !== null && held.token === token) unlinkSync(path);
   } catch {
-    // note: best effort: a lock left by a live process is a same-host stale lock once it exits
   }
 }
 
-/**
- * invariant: Remove one PROVEN-stale lock, serialized by the recovery slot.
- *
- * Atomicity: the recovery slot is an exclusive create, so only one recoverer
- * can act at a time. While it is held the main lock file cannot change -
- * a new owner can only appear after the file is gone, and only a recovery (which
- * needs this same slot) removes it - so the re-read after taking the slot is the
- * compare that makes the unlink safe. A recoverer therefore never removes a live
- * owner's lock, and two recoverers can never both acquire.
- *
- * Returns `true` when the caller should retry acquisition, `false` when another
- * recovery is already in progress (the caller refuses with its named recovery).
- */
 function recoverStaleCutoverLock(
   label: string,
   path: string,
@@ -360,9 +300,6 @@ function recoverStaleCutoverLock(
   try {
     const current = readCutoverLock(path);
     if (current === null) return true;
-    // invariant: Under the recovery slot the file cannot have been replaced: a different
-    // token means the stale owner is gone and a LIVE owner took the lock, so
-    // nothing is removed here and the retry refuses on that owner.
     if (current.token !== staleOwner.token) return true;
     unlinkSync(path);
     return true;
@@ -371,15 +308,10 @@ function recoverStaleCutoverLock(
   }
 }
 
-/** note: The recovery slot's token: unique per recovery attempt, not per lock owner. */
 function recoverySlotToken(attemptToken: string): string {
   return `${attemptToken}:recover:${randomUUID()}`;
 }
 
-/**
- * note: Acquire the local cutover lock: exclusive create plus an atomic stale-lock
- * recovery. See `recoverStaleCutoverLock` for the recovery protocol.
- */
 function acquireCutoverLock(label: string, path: string, recoveryPath: string, owner: CutoverLockOwner): void {
   for (let attempt = 1; ; attempt++) {
     try {
@@ -452,7 +384,6 @@ function tableExists(db: StoreDb, table: string): boolean {
 function readRows(db: StoreDb, table: string, columns: readonly string[]): unknown[][] {
   const list = columns.join(", ");
   const rows = db.prepare(`select ${list} from ${table} order by ${list}`).all() as Array<Record<string, unknown>>;
-  // note: SQLite hands back bigints for values beyond the safe integer range.
   return rows.map((row) => columns.map((column) => (typeof row[column] === "bigint" ? String(row[column]) : row[column])));
 }
 
@@ -499,8 +430,6 @@ function readCutoverRows(db: StoreDb): Record<string, unknown[][]> {
 function countsOf(rows: Record<string, unknown[][]>, ledger: unknown[][]): Record<string, number> {
   const counts: Record<string, number> = {};
   for (const table of COLLABORATION_CUTOVER_TABLES) counts[table] = rows[table]?.length ?? 0;
-  // note: The legacy collaboration receipts move with the domain: their population is
-  // part of the reviewed evidence, not an incidental side table.
   counts.store_operations = ledger.length;
   return counts;
 }
@@ -516,7 +445,6 @@ function digestOfRows(rows: Record<string, unknown[][]>, ledger: unknown[][]): s
   return hash.digest("hex");
 }
 
-/** note: The source digest freezes BOTH the generation stamp and the exact rows. */
 function digestOfSource(source: CutoverSource, rows: Record<string, unknown[][]>, ledger: unknown[][]): string {
   return sha256(
     `${source.storeId}|${source.epoch}|${source.schemaVersion}|${source.revision}|${source.catalogRevision}\n` +
@@ -524,12 +452,6 @@ function digestOfSource(source: CutoverSource, rows: Record<string, unknown[][]>
   );
 }
 
-/**
- * invariant: One combined-store receipt's provenance. The table is shared today, so each
- * row must be PROVEN to be collaboration- or execution-owned by its recorded
- * result shape; anything else refuses the cutover instead of being silently
- * promoted or dropped. Operation ids are caller-supplied and prove nothing.
- */
 type ReceiptOwnership = "collaboration" | "execution" | { unproven: string };
 
 function isReceiptObject(value: unknown): value is Record<string, unknown> {
@@ -548,7 +470,6 @@ function onlyKnownKeys(record: Record<string, unknown>, allowed: readonly string
   return Object.keys(record).every((key) => allowed.includes(key));
 }
 
-/** note: issue.ts `IssueReceipt`. */
 function isIssueReceipt(record: Record<string, unknown>): boolean {
   return (
     isText(record.issueId) &&
@@ -572,7 +493,6 @@ function isIssueReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/** note: milestone-store.ts `MilestoneReceipt`. */
 function isMilestoneReceipt(record: Record<string, unknown>): boolean {
   return (
     isText(record.projectId) &&
@@ -584,7 +504,6 @@ function isMilestoneReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/** note: project.ts `ProjectBindingReceipt`. */
 function isProjectBindingReceipt(record: Record<string, unknown>): boolean {
   return (
     isText(record.projectId) &&
@@ -619,7 +538,6 @@ function isRoadmapReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/** note: issue-sync.ts `SyncItem` (the item-transition receipt). */
 function isSyncItemReceipt(record: Record<string, unknown>): boolean {
   const nullableText = (value: unknown): boolean => value === null || isText(value);
   return (
@@ -656,7 +574,6 @@ function isSyncItemReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/** note: issue-sync.ts cursor receipts. */
 function isSyncCursorReceipt(record: Record<string, unknown>): boolean {
   return (
     onlyKnownKeys(record, ["cursor"]) &&
@@ -665,7 +582,6 @@ function isSyncCursorReceipt(record: Record<string, unknown>): boolean {
   );
 }
 
-/** note: execution-recovery.ts replacement record. */
 function isRecoveryRecord(record: Record<string, unknown>): boolean {
   const verified = record.verified;
   return (
@@ -678,14 +594,6 @@ function isRecoveryRecord(record: Record<string, unknown>): boolean {
   );
 }
 
-/**
- * invariant: execution-minimal-import.ts `MinimalImportResult`. The importer's own replay
- * logic documents a supported HISTORICAL shape written before `inputDigest`
- * existed: such a receipt still proves the source bytes but not the conversion
- * input, so it must be recognized as an execution record rather than blocking
- * the cutover. `importedIds`, `skipped` and `dispositions` are likewise accepted
- * when absent, and validated when present.
- */
 function isExecutionImportResult(record: Record<string, unknown>): boolean {
   const optionalStrings = (value: unknown): boolean =>
     value === undefined || (Array.isArray(value) && value.every((entry) => typeof entry === "string"));
@@ -701,7 +609,6 @@ function isExecutionImportResult(record: Record<string, unknown>): boolean {
   );
 }
 
-/** note: host-state-import.ts `DshHostStateImportReport`. */
 function isHostStateImportReport(record: Record<string, unknown>): boolean {
   return (
     (record.verdict === "imported" || record.verdict === "partially-imported" || record.verdict === "nothing-to-import") &&
@@ -712,14 +619,6 @@ function isHostStateImportReport(record: Record<string, unknown>): boolean {
   );
 }
 
-/**
- * invariant: Classify one receipt by a KNOWN producer plus its validated result shape.
- * The execution lane and the collaboration domains each record a shape no
- * other producer writes, so a proven execution record is excluded, a proven
- * collaboration record is preserved, and everything unknown, incomplete,
- * malformed or ambiguous refuses the cutover rather than being promoted (or
- * lost) on a guess.
- */
 function receiptOwnership(row: unknown[]): ReceiptOwnership {
   const raw = row[2];
   if (typeof raw !== "string" || raw === "") return { unproven: "the receipt records no result payload" };
@@ -742,7 +641,6 @@ function receiptOwnership(row: unknown[]): ReceiptOwnership {
   return { unproven: "the result payload matches no known collaboration or execution producer" };
 }
 
-/** note: The combined store's PROVEN collaboration receipts, in their recorded order. */
 function readSourceLedger(db: StoreDb): unknown[][] {
   if (!tableExists(db, "store_operations")) return [];
   const ledger: unknown[][] = [];
@@ -761,11 +659,6 @@ function readSourceLedger(db: StoreDb): unknown[][] {
   return ledger;
 }
 
-/**
- * invariant: The target's preserved receipts, read in the SAME canonical shape. The
- * cutover claim lives in the same table on its own reserved slot and is never
- * part of the reviewed receipt population.
- */
 function readStagedLedger(db: StoreDb): unknown[][] {
   const rows = db
     .prepare(
@@ -776,11 +669,6 @@ function readStagedLedger(db: StoreDb): unknown[][] {
   return rows.map((row) => LEDGER_COLUMNS.map((column) => (typeof row[column] === "bigint" ? String(row[column]) : row[column])));
 }
 
-/**
- * invariant: The pending work that must be settled before a source may be fenced: an open
- * mirror run still owns the ledger, and a catalog journal entry that has not
- * settled still describes an in-flight registration.
- */
 function readCutoverBlockers(db: StoreDb): Blockers {
   const blockers: Array<{ code: string; subject: string }> = [];
   const runs = db
@@ -792,9 +680,6 @@ function readCutoverBlockers(db: StoreDb): Blockers {
       subject: `mirror run ${String(run.direction)} for binding ${String(run.binding_id)} (${String(run.run_id)}) is still open`,
     });
   }
-  // note: `committed` and `aborted` are settled terminal states: an aborted journal
-  // retains its source bytes and writes no execution rows, so only the two phases
-  // catalog-registration.ts itself calls pending are in-flight work here.
   const journal = db
     .prepare(
       "select operation_id, phase from catalog_operations " +
@@ -848,7 +733,6 @@ function readSourceSnapshot(db: StoreDb): SourceSnapshot {
   return { source, counts: countsOf(rows, ledger), rows, ledger, digest: digestOfSource(source, rows, ledger) };
 }
 
-/** note: The recorded execution sessions of one store: the fence's stop-evidence scope. */
 function readSourceSessions(db: StoreDb): Array<{ sessionId: string; state: string }> {
   if (!tableExists(db, "execution_sessions")) return [];
   return (db
@@ -864,8 +748,6 @@ async function readSourceState(context: StoreContext): Promise<SourceState> {
   try {
     const fence = readCollaborationFence(handle.db);
     if (fence !== null) return { fence, snapshot: null, blockers: [], sessions: [] };
-    // note: One read transaction: the counted rows, the digest, the blocker scan and
-    // the session facts all describe one committed generation of the source.
     handle.db.exec("begin");
     try {
       return {
@@ -882,7 +764,6 @@ async function readSourceState(context: StoreContext): Promise<SourceState> {
   }
 }
 
-/** note: The durable fence of the combined store, or `null` when it is unfenced. */
 async function readSourceFence(context: StoreContext): Promise<CollaborationFence | null> {
   const handle = await openStore(context, "read");
   try {
@@ -910,11 +791,6 @@ function manifestBody(manifest: CutoverManifest): unknown {
   };
 }
 
-/**
- * invariant: The supplied manifest must be the reviewed output of `planCollaborationCutover`
- * for this exact content: its id is derived from the body, so a hand-edited or
- * fabricated manifest cannot name a different source or row population.
- */
 function assertManifest(manifest: CutoverManifest): string {
   if (manifest === null || typeof manifest !== "object" || manifest.version !== 1) {
     throw conflict("The supplied cutover manifest is not version 1. Re-run `store collaboration plan` and review its output.");
@@ -935,7 +811,6 @@ function assertManifest(manifest: CutoverManifest): string {
   if (typeof manifest.repoKey !== "string" || manifest.repoKey === "" || (manifest.mode !== "local" && manifest.mode !== "mirror")) {
     throw conflict("The supplied manifest's repository identity is malformed. Re-run `store collaboration plan` and review its output.");
   }
-  // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
   // hash-gate: authorized — A manifest with no recorded source digest carries no integrity evidence to verify, so it can never be staged, fenced or activated.
   if (typeof manifest.sourceDigest !== "string" || manifest.sourceDigest === "") {
     throw conflict("The supplied manifest carries no source digest. Re-run `store collaboration plan` and review its output.");
@@ -952,7 +827,6 @@ function assertManifest(manifest: CutoverManifest): string {
     throw conflict("The supplied manifest carries no blocker list. Re-run `store collaboration plan` and review its output.");
   }
   const digest = sha256(canonicalJson(manifestBody(manifest)));
-  // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
   // hash-gate: authorized — Accept only the reviewed plan output as the manifest: its id must equal the content digest of this very manifest, so substituted or edited manifests refuse.
   if (manifest.manifestId !== digest.slice(0, 32)) {
     throw conflict(
@@ -992,7 +866,6 @@ function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<stri
 function assertSnapshotMatches(snapshot: SourceSnapshot, manifest: CutoverManifest, detail: string): void {
   if (
     !sameSource(snapshot.source, manifest.source) ||
-    // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
     // hash-gate: authorized — Reuse staged evidence only when the snapshot digest equals the reviewed manifest's source digest; any other digest means the evidence no longer proves the reviewed rows.
     snapshot.digest !== manifest.sourceDigest ||
     !sameCounts(snapshot.counts, manifest.counts)
@@ -1010,7 +883,6 @@ function assertFenceMatches(
   digest: string,
   target?: Readonly<{ storeId: string; epoch: number }>,
 ): void {
-  // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
   // hash-gate: authorized — A fence vouches only for the manifest digest it was created with; a differing digest names another cutover and must never share this one's activation.
   if (fence.manifestId !== manifest.manifestId || fence.manifestDigest !== digest) {
     throw conflict(
@@ -1137,7 +1009,6 @@ function receiptOf(
   };
 }
 
-/** note: Read the target's own rows for one manifest id (the publication table is keyed by it). */
 async function readTargetStateFor(
   location: CollaborationLocation,
   manifestId: string,
@@ -1164,7 +1035,6 @@ function verifyStagedEvidence(db: StoreDb, manifest: CutoverManifest): void {
   const ledger = readStagedLedger(db);
   if (
     !sameCounts(countsOf(rows, ledger), manifest.counts) ||
-    // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
     // hash-gate: authorized — Activate only a staged copy whose actual row bytes digest to the reviewed manifest's source digest; drift here would promote unreviewed rows into the authority.
     digestOfSource(manifest.source, rows, ledger) !== manifest.sourceDigest
   ) {
@@ -1182,19 +1052,9 @@ function verifyStagedEvidence(db: StoreDb, manifest: CutoverManifest): void {
   }
 }
 
-/**
- * invariant: Replace the staged business rows and preserved receipts with the source
- * snapshot, exactly. A legacy operation keeps its id, request hash, result and
- * commit instant, so an accepted pre-cutover mutation replays instead of
- * applying again and a same-id/different-request reuse still conflicts. The
- * claim slot is reserved (staging refuses while a claim exists), so the receipt
- * population can be replaced wholesale.
- */
 function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>, ledger: unknown[][]): void {
   for (const table of [...COLLABORATION_CUTOVER_TABLES].reverse()) db.prepare(`delete from ${table}`).run();
   for (const table of COLLABORATION_CUTOVER_TABLES) {
-    // invariant: The combined source predates the portable key, so the target mints one reference
-    // per copied issue. The digest evidence above compares the SOURCE columns only.
     const columns = table === "issues" ? [...COLLABORATION_COLUMNS[table]!, "issue_ref"] : COLLABORATION_COLUMNS[table]!;
     const statement = db.prepare(
       `insert into ${table}(${columns.join(", ")}) values (${columns.map(() => "?").join(", ")})`,
@@ -1212,14 +1072,6 @@ function replaceStagedRows(db: StoreDb, rows: Record<string, unknown[][]>, ledge
   for (const row of ledger) receipt.run(...row);
 }
 
-/**
- * invariant: Bind the operator attestation to THIS activation: the exact control root, the
- * exact repository/mode and source generation, the build performing the fence,
- * and the operator's own stopped-handle assertion. A session table alone cannot
- * prove that an old process has no open handle, so the cutover block's
- * `stoppedHandles` is required; recorded sessions are then cross-checked against
- * the operator's statement in both directions.
- */
 function assertCutoverAttestation(
   context: StoreContext,
   location: CollaborationLocation,
@@ -1299,11 +1151,6 @@ function assertCutoverAttestation(
   }
 }
 
-/**
- * invariant: Release this activation's own claim, committed: the reviewed source is
- * provably unfenced and its observation drifted, so the operator re-plans. A
- * claim owned by another manifest/source is never released here.
- */
 async function releaseOwnClaim(
   location: CollaborationLocation,
   manifest: CutoverManifest,
@@ -1330,13 +1177,6 @@ type StaleClaimOutcome = Readonly<{ kind: "released" | "unowned" | "aligned" }> 
   fence: CollaborationFence;
 }>;
 
-/**
- * invariant: Resolve a pre-fence drift while holding the SOURCE WRITE LOCK: no fence
- * transaction can commit between proving the source unfenced and deleting this
- * activation's claim (SQLite serializes writers on the source file), so a
- * release can never overtake a committed or in-progress fence. The target
- * deletion commits before the source lock is released, in that order.
- */
 async function releaseStaleClaim(
   context: StoreContext,
   location: CollaborationLocation,
@@ -1352,7 +1192,6 @@ async function releaseStaleClaim(
       const snapshot = readSourceSnapshot(source.db);
       const aligned =
         sameSource(snapshot.source, manifest.source) &&
-        // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
         // hash-gate: authorized — Own the source claim only while its snapshot digest equals the reviewed manifest's; any other digest makes the claim stale and releasable, not reusable.
         snapshot.digest === manifest.sourceDigest &&
         sameCounts(snapshot.counts, manifest.counts);
@@ -1363,7 +1202,6 @@ async function releaseStaleClaim(
       try {
         source.db.exec("rollback");
       } catch {
-        // note: nothing was written on the source
       }
     }
   } finally {
@@ -1371,13 +1209,6 @@ async function releaseStaleClaim(
   }
 }
 
-/**
- * invariant: The fence performs NO schema advance. The source floor is this build's current
- * schema: extraction copies the collaboration tables' exact current columns, so a source older
- * than the newest migration is missing columns and cannot be copied at all. The gate's only job
- * is the exact refusal - an operational consequence an operator plans for: a source below the
- * floor reaches it only through `mstar store upgrade`, never through the fence.
- */
 function ensureFenceSchema(db: StoreDb): number {
   const max = validateAppliedMigrations(readAppliedMigrations(db, false));
   if (max < SOURCE_SCHEMA_FLOOR) {
@@ -1419,10 +1250,6 @@ async function planUnderCutoverLock(context: StoreContext): Promise<CutoverManif
   return { ...base, manifestId: digest.slice(0, 32) };
 }
 
-/**
- * invariant: A fenced source is never restaged: its activation replays or refuses. Both
- * the manifest and the persisted fence's target stamp must match the target.
- */
 async function receiptFromFencedSource(
   location: CollaborationLocation,
   manifest: CutoverManifest,
@@ -1457,10 +1284,6 @@ async function applyUnderCutoverLock(
   if (manifest.blockers.length > 0) {
     throw notQuiescent(manifest.blockers, "The reviewed manifest still reports pending work.");
   }
-  // invariant: The stage runs under the SOURCE WRITE LOCK: no fence can commit between the
-  // evidence read and the target write, so a fenced source is never restaged,
-  // and a claim released by a stale activation cannot expose the target to a
-  // restage that removes the publication its fence needs.
   const source = await openStore(context, "write");
   try {
     source.db.exec("begin immediate");
@@ -1499,8 +1322,6 @@ async function applyUnderCutoverLock(
               `manifest. Nothing was written.`,
           );
         }
-        // note: One staged slot per canonical target: another manifest may only restage
-        // over the SAME source, and only while that source is still unfenced.
         for (const other of readPublications(db)) {
           if (other.manifestId === manifest.manifestId) continue;
           if (other.phase !== "verified") {
@@ -1554,17 +1375,14 @@ async function applyUnderCutoverLock(
           authority.epoch,
           verifiedAt,
         );
-        // note: A restage replaces the evidence for the target: the previous manifest no longer describes the staged rows.
         db.prepare("delete from cutover_publications where manifest_id <> ?").run(manifest.manifestId);
         const stored = readPublication(db, manifest.manifestId)!;
         return receiptOf(stored, location, replayed);
       });
     } finally {
       try {
-        // note: Nothing was written on the source: the lock is released, not committed.
         source.db.exec("rollback");
       } catch {
-        // note: the transaction may already be closed by a refusing driver call
       }
     }
   } finally {
@@ -1615,7 +1433,6 @@ async function prepareActivation(
     if (source.fence === null) {
       const aligned =
         sameSource(source.snapshot!.source, manifest.source) &&
-        // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
         // hash-gate: authorized — Fence the source only while its live snapshot digest still equals the reviewed manifest's; drift between review and fence would seal an unreviewed source state.
         source.snapshot!.digest === manifest.sourceDigest &&
         sameCounts(source.snapshot!.counts, manifest.counts);
@@ -1626,8 +1443,6 @@ async function prepareActivation(
               `the new reviewed manifest; nothing was fenced or activated.`,
           );
         }
-        // why: Pre-fence drift: the release is atomic with the fence because the
-        // source write lock is held across the target deletion.
         const outcome = await releaseStaleClaim(context, location, manifest, digest);
         if (outcome.kind === "aligned" || outcome.kind === "fenced") continue;
         throw conflict(
@@ -1646,7 +1461,6 @@ async function prepareActivation(
 
     if (target.authority.state === "active") {
       const published = target.publication;
-      // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
       // hash-gate: authorized — An active authority is proof for exactly one manifest digest; a differing digest names another activation and is never republished or replaced.
       if (published === null || published.phase !== "active" || published.manifestDigest !== digest) {
         throw conflict(
@@ -1661,8 +1475,6 @@ async function prepareActivation(
             `wins by force; nothing was replayed.`,
         );
       }
-      // why: Replay is only success when the source is durably fenced: an active
-      // target beside a restored/unfenced source would be two authorities.
       if (source.fence === null) {
         throw conflict(
           `The collaboration target at ${location.dbPath} is active, but this combined source is not fenced (it still ` +
@@ -1677,7 +1489,6 @@ async function prepareActivation(
       };
     }
     const publication = target.publication;
-    // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
     // hash-gate: authorized — Activation builds only on a publication verified for this manifest digest; a foreign staged publication is not evidence for this cutover.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
@@ -1716,7 +1527,6 @@ async function claimActivation(prepared: Prepared): Promise<void> {
       );
     }
     const publication = readPublication(db, manifest.manifestId);
-    // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
     // hash-gate: authorized — Re-verify under the write lock that the staged publication still belongs to this manifest digest before taking the activation claim; a raced replacement must refuse.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
@@ -1754,13 +1564,6 @@ async function claimActivation(prepared: Prepared): Promise<void> {
   });
 }
 
-/**
- * invariant: The recovery point must preserve the REVIEWED rows, not just the reviewed
- * counters: a legacy write that never advanced the shared counter would
- * otherwise let the fence leave behind an image of different history. The image
- * is reopened read-only and its moved rows and preserved receipts are digested
- * exactly like the source.
- */
 async function verifyBackupRows(path: string, manifest: CutoverManifest): Promise<string> {
   const db = await connect(path, "read", busyTimeoutMs());
   let rows: Record<string, unknown[][]>;
@@ -1777,7 +1580,6 @@ async function verifyBackupRows(path: string, manifest: CutoverManifest): Promis
     db.close();
   }
   const counts = countsOf(rows, ledger);
-  // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
   // hash-gate: authorized — Fence only on a recovery image whose rows digest to the reviewed manifest's source digest; an image holding other bytes does not preserve the reviewed history.
   if (!sameCounts(counts, manifest.counts) || digestOfSource(manifest.source, rows, ledger) !== manifest.sourceDigest) {
     throw backupIncomplete(
@@ -1790,11 +1592,6 @@ async function verifyBackupRows(path: string, manifest: CutoverManifest): Promis
   return path;
 }
 
-/**
- * invariant: The verified combined image the fence leaves behind. An attempt that already
- * wrote it re-verifies the same bytes, so a retry after a crash does not overwrite
- * a recorded recovery point and a drifted source never reuses a stale one.
- */
 async function takeOrVerifyFenceBackup(prepared: Prepared): Promise<string> {
   const { context, manifest } = prepared;
   const out = join(
@@ -1833,8 +1630,6 @@ async function takeOrVerifyFenceBackup(prepared: Prepared): Promise<string> {
   try {
     await backupStore(context, { out });
   } catch (error) {
-    // note: A concurrent attempt may have published the same path first; reuse it
-    // only through the row verification below.
     if (!existsSync(out)) {
       throw backupIncomplete(
         `The source recovery point could not be written to ${out} ` +
@@ -1845,12 +1640,6 @@ async function takeOrVerifyFenceBackup(prepared: Prepared): Promise<string> {
   return verify(await inspect());
 }
 
-/**
- * invariant: The durable fence: one source transaction that re-proves the manifest,
- * advances the recorded schema (so an older binary refuses this file), records
- * the fence and drops exactly the moved collaboration tables. Execution rows,
- * tokens, plans, sessions, leases and the source epoch are not touched.
- */
 async function fenceSource(prepared: Prepared, backupPath: string): Promise<CollaborationFence> {
   const { context, manifest, digest, target } = prepared;
   const handle = await openStore(context, "write");
@@ -1930,9 +1719,6 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
       } catch (rollbackError) {
         rollbackFailure = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
       }
-      // invariant: A commit attempt that threw, or a rollback that did not complete, leaves
-      // the persisted state unconfirmed. The fence must never be reported as
-      // "unchanged" without proof, so the operator is sent to inspect it.
       if (commitAttempted || rollbackFailure !== null) {
         throw new StoreError(
           "collaboration.cutover-unconfirmed",
@@ -1944,8 +1730,6 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
           { cause, rollback: rollbackFailure === null ? "rolled-back" : "rollback-failed", commitAttempted },
         );
       }
-      // why: The rollback returned: prove the source really is pre-fence before any
-      // "unchanged" claim, otherwise report the unconfirmed state.
       if (!sourceIsPreFence(handle.db, manifest)) {
         throw new StoreError(
           "collaboration.cutover-unconfirmed",
@@ -1956,9 +1740,6 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
         );
       }
       if (error instanceof StoreError) throw error;
-      // why: A SQLite-level failure inside the fence transaction (a damaged source, a
-      // rogue constraint) is not a named refusal of its own: report the verified
-      // rollback and keep the original cause.
       throw new StoreError(
         "store.corrupt",
         `The collaboration fence transaction failed and rolled back (${cause}). The combined source was re-read and is ` +
@@ -1972,7 +1753,6 @@ async function fenceSource(prepared: Prepared, backupPath: string): Promise<Coll
   }
 }
 
-/** note: True when the connection shows the pre-fence source: no fence, expected schema. */
 function sourceIsPreFence(db: StoreDb, manifest: CutoverManifest): boolean {
   try {
     return (
@@ -1984,13 +1764,11 @@ function sourceIsPreFence(db: StoreDb, manifest: CutoverManifest): boolean {
   }
 }
 
-/** note: Record the fenced phase on the target; the source fence row stays the authority. */
 async function recordFenced(prepared: Prepared, fence: CollaborationFence): Promise<void> {
   const { location, manifest, digest } = prepared;
   await writeCollaborationStage(location, ({ db, authority }) => {
     if (authority.state !== "staged") return;
     const publication = readPublication(db, manifest.manifestId);
-    // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
     // hash-gate: authorized — Record the source-fenced phase only for the publication whose digest still equals the reviewed manifest's; the fence row must never outlive its matching evidence.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
@@ -2010,11 +1788,8 @@ async function recordFenced(prepared: Prepared, fence: CollaborationFence): Prom
 async function publishTarget(prepared: Prepared, fence: CollaborationFence): Promise<CutoverReceipt> {
   const { location, manifest, digest } = prepared;
   return writeCollaborationStage(location, ({ db, authority }) => {
-    // invariant: The publication proves the fence names THIS target: a replaced or foreign
-    // target with matching manifest evidence never wins by force.
     assertFenceMatches(fence, manifest, digest, { storeId: authority.storeId, epoch: authority.epoch });
     const publication = readPublication(db, manifest.manifestId);
-    // why: this comparison is a reviewed integrity gate; the marker on the next line records the integrity fact it establishes.
     // hash-gate: authorized — Publish the target only from a publication still bound to the fenced manifest's digest; the source is already fenced, so mismatched evidence would orphan it.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
@@ -2111,9 +1886,6 @@ export async function activateCollaborationCutover(
   manifest: CutoverManifest,
   options: CutoverActivationOptions,
 ): Promise<CutoverReceipt> {
-  // invariant: Authorization is validated BEFORE any binding write, then the checkout claims
-  // the target generation: a refusal restores the previous binding exactly, and an
-  // interruption leaves only an attempt-scoped claim that readers ignore.
   validateActivationAttestation(options.attestation);
   const location = resolveCollaborationLocation(context);
   const before = await readCollaborationStage(location, ({ authority }) => authority);
@@ -2137,10 +1909,6 @@ export async function activateCollaborationCutover(
     rollbackClaim();
     throw error;
   }
-  // invariant: A successful ACTIVE publication (fresh or replayed) makes this checkout the
-  // owner of that generation: the control binding is recorded before the verb
-  // returns, so a later origin/config retarget refuses instead of drifting onto
-  // another repository's lane. A fence-only outcome publishes nothing.
   if (receipt.phase === "active") {
     writeCollaborationBinding(context, {
       repoKey: receipt.target.repoKey,
@@ -2161,9 +1929,6 @@ async function activateUnderCutoverLock(
   const prepared = await prepareActivation(context, manifest, options);
   if (prepared.replay !== null) return prepared.replay;
   if (prepared.source.fence !== null) {
-    // why: The fence committed before the target did: reuse it and publish only. The
-    // fence is re-read here (not taken from the earlier inspection) so the
-    // publication proves the currently persisted fence and its target stamp.
     const persisted = await readSourceFence(context);
     if (persisted === null) {
       throw conflict(

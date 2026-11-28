@@ -87,11 +87,6 @@ describe('engine-status emission — written at the real change-driven emission'
     if (read.kind !== 'ok' || read.emission === undefined) throw new Error('unreachable')
     expect(read.emission.cwd).toBe(app.root)
     expect(read.emission.turn).toBe(4)
-    // note: The stored payload is the REAL composed catalog payload (the same builder
-    // the emission site uses), not a fixture object. The store facts' revision
-    // and observation time are normalized away: persisting the emission
-    // advances the shared store revision, and `asOf` is the moment each read
-    // established its own snapshot.
     const normalize = (payload: unknown): string => {
       const copy = JSON.parse(JSON.stringify(payload)) as {
         state?: { storeFacts?: { storeRevision?: unknown; asOf?: unknown } }

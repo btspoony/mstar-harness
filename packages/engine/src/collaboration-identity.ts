@@ -1,13 +1,3 @@
-/**
- * invariant: collaboration-identity.ts -- canonical repository identity and the explicit
- * collaboration mode behind user-level collaboration storage.
- *
- * Identity is the origin repository, never a checkout path, Git author,
- * per-store UUID or current branch. The configured Git main checkout supplies
- * the origin and `.mstarc`, so a linked worktree cannot answer as its own
- * repository. Resolution opens no database; its only write is the observation
- * recorded beside the harness when this checkout sees a published selector.
- */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync, type Stats } from "node:fs";
@@ -29,10 +19,6 @@ export const AUTHORITY_FILE = "authority.json";
  * repository once published a selector — never as authority.
  */
 export const COLLABORATION_BINDING_FILE = "collaboration-binding.json";
-/**
- * note: The checkout's durable record that its origin once named a selector this checkout
- * observed. Absence is never fresh for that checkout again, whatever its binding version.
- */
 const SELECTOR_OBSERVATION_FILE = "collaboration-selector-observation.json";
 
 /** note: One selected project: the local key and the dedicated provider project it is bound to. */
@@ -88,15 +74,9 @@ export type CollaborationSelection = Readonly<{
 }>;
 
 export type CollaborationLocation = Readonly<{
-  /** note: Canonical logical identity (`host[/owner...]/repo` or `id:<repo_id>`). */
   repoKey: string;
   mode: CollaborationMode;
-  /** invariant: Canonical user-level database path; never created by resolution. */
   dbPath: string;
-  /**
-   * invariant: The trusted selector behind a `remote` mode, read from its checked Git commit.
-   * Absent for local/mirror, whose selection is `.mstarc` plus the repository key.
-   */
   selection?: CollaborationSelection;
 }>;
 
@@ -119,12 +99,9 @@ export class CollaborationIdentityError extends Error {
   }
 }
 
-/** note: Safe origin path segment: no separators, encoding, quotes or dot segments. */
 const SAFE_SEGMENT = /^[A-Za-z0-9._+-]+$/;
-/** note: Explicit origin-less id: `[a-z0-9][a-z0-9._-]{0,127}`. */
 const SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
 const DEFAULT_PORT: Record<string, string> = { "https:": "443", "http:": "80", "ssh:": "22" };
-/** note: DNS host: dot-separated non-empty labels; `~` stays reserved for `host~port`. */
 const SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
 
 function unresolved(cause: string): never {
@@ -134,18 +111,14 @@ function unresolved(cause: string): never {
   );
 }
 
-/** invariant: Refuse literal and percent-encoded dot segments in a raw origin path. */
 function assertNoDotSegments(rawPath: string): void {
   for (const segment of rawPath.split("/")) {
     if (segment === "") continue;
-    // why: WHATWG URL decodes `%2e` and drops dot segments before callers see
-    // the path, so only the raw spelling can be judged.
     const decoded = segment.replace(/%2e/gi, ".");
     if (decoded === "." || decoded === "..") unresolved("The origin path contains a dot segment");
   }
 }
 
-/** note: Lowercase DNS host without its terminal dot; refusal when it is not a safe one. */
 function canonicalHost(raw: string): string {
   const host = raw.replace(/\.$/, "").toLowerCase();
   if (host === "") unresolved("The origin names no host");
@@ -154,15 +127,10 @@ function canonicalHost(raw: string): string {
   return host;
 }
 
-/** note: Split an origin into host (with `~port` for nondefault ports) and path. */
 function splitOrigin(raw: string): { host: string; path: string } {
   const value = raw.trim();
   if (value === "") unresolved("The origin remote is empty");
-  // why: WHATWG strips or rewrites these before a parsed URL can expose them,
-  // so an invalid origin must be judged in its raw spelling.
   if (/[\u0000-\u001f\u007f]/.test(value)) unresolved("The origin contains an ASCII control character");
-  // why: WHATWG URL treats a backslash as a path separator for http(s), so a
-  // raw backslash can hide `..` from the slash-only raw-path check below.
   if (value.includes("\\")) unresolved("The origin contains a backslash path separator");
   const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec(value);
   if (scheme !== null) {
@@ -170,11 +138,7 @@ function splitOrigin(raw: string): { host: string; path: string } {
     if (protocol !== "https:" && protocol !== "http:" && protocol !== "ssh:") {
       unresolved(`The origin transport ${protocol} is not a portable Git remote`);
     }
-    // why: `URL.search`/`.hash` are empty for a bare `?` or `#`, so the raw
-    // delimiter is the only place that spelling can be refused.
     if (value.includes("?") || value.includes("#")) unresolved("The origin carries a query or fragment");
-    // why: WHATWG URL already dropped literal and `%2e` dot segments from
-    // `parsed.pathname`, so the raw spelling is the only place to judge them.
     const rawPath = /^[a-z][a-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?/i.exec(value)?.[1] ?? "";
     assertNoDotSegments(rawPath);
     let parsed: URL;
@@ -183,19 +147,16 @@ function splitOrigin(raw: string): { host: string; path: string } {
     } catch {
       unresolved("The origin is not a well-formed URL");
     }
-    // why: userinfo is dropped by never reading username/password.
     const hostname = canonicalHost(parsed.hostname);
     const port = parsed.port;
     const host = port === "" || port === DEFAULT_PORT[protocol] ? hostname : `${hostname}~${port}`;
     return { host, path: parsed.pathname };
   }
-  // note: SCP SSH spelling: `[user@]host:path`; anything else is not portable.
   const scp = /^(?:[^@/]+@)?([^:/]+):(.+)$/.exec(value);
   if (scp === null) unresolved("The origin is not a portable https, http, ssh or SCP SSH remote");
   return { host: canonicalHost(scp[1]!), path: scp[2]! };
 }
 
-/** note: Owner path below the host, with one terminal `.git` and slashes removed. */
 function originPathSegments(path: string, host: string): string[] {
   const segments = path.split("/").filter((segment) => segment !== "");
   if (segments.length === 0) unresolved("The origin names no repository path");
@@ -207,15 +168,9 @@ function originPathSegments(path: string, host: string): string[] {
     if (segment === "." || segment === "..") unresolved("The origin path contains a dot segment");
     if (!SAFE_SEGMENT.test(segment)) unresolved("The origin path contains an unsafe segment");
   }
-  // why: GitHub addresses owners and repositories case-insensitively; other
-  // hosts keep case until their behavior is explicitly known.
   return host === "github.com" ? segments.map((segment) => segment.toLowerCase()) : segments;
 }
 
-/**
- * invariant: The single `origin` URL, `null` when the remote is unconfigured, refusal when
- * Git cannot answer or several fetch origins disagree.
- */
 function readOrigin(mainRoot: string): string | null {
   let out: string;
   try {
@@ -226,13 +181,9 @@ function readOrigin(mainRoot: string): string | null {
       env: { ...process.env, LC_ALL: "C", LANG: "C" },
     });
   } catch (error) {
-    // why: exit 1 is Git's "key unset"; every other failure is unreadable Git,
-    // which must never masquerade as an origin-less checkout.
     if (exitStatusOf(error) === 1) return null;
     unresolved("Git could not be read to determine the origin remote");
   }
-  // why: Git terminates every value with a newline, so only the trailing
-  // artifact is dropped; interior empty lines are configured empty values.
   const lines = out.split("\n");
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
   const values = lines.map((line) => line.trim());
@@ -253,13 +204,9 @@ function readConfig(mainRoot: string): { mode?: string; repoId?: string } {
   const file = join(resolve(mainRoot), MSTARC_FILE);
   let stats: Stats;
   try {
-    // why: `lstat` reports the directory entry itself, so a dangling symlink is
-    // a present entry rather than the absent file `readFileSync` would report.
     stats = lstatSync(file);
   } catch (error) {
     const reason = (error as NodeJS.ErrnoException).code;
-    // why: only a missing directory entry means "no configuration"; every other
-    // failure is a cause that adding a mode cannot fix.
     if (reason === "ENOENT") return {};
     configUnreadable(
       file,
@@ -285,14 +232,11 @@ function readConfig(mainRoot: string): { mode?: string; repoId?: string } {
   return parseMstarc(text).collaboration ?? {};
 }
 
-/** note: A Git probe over this checkout with the shared timeout and locale. */
 function gitProbe(mainRoot: string, args: readonly string[]): string {
   return execFileSync("git", ["-C", mainRoot, ...args], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
     timeout: gitProbeTimeoutMs(),
-    // why: The selector lookup is the only network probe here, and a credential prompt
-    // would hold the caller instead of refusing the selection.
     env: { ...process.env, LC_ALL: "C", LANG: "C", GIT_TERMINAL_PROMPT: "0" },
   });
 }
@@ -314,13 +258,11 @@ function selectorStale(cause: string): never {
   );
 }
 
-/** note: The object ID the origin's selector ref names now, or `null` when a live lookup confirms absence. */
 function lookupSelector(mainRoot: string): string | null {
   let out: string;
   try {
     out = gitProbe(mainRoot, ["ls-remote", "origin", AUTHORITY_REF]);
   } catch {
-    // invariant: A failed lookup is never absence: without an answer no authority may be selected.
     selectorUnavailable("Git could not check the collaboration selector at the origin remote");
   }
   const rows = out.split("\n").map((line) => line.trim()).filter((line) => line !== "");
@@ -332,13 +274,10 @@ function lookupSelector(mainRoot: string): string | null {
   return sha!;
 }
 
-/** invariant: Read the selector from its fetched commit object, never the checkout, a tracking ref or a cache. */
 function selectorPayload(mainRoot: string, commit: string): unknown {
   try {
     gitProbe(mainRoot, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "origin", commit]);
   } catch {
-    // invariant: A locally held object is not proof the origin's commit was fetched; the
-    // transfer is the proof, so a failed fetch refuses instead of reading held objects.
     selectorUnavailable(`Git could not fetch selector commit ${commit} from the origin remote`);
   }
   let text: string;
@@ -354,29 +293,18 @@ function selectorPayload(mainRoot: string, commit: string): unknown {
   }
 }
 
-/** note: A nonempty string field of the payload. */
 function nonEmpty(value: unknown): value is string {
   return typeof value === "string" && value.trim() !== "";
 }
 
-/**
- * note: An immutable Linear object ID: a canonical lowercase UUID. Labels (`Engineering`),
- * issue identifiers (`ENG-42`) and every other spelling are not identities.
- */
 const LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** note: Canonical SHA-256: lowercase hex, exactly 64 characters, as the cutover contract requires. */
 const CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
 
-/**
- * invariant: Provider identifiers are the immutable Linear object IDs, never a label, a URL or
- * an issue identifier such as `ENG-42`.
- */
 function providerId(value: unknown): value is string {
   return typeof value === "string" && LINEAR_ID.test(value);
 }
 
-/** note: The payload's positive safe integer fields: generations and the private epoch. */
 function positiveInteger(value: unknown, name: string): number {
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     selectorUnavailable(`The selector's ${name} is not a positive safe integer`);
@@ -384,7 +312,6 @@ function positiveInteger(value: unknown, name: string): number {
   return value;
 }
 
-/** note: The selector's selected projects: empty for local/mirror, a unique nonempty list for remote. */
 function parseSelectorProjects(raw: unknown, mode: CollaborationMode): readonly CollaborationSelectorProject[] {
   if (!Array.isArray(raw)) selectorUnavailable("The selector's projects is not a list");
   if (mode !== "remote") {
@@ -421,7 +348,6 @@ function parseSelectorProjects(raw: unknown, mode: CollaborationMode): readonly 
   });
 }
 
-/** note: The prior active generation, which every later generation must strictly exceed. */
 function parseSelectorPrevious(raw: unknown, generation: number): CollaborationSelectorPrevious | null {
   if (raw === null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) selectorUnavailable("The selector's previous is not an object");
@@ -437,7 +363,6 @@ function parseSelectorPrevious(raw: unknown, generation: number): CollaborationS
   return { selectorCommit: previous.selectorCommit, generation: prior, mode: previous.mode };
 }
 
-/** note: The reviewed transition block; absent only on an initial selector, and mandatory once a generation advances. */
 function parseSelectorCutover(
   raw: unknown,
   previous: CollaborationSelectorPrevious | null,
@@ -474,7 +399,6 @@ function parseSelectorCutover(
   };
 }
 
-/** invariant: A selector is trusted only when it names this repository and this `.mstarc` mode, and is internally consistent. */
 function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): CollaborationSelector {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) selectorUnavailable("The selector payload is not an object");
   const body = raw as Record<string, unknown>;
@@ -508,16 +432,10 @@ function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): 
   };
 }
 
-/** note: A Git object ID: SHA-1 or SHA-256 spelling, lowercase hex. */
 const GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
-/** note: What this checkout last observed of a published selector: evidence, never authority. */
 type SelectorObservation = Readonly<{ repoKey: string; selectorCommit: string; generation?: number }>;
 
-/**
- * invariant: The selector this checkout observed before, or `null` when it observed none. An
- * unreadable or malformed record refuses: forgetting it would restore the legacy lane.
- */
 function observedSelector(context: StoreContext): SelectorObservation | null {
   const path = join(context.harnessDir, SELECTOR_OBSERVATION_FILE);
   let text: string;
@@ -551,7 +469,6 @@ function observedSelector(context: StoreContext): SelectorObservation | null {
   };
 }
 
-/** invariant: Record the observed selector before any absence can be accepted. */
 function recordObservedSelector(context: StoreContext, seen: SelectorObservation): void {
   const path = join(context.harnessDir, SELECTOR_OBSERVATION_FILE);
   const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`;
@@ -560,7 +477,6 @@ function recordObservedSelector(context: StoreContext, seen: SelectorObservation
     writeFileSync(tmp, `${JSON.stringify({ version: 1, ...seen }, null, 2)}\n`, { mode: 0o600 });
     renameSync(tmp, path);
   } catch {
-    // invariant: An unrecorded observation would let a later deletion pass as never-seen.
     selectorUnavailable(
       `Git read selector commit ${seen.selectorCommit}, but this checkout could not record that observation beside its harness`,
     );
@@ -569,30 +485,21 @@ function recordObservedSelector(context: StoreContext, seen: SelectorObservation
   }
 }
 
-/** note: The payload's generation when it is readable, for the observation message only. */
 function readableGeneration(raw: unknown): number | undefined {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const value = (raw as Record<string, unknown>).generation;
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
 }
 
-/** note: A recorded v3 checkout binding is evidence a selector was published once; it selects nothing. */
 function remoteBindingRecorded(context: StoreContext): boolean {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(context.harnessDir, COLLABORATION_BINDING_FILE), "utf8"));
     return typeof raw === "object" && raw !== null && "version" in raw && raw.version === 3;
   } catch {
-    // note: Unreadable or absent: the store's binding reader owns that verdict.
     return false;
   }
 }
 
-/**
- * invariant: Selection for any origin-backed checkout: the origin's live selector lookup (recorded
- * before any fetch or decode can fail), its fetched commit, a second lookup proving that commit is
- * still the ref's, and the payload read from that commit. `null` is a live-confirmed absence, never
- * a failed check.
- */
 function resolvePublishedSelector(
   context: StoreContext,
   mainRoot: string,
@@ -613,14 +520,10 @@ function resolvePublishedSelector(
     }
     return null;
   }
-  // invariant: The lookup named this selector, so it is recorded before any fetch or decode can
-  // fail: a later deletion is never read as a checkout that never saw one.
   recordObservedSelector(context, { repoKey, selectorCommit: commit });
   const payload = selectorPayload(mainRoot, commit);
-  // invariant: The commit is read only if the ref still names it: a selector that moved mid-read selects nothing.
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  // note: Refine the record with the payload's generation once it is readable.
   const generation = readableGeneration(payload);
   if (generation !== undefined) recordObservedSelector(context, { repoKey, selectorCommit: commit, generation });
   const selector = parseSelector(payload, repoKey, mode);
@@ -652,7 +555,6 @@ function resolveMode(raw: string | undefined): CollaborationMode {
   );
 }
 
-/** note: Canonical key, its filesystem directory segments, and the origin the key was read from. */
 function canonicalIdentity(
   mainRoot: string,
   repoId: string | undefined,
@@ -672,11 +574,6 @@ function canonicalIdentity(
   return { repoKey: [host, ...segments].join("/"), dirs: [host, ...segments], origin };
 }
 
-/**
- * invariant: Basenames reserved for the authority database and its SQLite sidecars. A
- * repository segment that spells one must not become a directory with that
- * name, or one identity's database file would occupy another's storage dir.
- */
 const RESERVED_AUTHORITY_BASENAMES: Readonly<Record<string, true>> = {
   "collaboration.db": true,
   "collaboration.db-wal": true,
@@ -684,27 +581,17 @@ const RESERVED_AUTHORITY_BASENAMES: Readonly<Record<string, true>> = {
   "collaboration.db-journal": true,
 };
 
-/**
- * invariant: Filesystem spelling of one directory segment: percent-encode uppercase ASCII
- * so case-insensitive filesystems keep case-sensitive repositories apart, and
- * percent-encode the head of a reserved basename so it cannot occupy the
- * authority filename namespace. `repoKey` keeps the canonical spelling.
- */
 function encodeSegment(segment: string): string {
-  // why: `%` cannot appear in an accepted segment, so any encoded spelling is
-  // disjoint from every other segment's filesystem name.
   const escaped = RESERVED_AUTHORITY_BASENAMES[segment.toLowerCase()] === true
     ? `%${segment.charCodeAt(0).toString(16).toUpperCase()}${segment.slice(1)}`
     : segment;
   return escaped.replace(/[A-Z]/g, (ch) => `%${ch.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
-/** note: The one canonical storage path for a repository key's lane, beneath the user-level anchor. */
 function laneDbPath(home: string, dirs: readonly string[]): string {
   return join(home, ".mstar", "repos", ...dirs.map(encodeSegment), "collaboration.db");
 }
 
-/** note: The filesystem segments a canonical repository key spells; `id:` keys live under `_id`. */
 function laneDirsOf(repoKey: string): string[] {
   if (repoKey.startsWith("id:")) {
     const repoId = repoKey.slice("id:".length);
@@ -759,7 +646,6 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
     );
   }
   if (readOrigin(mainRoot) === null) {
-    // note: An origin-less scope has no selector to move: the resolved lane is the whole selection.
     if (location.selection !== undefined) selectorStale("an origin-less scope cannot hold a checked selector");
     return;
   }
@@ -774,8 +660,6 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
     return;
   }
   if (live === null) {
-    // invariant: A local/mirror admission proved an ABSENCE; a ref this checkout already
-    // recorded is evidence the origin published one, so its deletion is drift, not absence.
     const seen = observedSelector(context);
     if (seen !== null && seen.repoKey === location.repoKey) {
       selectorStale(
@@ -788,8 +672,6 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
     }
     return;
   }
-  // invariant: This admission proved a live-confirmed ABSENCE; a ref present now is a
-  // selector published during the mutation, never the absence the writer was admitted under.
   selectorStale(
     `The origin's ${AUTHORITY_REF} now names ${live}, but this mutation was admitted under a confirmed absence of it`,
   );
@@ -817,7 +699,6 @@ export function resolveCollaborationLocation(
   const mode = resolveMode(config.mode);
   let selection: CollaborationSelection | undefined;
   if (identity.origin === null) {
-    // invariant: An origin-less scope stays local/mirror: remote needs an origin to publish a selector.
     if (mode === "remote") {
       selectorUnavailable("This repository has no origin remote, so it cannot enroll in remote collaboration");
     }
@@ -828,14 +709,10 @@ export function resolveCollaborationLocation(
       selection = published;
     } else if (published !== null) {
       if (published.phase === "draining") {
-        // invariant: A draining selector stops old writers: a local/mirror lane must not write
-        // alongside a generation that is still being reconciled into its successor.
         selectorStale(
           `The origin publishes a draining ${AUTHORITY_REF} for this repository, so no local or mirror authority is selected`,
         );
       }
-      // invariant: An ACTIVE selector is retained for local/mirror too, so the commit fence
-      // compares the exact admitted commit instead of accepting any later same-mode selector.
       selection = published;
     }
   }

@@ -57,8 +57,6 @@ async function fixture(): Promise<{ base: string; root: string }> {
   // `plan_id` header must be the ids the argv declares.
   writeFileSync(join(root, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, `# ${PLAN_TITLE}
 `));
-  // note: The negative control registers against the collaboration authority, which
-  // resolves the owning checkout's repo identity and needs its lane active.
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: base });
   writeFixtureRepoId(base);
   (await initializeStore({ harnessDir: root })).close();

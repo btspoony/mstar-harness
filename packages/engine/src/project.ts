@@ -178,13 +178,7 @@ export async function observePlanFindings(context: StoreContext, planId: string)
   if (typeof planId !== "string" || planId.trim() === "") {
     throw new Error("observePlanFindings requires a non-empty plan id");
   }
-  // invariant: A remote selection reads its MStar findings from admitted snapshots. An
-  // unmarked native issue is not a finding, and a partial/missing/stale observation
-  // refuses instead of reading as "no findings".
   if (resolveCollaborationLocation(context).mode === "remote") {
-    // note: Dynamic on purpose — `path.ts` imports this module, so a static import of the
-    // remote read boundary would close a module cycle before the issue
-    // vocabulary initializes.
     const { openRemoteReadView, remotePlanFindings } = await import("./collaboration-remote-read.js");
     const view = await openRemoteReadView(context);
     const { observation, open } = remotePlanFindings(view, planId);
@@ -200,8 +194,6 @@ export async function observePlanFindings(context: StoreContext, planId: string)
   const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
-    // note: One deferred read snapshot: the revision stamped on the observation and
-    // the rows it was evaluated against come from the same instant.
     db.exec("begin");
     try {
       const observation = readCollaborationObservation(handle, { kind: "plan", key: planId });
@@ -224,15 +216,6 @@ export async function observePlanFindings(context: StoreContext, planId: string)
   }
 }
 
-/**
- * The findings decision table (status-and-residuals.md § Findings cleanup
- * modes; issue-governance cutover G2a), applied to one observation.
- *
- * `zero-residual`: every open linked issue is a violation — a disposition is a
- * separate authorized act (contract §4), so an open issue cannot ride along.
- * `allow-residual` (default): open issues are fine unless an unresolved
- * Critical remains.
- */
 function findingsGateDecision(
   observation: FindingsObservation,
   mode: FindingsCleanupMode,
@@ -333,9 +316,6 @@ export async function assertPlanFindingsCurrent(
   const current = await observePlanFindings(context, scope.key);
   const { repoKey, mode, storeId, epoch } = observed.authority;
   const authority = current.authority;
-  // invariant: A remote witness belongs to its EXACT selected source: per-generation revision
-  // counters restart, so a reviewed rebind can reuse a revision number under a different
-  // selector commit. The selector identity is part of the witness, not just the cache stamp.
   const selectionDrift =
     observed.source !== current.source ||
     observed.selectorCommit !== current.selectorCommit ||
@@ -509,8 +489,6 @@ export async function readProjectBinding(
     throw new BindingError("linear.binding-invalid", "A non-empty project id is required.");
   }
   const id = projectId.trim();
-  // invariant: In remote mode the provider tuple is the selected binding, read from the
-  // admitted snapshot; the local `project_bindings` table is never consulted.
   if (resolveCollaborationLocation(context).mode === "remote") {
     const { openRemoteReadView, remoteCollaborationObservation, requireRemoteProjects } = await import(
       "./collaboration-remote-read.js"
@@ -557,7 +535,6 @@ export async function readProjectBinding(
     try {
       handle.db.exec("rollback");
     } catch {
-      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {

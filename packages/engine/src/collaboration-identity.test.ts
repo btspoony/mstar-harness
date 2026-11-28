@@ -1,10 +1,3 @@
-/**
- * note: collaboration identity -- canonical Git origin to repository key, explicit
- * collaboration mode and user-level database path.
- *
- * Every case builds a synthetic checkout under the temp root; no case reads the
- * real user home or opens a database.
- */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import * as nodeOs from "node:os";
@@ -28,8 +21,6 @@ mkdirSync(HOME);
 let homeSpy: { mockRestore(): void } | undefined;
 
 beforeAll(() => {
-  // why: The store entry points keep their locked signatures (no userHome option),
-  // so the isolated home is installed at the runtime boundary they call.
   homeSpy = spyOn(nodeOs, "homedir").mockReturnValue(HOME);
 });
 
@@ -44,11 +35,6 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/**
- * note: One shared empty bare origin. Identity fixtures name synthetic origins that would
- * otherwise need a network transport now that every origin-backed checkout proves absence
- * with a live selector lookup; Git config rewrites that URL to this local repository.
- */
 const EMPTY_ORIGIN = join(ROOT, `empty-origin-${sequence++}.git`);
 git(ROOT, "init", "-q", "--bare", EMPTY_ORIGIN);
 
@@ -76,7 +62,6 @@ function resolveAt(root: string) {
   return resolveCollaborationLocation(contextAt(root), { userHome: HOME });
 }
 
-/** note: Flip a staged record to active: this plan ships no public activator. */
 function activateStaged(dbPath: string): void {
   const db = new DatabaseSync(dbPath);
   try {
@@ -152,7 +137,6 @@ describe("collaboration identity", () => {
   });
 
   test("a linked worktree reads the main checkout config and origin", () => {
-    // why: `.mstarc` stays untracked so the linked worktree has none of its own.
     const main = makeRepo("git@github.com:acme/widgets.git", "[collaboration]\nmode=mirror\n");
     git(main, "commit", "-qm", "empty", "--allow-empty");
     const worktree = join(ROOT, `worktree-${sequence++}`);
@@ -194,7 +178,6 @@ describe("collaboration identity", () => {
       expect(result.code).toBe("collaboration.repo-identity-unresolved");
     }
 
-    // invariant: A present but invalid origin never masquerades as an origin-less checkout.
     const withId = refusal(() => resolveAt(makeRepo("/local/path/to/repo", "[collaboration]\nmode=local\nrepo_id=team-repo\n")));
     expect(withId.code).toBe("collaboration.repo-identity-unresolved");
 
@@ -244,8 +227,6 @@ describe("collaboration identity", () => {
     const invalid = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=server\n")));
     expect(invalid.code).toBe("collaboration.mode-invalid");
 
-    // invariant: `remote` is a supported mode, but only a checked selector selects it: an
-    // unreachable origin and an origin-less scope both refuse instead of falling back.
     const unreachable = refusal(() =>
       resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=remote\n")),
     );
@@ -262,10 +243,8 @@ describe("collaboration identity", () => {
       const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
       expect(result.code).toBe("collaboration.repo-identity-unresolved");
     }
-    // note: DNS terminal-dot spelling is the same host, not a second namespace.
     const dotted = resolveAt(makeRepo("git@Git.Example.com.:team/repo.git", "[collaboration]\nmode=local\n"));
     expect(dotted.repoKey).toBe("git.example.com/team/repo");
-    // note: Only a URL port may qualify a host.
     const ported = resolveAt(makeRepo("ssh://git@git.example.com:2222/team/repo.git", "[collaboration]\nmode=local\n"));
     expect(ported.repoKey).toBe("git.example.com~2222/team/repo");
   });
@@ -276,15 +255,12 @@ describe("collaboration identity", () => {
       "https://git.example.com/a/%2e%2e/team/repo.git",
       "https://git.example.com/%2E/team/repo.git",
       "git@git.example.com:a/../team/repo.git",
-      // invariant: A backslash is a URL path separator, so it must not hide `..` from the
-      // raw check; this one used to resolve to git.example.com/team/repo.
       "https://git.example.com/a\\..\\team/repo.git",
       "https://git.example.com\\..\\team/repo.git",
     ]) {
       const result = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=local\n")));
       expect(result.code).toBe("collaboration.repo-identity-unresolved");
     }
-    // note: A dot inside a name is not a dot segment.
     const dotted = resolveAt(makeRepo("https://git.example.com/team/my.repo.git", "[collaboration]\nmode=local\n"));
     expect(dotted.repoKey).toBe("git.example.com/team/my.repo");
   });
@@ -327,21 +303,17 @@ describe("collaboration identity", () => {
     expect(result.message).toContain(join(repo, ".mstarc"));
     expect(result.message).toContain("remove");
 
-    // invariant: A dangling symlink is a present but unreadable entry, never "absent".
     const dangling = makeRepo("https://github.com/acme/widgets.git");
     symlinkSync(join(dangling, "missing-config"), join(dangling, ".mstarc"));
     const danglingResult = refusal(() => resolveAt(dangling));
     expect(danglingResult.code).toBe("collaboration.config-unreadable");
     expect(danglingResult.message).toContain("symbolic link");
 
-    // invariant: A symlink is refused even when its target is readable: the file that
-    // supplies trusted selection must be the tracked file itself.
     const linked = makeRepo("https://github.com/acme/widgets.git");
     writeFileSync(join(linked, "real-config"), "[collaboration]\nmode=local\n");
     symlinkSync(join(linked, "real-config"), join(linked, ".mstarc"));
     expect(refusal(() => resolveAt(linked)).code).toBe("collaboration.config-unreadable");
 
-    // why: A genuinely absent file keeps its own missing-mode refusal.
     const absent = makeRepo("https://github.com/acme/widgets.git");
     expect(refusal(() => resolveAt(absent)).code).toBe("collaboration.mode-required");
   });
@@ -357,10 +329,8 @@ describe("collaboration identity", () => {
     const nestedFirstRepo = makeRepo(nestedFirst, mstarc);
     const parentSecondRepo = makeRepo(parentSecond, mstarc);
 
-    // note: Database file first, then the repository whose directory used to spell it.
     await initializeCollaborationStore(resolveAt(parentRepo));
     await initializeCollaborationStore(resolveAt(nestedRepo));
-    // note: Reverse creation order.
     await initializeCollaborationStore(resolveAt(nestedFirstRepo));
     await initializeCollaborationStore(resolveAt(parentSecondRepo));
 
@@ -417,19 +387,12 @@ describe("collaboration identity", () => {
     expect(config.collaboration).toEqual({ mode: "mirror", repoId: "team-repo" });
     expect(config.enforcement).toBe("hard");
     expect(parseMstarc("[collaboration]\nmode=local\n").collaboration).toEqual({ mode: "local" });
-    // note: The last occurrence wins, an explicit empty later value included.
     expect(parseMstarc("[collaboration]\nmode=local\nmode=\n").collaboration).toEqual({ mode: "" });
     expect(parseMstarc("[collaboration]\nmode=local\nmode=mirror\n").collaboration).toEqual({ mode: "mirror" });
     expect(parseMstarc("[collaboration]\nrepo_id=first\nrepo_id=second\n").collaboration).toEqual({ repoId: "second" });
   });
 });
 
-/**
- * note: Remote selection fixtures. The checkout records the canonical HTTPS origin the
- * selector payload names, and its own Git config routes that URL to a local bare
- * origin, so the real `git ls-remote` / `git fetch` path is exercised without a
- * network transport.
- */
 const CANONICAL_ORIGIN = "https://github.com/acme/widgets.git";
 const CANONICAL_REPO_KEY = "github.com/acme/widgets";
 const SELECTOR_REF = "refs/heads/mstar-collaboration-authority";
@@ -444,7 +407,6 @@ const SELECTED_PROJECT = {
   writerId: "55555555-5555-4555-8555-555555555555",
 } as const;
 
-/** note: A bare origin whose selector ref one published commit names. */
 function makeSelectorOrigin(): { bare: string; publish(payload: unknown | string): string } {
   const bare = join(ROOT, `selector-origin-${sequence++}.git`);
   git(ROOT, "init", "-q", "--bare", bare);
@@ -465,15 +427,12 @@ function makeSelectorOrigin(): { bare: string; publish(payload: unknown | string
       );
       git(publisher, "add", "authority.json");
       git(publisher, "commit", "-q", "-m", "publish selector");
-      // why: A fixture republishes unrelated payloads to one ref; production selectors are
-      // append-only, and this helper exists only to present each payload for a read.
       git(publisher, "push", "-q", "--force", bare, `HEAD:${SELECTOR_REF}`);
       return git(publisher, "rev-parse", "HEAD");
     },
   };
 }
 
-/** note: The reviewed payload this canonical repository publishes, with case overrides. */
 function selectorPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     version: 1,
@@ -488,14 +447,12 @@ function selectorPayload(overrides: Record<string, unknown> = {}): Record<string
   };
 }
 
-/** note: A checkout whose canonical origin is routed to the bare fixture. */
 function remoteRepo(bare: string, mode: "local" | "mirror" | "remote" = "remote"): string {
   const repo = makeRepo(CANONICAL_ORIGIN, `[collaboration]\nmode=${mode}\n`, false);
   git(repo, "config", `url.${bare}.insteadOf`, CANONICAL_ORIGIN);
   return repo;
 }
 
-/** note: The checkout's recorded v3 binding, as the reviewed remote bind would write it. */
 function writeRemoteBinding(root: string, commit: string, generation: number): void {
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
@@ -531,7 +488,6 @@ describe("remote selector resolution", () => {
     const origin = makeSelectorOrigin();
     const commit = origin.publish(selectorPayload({ generation: 4 }));
     const repo = remoteRepo(origin.bare);
-    // note: A same-named file in the checkout is not selector input.
     writeFileSync(join(repo, "authority.json"), JSON.stringify(selectorPayload({ generation: 99 })));
 
     const location = resolveAt(repo);
@@ -579,7 +535,6 @@ describe("remote selector resolution", () => {
       selectorPayload({ generation: 0 }),
       selectorPayload({ projects: [] }),
       selectorPayload({ projects: [{ ...SELECTED_PROJECT, projectId: "ENG-42" }] }),
-      // invariant: A label or a non-UUID provider spelling is not an immutable Linear ID.
       selectorPayload({ projects: [{ ...SELECTED_PROJECT, teamId: "Engineering" }] }),
       selectorPayload({ projects: [{ ...SELECTED_PROJECT, workspaceId: "eng-42" }] }),
       selectorPayload({ projects: [{ ...SELECTED_PROJECT, writerId: "writer-one" }] }),
@@ -595,8 +550,6 @@ describe("remote selector resolution", () => {
     origin.publish("{not json");
     expect(refusal(() => resolveAt(repo)).code).toBe("remote.selector-unavailable");
 
-    // invariant: An active generation is published only with a source-fenced cutover and
-    // a canonical SHA-256 target digest.
     const transition = (digest: string, fenced = true) => ({
       previous: { selectorCommit: "a".repeat(40), generation: 2, mode: "local" },
       cutover: {
@@ -666,8 +619,6 @@ describe("remote selector resolution", () => {
     });
     expect(existsSync(location.dbPath)).toBe(false);
 
-    // invariant: An unbound remote checkout is never admitted either: its selector is not
-    // proof this checkout may use that generation.
     const unbound = remoteRepo(origin.bare);
     await expect(openCollaborationStore(contextAt(unbound), "read")).rejects.toMatchObject({
       code: "collaboration.stale-binding",
@@ -678,12 +629,8 @@ describe("remote selector resolution", () => {
     const origin = makeSelectorOrigin();
     const commit = origin.publish(selectorPayload({ generation: 2 }));
     const repo = remoteRepo(origin.bare);
-    // note: A first resolution transfers the object, so the refusal below cannot be blamed
-    // on a missing local object.
     expect(resolveAt(repo).selection?.commit).toBe(commit);
     git(repo, "cat-file", "-e", `${commit}^{commit}`);
-    // note: `fetch.parallel` is read only by `git fetch`, so the lookup still answers and the
-    // transfer itself is the failure under test.
     git(repo, "config", "fetch.parallel", "bogus");
     const result = refusal(() => resolveAt(repo));
     expect(result.code).toBe("remote.selector-unavailable");
@@ -719,7 +666,6 @@ describe("remote selector resolution", () => {
       expect(refusal(() => resolveAt(remoteRepo(origin.bare, mode))).code).toBe("collaboration.stale-binding");
     }
 
-    // invariant: A draining generation stops old writers even when its mode matches the checkout.
     origin.publish(
       selectorPayload({
         generation: 8,
@@ -747,7 +693,6 @@ describe("remote selector resolution", () => {
       expect("selection" in location).toBe(false);
     }
 
-    // invariant: An unchecked origin is never read as absence, even for a local/mirror lane.
     const unreachable = refusal(() =>
       resolveAt(makeRepo("ssh://git@127.0.0.1:1/acme/widgets.git", "[collaboration]\nmode=local\n", false)),
     );
@@ -760,7 +705,6 @@ describe("remote selector resolution", () => {
       const commit = origin.publish(selectorPayload({ mode, projects: [], generation: 3 }));
       const observed = remoteRepo(origin.bare, mode);
       expect(resolveAt(observed).mode).toBe(mode);
-      // invariant: The successful lookup is recorded beside the harness before absence is accepted.
       expect(
         JSON.parse(readFileSync(join(observed, ".mstar", "collaboration-selector-observation.json"), "utf8")),
       ).toMatchObject({ repoKey: CANONICAL_REPO_KEY, selectorCommit: commit, generation: 3 });
@@ -770,19 +714,14 @@ describe("remote selector resolution", () => {
       expect(gone.code).toBe("collaboration.stale-binding");
       expect(gone.message).toContain(commit);
 
-      // invariant: Only a checkout with no observation keeps the legacy lane on the same absent ref.
       expect(resolveAt(remoteRepo(origin.bare, mode)).mode).toBe(mode);
     }
   });
 
   test("a selector observed by live lookup stays evidence when its payload cannot be read", () => {
-    // invariant: The live lookup is recorded before any fetch or decode can fail, so a later
-    // deletion of that ref is never read as a checkout that never saw a selector.
     const fetchOrigin = makeSelectorOrigin();
     const fetchCommit = fetchOrigin.publish(selectorPayload({ mode: "local", projects: [], generation: 3 }));
     const fetchRepo = remoteRepo(fetchOrigin.bare, "local");
-    // note: `fetch.parallel` is read only by `git fetch`, so the lookup still answers and the
-    // transfer itself is the failure under test.
     git(fetchRepo, "config", "fetch.parallel", "bogus");
     const failedFetch = refusal(() => resolveAt(fetchRepo));
     expect(failedFetch.code).toBe("remote.selector-unavailable");
@@ -813,7 +752,6 @@ describe("remote selector resolution", () => {
       expect(gone.message).toContain(commit);
     }
 
-    // invariant: A checkout that never observed a selector still keeps its legacy lane.
     expect(resolveAt(remoteRepo(fetchOrigin.bare, "local")).mode).toBe("local");
     expect(resolveAt(remoteRepo(payloadOrigin.bare, "mirror")).mode).toBe("mirror");
   });

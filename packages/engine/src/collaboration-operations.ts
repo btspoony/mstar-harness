@@ -1,40 +1,3 @@
-/**
- * invariant: collaboration-operations.ts -- the internal composite frame of the four
- * admitted cross-domain operations (residual add, residual close, execution
- * registration, minimal import).
- *
- * The two authorities are separate SQLite stores, so one business action can no
- * longer be one transaction (the retired combined store handed `tx.db` to both
- * halves). It becomes three sequential phases instead, and every phase leaves
- * durable evidence:
- *
- * 1. PREPARE runs in the owning verb, in one execution transaction: authenticate,
- *    freeze the payload/tokens/target and record the reservation here in
- *    `execution_collaboration_intents`. That row IS the reservation: while it is
- *    `prepared`, every conflicting execution writer for the addressed plan row
- *    refuses (`assertNoForeignCompositeReservation`), so the facts the operation
- *    admitted cannot move underneath it. The same row makes an identical retry a
- *    resume (`resumeCompositeIntent`), a different payload a conflict, and a
- *    deterministic refusal a durable decline.
- * 2. APPLY runs in one collaboration write transaction: verify the frozen target
- *    stamp, execute the whole effect and commit its receipt in the SAME
- *    transaction. The receipt is the durable anchor a crashed finalize resumes
- *    from, so a lost response never applies the effect twice.
- * 3. FINALIZE runs in a second execution transaction: require the reservation,
- *    let the verb revalidate the frozen facts and commit the execution delta and
- *    its receipt, then mark the intent `confirmed` in that same transaction.
- *    Acknowledgement on the collaboration effect row is metadata only; a replay
- *    repairs it without repeating either business effect.
- *
- * A deterministic business refusal is recorded in the collaboration transaction
- * BEFORE the reservation is released (`declined`), so it can never apply later
- * under the same operation id. A transient/uncertain failure keeps the prepared
- * reservation and reports `collaboration.operation-partial`; nothing is deleted
- * on behalf of another attempt.
- *
- * Nothing here is public: only the admitted owning verb calls it, and only the
- * package index publishes the contract types (never a generic executor).
- */
 import { createHash } from "node:crypto";
 import { withCollaborationWrite, type CollaborationStamp, type CollaborationStoreHandle } from "./collaboration-store.js";
 import { declineUnderFreezeLane, readRemoteIntent, type RemoteIntent, type RemoteIntentRead } from "./collaboration-remote.js";
@@ -58,10 +21,6 @@ export type CompositeKind =
   | "execution-import"
   | "issue-move";
 
-/**
- * note: The closed vocabulary in one place: `readIntent` refuses a kind outside it, and the
- * execution store's CHECK carries the same list.
- */
 const COMPOSITE_KINDS: ReadonlySet<string> = new Set<CompositeKind>([
   "residual-add",
   "residual-close",
@@ -103,7 +62,6 @@ export type CollaborationEffectReceipt = Readonly<{
   facts: string;
 }>;
 
-/** note: The recorded reservation, as the addressed plan row's exclusion and replay anchor. */
 type StoredIntent = Readonly<{
   key: CompositeKey;
   kind: CompositeKind;
@@ -120,10 +78,8 @@ type StoredIntent = Readonly<{
   cause: DeclineCause | null;
 }>;
 
-/** note: The deterministic cause a declined composite carries into every replay. */
 type DeclineCause = Readonly<{ code: string; message: string; details: Record<string, unknown> | null }>;
 
-/** note: The durable collaboration half: one committed effect receipt or one recorded decline. */
 type EffectOutcome =
   | { kind: "committed"; receipt: CollaborationEffectReceipt }
   | { kind: "declined"; cause: DeclineCause };
@@ -131,15 +87,9 @@ type EffectOutcome =
 export type CompositeReservation = Readonly<{
   outcome: "reserved" | "resume";
   reservedRevision: number;
-  /** note: The ADMITTED request fingerprint: the effect key and the frozen identity. */
   requestHash: string;
 }>;
 
-/**
- * note: Refusal codes that describe an unavailable or uncertain ENVIRONMENT rather
- * than a decision about this request. Everything else carrying a stable code is
- * a domain refusal and is declined durably.
- */
 const RECOVERABLE_CODES: Readonly<Record<string, true>> = {
   "store.busy": true,
   "store.corrupt": true,
@@ -151,12 +101,7 @@ const RECOVERABLE_CODES: Readonly<Record<string, true>> = {
   "collaboration.not-active": true,
   "collaboration.unreadable": true,
   "collaboration.stale-binding": true,
-  // note: A scope that moved under a write's sampled base is an observation state, not a decision
-  // about this request: the SAME operation id reissues after a fresh observe and freezes then.
   "collaboration.observation-stale": true,
-  // note: Provider read availability (a denied or expired access check, an unreadable scope) is
-  // an environment state, never a decision about this request: a replay of an ALREADY FROZEN
-  // outbox row fails through it too, so releasing the reservation could expose a duplicate send.
   "remote.unavailable": true,
   "execution.not-active": true,
   "execution.reentrant": true,
@@ -171,23 +116,16 @@ function codeOf(error: unknown): string | null {
   return typeof error.code === "string" && error.code !== "" ? error.code : null;
 }
 
-/** note: The structured facts a refusal already carries, or null when it carries none. */
 function detailsOf(error: unknown): Record<string, unknown> | null {
   if (error === null || typeof error !== "object" || !("details" in error)) return null;
   return isPlainObject(error.details) ? error.details : null;
 }
 
-/** note: A coded domain refusal is deterministic; silence, a crash or an environment code is not. */
 function isDeterministicRefusal(error: unknown): boolean {
   const code = codeOf(error);
   return code !== null && RECOVERABLE_CODES[code] !== true;
 }
 
-/**
- * note: The decline-decision gap seam: a regression starts a same-id provider freeze between the
- * fenced lane's absence check and the durable decline, proving the freeze cannot land in that gap.
- * Production runs without a callback.
- */
 let compositeDeclineGapForTest: (() => void | Promise<void>) | undefined;
 export function setCompositeDeclineGapForTest(callback: (() => void | Promise<void>) | undefined): void {
   compositeDeclineGapForTest = callback;
@@ -214,11 +152,6 @@ function parseJson(value: string, what: string): unknown {
   }
 }
 
-/**
- * note: The typed refusal recorded for an operation id reused with a different
- * semantic request. It is the one refusal that survives both stores: the
- * fingerprint is the idempotency key, not a re-usable slot.
- */
 function intentConflict(intent: CompositeIntent, recordedHash: string | null): ExecutionError {
   return new ExecutionError(
     "execution.operation-conflict",
@@ -236,11 +169,6 @@ function intentConflict(intent: CompositeIntent, recordedHash: string | null): E
   );
 }
 
-/**
- * invariant: §3.1 the refusal of an operation on a plan row another composite currently
- * reserves. It names the pending operation and its supported completion, so the
- * caller never invents a second authority for the same row.
- */
 function pendingReservationRefusal(input: {
   operationId: string;
   pendingOperationId: string;
@@ -265,20 +193,12 @@ function pendingReservationRefusal(input: {
   );
 }
 
-/** note: A recorded deterministic decline, re-raised with its original code and cause. */
 function recordedRefusal(operationId: string, cause: DeclineCause | null): Error {
   const code = cause?.code ?? "collaboration.operation-partial";
   const message = cause?.message ?? `composite operation ${operationId} was declined before any effect`;
   const error = new Error(message) as Error & { code: string; details?: Record<string, unknown> };
   error.name = "RecordedCompositeRefusal";
   error.code = code;
-  // why: The original refusal's machine facts survive the decline, so a replayed
-  // refusal still names the entry/path/field the first attempt reported.
-  // invariant: A decline's own recovery is the actionable one (repair the fork, recover only the
-  // missing work); the durable-decline fact is prepended instead of replacing it, so a replayed
-  // refusal never sends the operator at a retry the fenced fork would refuse. Confirmed components
-  // are DURABLE work — a decline that names them must not claim an effect-free operation; only the
-  // execution acknowledgement stayed unapplied.
   const recovery =
     typeof cause?.details?.recovery === "string"
       ? cause.details.recovery
@@ -297,7 +217,6 @@ function recordedRefusal(operationId: string, cause: DeclineCause | null): Error
   return error;
 }
 
-/** invariant: §3.1 the frozen address of this intent must be the generation the transaction opened. */
 function assertIntentGeneration(tx: ExecutionTransaction, intent: CompositeIntent): void {
   if (intent.key.executionStoreId === tx.storeId && intent.key.executionEpoch === tx.epoch) return;
   throw new StoreError(
@@ -314,15 +233,6 @@ function assertIntentGeneration(tx: ExecutionTransaction, intent: CompositeInten
   );
 }
 
-/**
- * invariant: A resumed intent must be the one this call froze. Both transport facts are
- * deliberately excluded: the CAS token the caller re-read (an admitted
- * reservation whose row later moved is refreshed by re-admission) and the
- * caller fingerprint (the coordinator identity may have been recovered, and the
- * spec requires recovery to continue the frozen intent rather than take over a
- * collaboration binding). The semantic request, actor, scope and target are what
- * make it the same operation.
- */
 function assertSameIntent(recorded: StoredIntent, intent: CompositeIntent): void {
   const same =
     recorded.kind === intent.kind &&
@@ -468,9 +378,6 @@ export function reserveCompositeIntent(
   const row = readIntent(tx.db, intent.key);
   const now = nowRfc3339();
   if (row === null) {
-    // invariant: §3.1 the operation-id namespace is ONE namespace across the execution
-    // ledgers: an id another operation already committed here is never adopted
-    // by a composite (its receipt would otherwise collide after the effect ran).
     const committed = tx.db
       .prepare("select request_hash from execution_operations where epoch = ? and operation_id = ?")
       .get(tx.epoch, intent.key.operationId) as { request_hash?: unknown } | undefined;
@@ -518,8 +425,6 @@ export function reserveCompositeIntent(
       );
     return { outcome: "reserved", reservedRevision: reservation.revision, requestHash: intent.requestHash };
   }
-  // invariant: The reservation's PK is the operation-id namespace: another plan's attempt to
-  // reuse this id finds THIS row and is refused by the frozen-identity check.
   assertSameIntent(row, intent);
   if (row.phase === "declined") throw recordedRefusal(intent.key.operationId, row.cause);
   if (row.phase === "confirmed") throw intentConflict(intent, row.requestHash);
@@ -597,7 +502,6 @@ export function advanceCollaborationRevision(handle: CollaborationStoreHandle): 
   return row.revision;
 }
 
-/** note: One durable collaboration row: a committed effect receipt or a recorded decline. */
 function readEffect(db: StoreDb, key: CompositeKey): { requestHash: string; outcome: EffectOutcome } | null {
   const row = db
     .prepare(
@@ -629,13 +533,6 @@ function readEffect(db: StoreDb, key: CompositeKey): { requestHash: string; outc
   return { requestHash, outcome: { kind: "committed", receipt: parsed.receipt as unknown as CollaborationEffectReceipt } };
 }
 
-/**
- * invariant: Phase 2: apply the whole collaboration effect and commit its receipt in one
- * transaction. The frozen target stamp is re-verified under the writer lock, so
- * a different repository/mode/store generation refuses `collaboration.stale-binding`
- * before any effect runs. A row already recorded under this local key is
- * replayed (effect receipt) or re-raised (decline) instead of applied again.
- */
 async function applyCollaborationEffect(
   context: StoreContext,
   intent: CompositeIntent,
@@ -646,7 +543,6 @@ async function applyCollaborationEffect(
     (handle) => {
       const existing = readEffect(handle.db, intent.key);
       if (existing !== null) {
-        // invariant: a replay is served only for the same operation id and request hash; any other hash is a conflicting intent.
         // hash-gate: authorized — Replay a committed composite effect recorded under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
         if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash);
         return existing.outcome;
@@ -687,14 +583,6 @@ async function applyCollaborationEffect(
   );
 }
 
-/**
- * why: Record a deterministic refusal under this effect key, in its own collaboration
- * transaction and WITHOUT business effects or a revision advance. The write is
- * coordinated with a concurrent same-id attempt: if that attempt committed the
- * effect first, its receipt is returned (this attempt then finalizes it); if a
- * decline already exists, that cause is returned. Only when nothing exists does
- * this attempt record the decline, so no attempt deletes another's evidence.
- */
 async function declineEffect(context: StoreContext, intent: CompositeIntent, error: unknown): Promise<EffectOutcome> {
   const details =
     error !== null && typeof error === "object" && "details" in error && isPlainObject(error.details) ? error.details : null;
@@ -708,7 +596,6 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
     (handle) => {
       const existing = readEffect(handle.db, intent.key);
       if (existing !== null) {
-        // invariant: a replay is served only for the same operation id and request hash; any other hash is a conflicting intent.
         // hash-gate: authorized — Replay a recorded composite decline under this operation id only for the same request hash; a differing hash under the same id is a conflicting intent, not a replay.
         if (existing.requestHash !== intent.requestHash) throw intentConflict(intent, existing.requestHash);
         return existing.outcome;
@@ -740,13 +627,6 @@ async function declineEffect(context: StoreContext, intent: CompositeIntent, err
   );
 }
 
-/**
- * invariant: Mark the execution reservation declined AFTER its collaboration decline is
- * durable. Returns the settlement failure instead of swallowing it: the decline
- * is committed, but a reservation that stayed `prepared` blocks the next plan or
- * workflow mutation and every verified backup, so the caller must report a
- * PARTIAL — never the terminal business refusal — until this transaction lands.
- */
 function markDeclinedIn(
   tx: ExecutionTransaction,
   intent: CompositeIntent,
@@ -785,12 +665,6 @@ async function markDeclined(
   }
 }
 
-/**
- * why: The partial receipt of a durable decline whose execution settlement did not
- * confirm: the business cause and the settlement failure are both preserved, and
- * the same-identity replay is named. The reservation may still be live, so the
- * terminal refusal would be a false success report.
- */
 function unsettledDeclineRefusal(intent: CompositeIntent, cause: DeclineCause, settlement: unknown): ExecutionError {
   return new ExecutionError(
     "collaboration.operation-partial",
@@ -812,7 +686,6 @@ function unsettledDeclineRefusal(intent: CompositeIntent, cause: DeclineCause, s
   );
 }
 
-/** note: Repair a missing acknowledgement on an already committed effect row. Metadata only. */
 async function acknowledgeEffect(context: StoreContext, intent: CompositeIntent, receipt: CollaborationEffectReceipt): Promise<boolean> {
   try {
     await withCollaborationWrite(
@@ -860,9 +733,6 @@ export async function repairCompositeAcknowledgement(
   context: StoreContext,
   key: CompositeKey,
 ): Promise<OutstandingAcknowledgement | null> {
-  // invariant: A `remote` checkout has no local collaboration effect row to acknowledge: the
-  // provider effect's durable state is the outbox receipt, so there is never a pending
-  // acknowledgement to report or repair here.
   if (resolveCollaborationLocation(context).mode === "remote") return null;
   try {
     return await withCollaborationWrite(context, (handle) => {
@@ -872,9 +742,6 @@ export async function repairCompositeAcknowledgement(
             "and execution_store_id = ? and execution_epoch = ? and operation_id = ?",
         )
         .get(key.executionStoreId, key.executionEpoch, key.operationId) as { result_json?: unknown } | undefined;
-      // invariant: An execution receipt proves the effect committed, so an absent or
-      // unreadable collaboration row means the acknowledgement state cannot be
-      // VERIFIED. That is disclosed on the result, never reported as success.
       if (row === undefined) {
         return { message: "the committed collaboration effect row is missing", repairableByReplay: false };
       }
@@ -908,21 +775,10 @@ export async function repairCompositeAcknowledgement(
       return null;
     });
   } catch (error) {
-    // note: The receipt could not be READ either, so whether a replay can repair the
-    // acknowledgement is unknown; the named cause is the authority's own refusal.
     return { message: messageOf(error), repairableByReplay: true };
   }
 }
 
-/**
- * why: Carry an outstanding acknowledgement as a warning instead of a false partial
- * business outcome. Two carriers exist: the refusal envelope's `recovery.warnings`
- * (ordinary domain verbs) and a plain `warnings` string list on a SUCCESS result
- * such as the execution import, which has no refusal envelope of its own. A result
- * with neither carrier is returned unchanged — the caller then learns nothing,
- * which is why every success DTO that can commit a composite (the import) carries
- * the list.
- */
 function withAcknowledgementFact<T>(result: T, fact: OutstandingAcknowledgement): T {
   if (result === null || typeof result !== "object") return result;
   const message = fact.repairableByReplay
@@ -953,19 +809,11 @@ export function noteOutstandingAcknowledgement<T>(result: T, fact: OutstandingAc
   return fact === null ? result : withAcknowledgementFact(result, fact);
 }
 
-/** note: A recorded result replays with its own envelope, marked as a replay. */
 function markReplayed<T>(value: T): T {
   if (value === null || typeof value !== "object" || !("replayed" in value)) return value;
-  // note: The stored value IS the result this frame committed; only the replay flag
-  // differs from what the first call returned.
   return { ...value, replayed: true } as T;
 }
 
-/**
- * invariant: The composite outcome refusal: an accepted operation whose work is outstanding.
- * It is never success, and it always names the durable phase, the confirmed
- * components and the same-id completion path.
- */
 function partialRefusal(input: {
   intent: CompositeIntent;
   phase: "prepared" | "collaboration-confirmed";
@@ -1030,26 +878,9 @@ export function remoteCompositePreparationPartial(
 }
 
 export type CollaborationCompositeEffects<T> = Readonly<{
-  /** note: The whole collaboration effect; runs inside one write transaction. */
   apply(handle: CollaborationStoreHandle): string;
-  /** note: The execution delta; runs inside one execution transaction AFTER the effect committed. */
   finalize(tx: ExecutionTransaction, receipt: CollaborationEffectReceipt): T;
-  /**
-   * note: In `remote` mode the collaboration half is a provider event: this freezes (or replays)
-   * its durable outbox intents and returns their state. A multi-entry kind returns every entry's
-   * intent, so no durable component is lost from the receipt. `null` means the kind has NO provider
-   * event remotely (its collaboration half is only the validated lane), so the frame finalizes the
-   * execution delta immediately instead of writing the local lane. Absent means the kind has no
-   * admitted remote rewrite, and the frame refuses.
-   */
   remote?(context: StoreContext, intent: CompositeIntent): Promise<RemoteIntent | readonly RemoteIntent[] | null>;
-  /**
-   * note: Every remote operation id this composite's provider effect is addressed by, derived
-   * from the reservation key exactly as `remote` derives them. A remote effect always names
-   * them: the frame's decline decision re-reads these rows at the freeze/decline boundary
-   * (`durableRemoteIntentIds`), so a winner that froze between this attempt's sample and its
-   * refusal is never declined away.
-   */
   remoteIds?(intent: CompositeIntent): readonly string[];
 }>;
 
@@ -1073,32 +904,17 @@ export function remoteCompositeEntryOperationId(key: CompositeKey, index: number
   );
 }
 
-/** note: A v4-shaped UUID from a derivation string: the outbox id shape, without a second mint. */
 function derivedOperationUuid(material: string): string {
   const bytes = createHash("sha256").update(material, "utf8").digest();
   const hex = Buffer.from(bytes.subarray(0, 16)).toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-/**
- * note: How one provider intent the composite froze is settled beyond its own row: a confirmed
- * repair reached through the live `resolved_by` chain, a recorded abandonment that will never
- * produce an effect (naming the fork it withdrew from), or the chain's LIVE leaf — an enqueued,
- * uncertain or still-unresolved-conflict replacement the operator must finish. `null` means the
- * intent itself is the live row (its own refusal names it) or its settlement is unreadable.
- */
 type RemoteSettlement =
   | { kind: "confirmed"; repair: RemoteIntentRead; settled: RemoteIntentRead }
   | { kind: "abandoned"; operationId: string; reason: string | null; fork: string | null }
   | { kind: "live"; intent: RemoteIntentRead };
 
-/**
- * why: An outbox row is not always the answer: `outbox-resolve` confirms a SEPARATE intent with a
- * `resolved_by` link, and `outbox-abandon` records that no effect will ever land. The composite
- * reads the WHOLE chain to its leaf rather than reporting the original row forever: a live repair
- * (enqueued, or an uncertain send) is the work to dispatch, and a withdrawn repair leaves the fork
- * it withdrew from as the only repair still admitted.
- */
 async function remoteSettlementOf(context: StoreContext, operationId: string): Promise<RemoteSettlement | null> {
   const visited = new Set<string>();
   let cursor = operationId;
@@ -1110,20 +926,13 @@ async function remoteSettlementOf(context: StoreContext, operationId: string): P
     const read = await readRemoteIntent(context, cursor);
     settled ??= read;
     if (read.state === "confirmed") {
-      // invariant: The entry's OWN frozen request travels with the repair, so the composite can
-      // prove the settled outcome against what this reservation asked for.
       return { kind: "confirmed", repair: read, settled };
     }
     if (read.state === "abandoned") return { kind: "abandoned", operationId: cursor, reason: read.abandonReason, fork };
     if (read.state !== "conflict") {
-      // note: A leaf reached through a `resolved_by` edge is this entry's effective work; the entry
-      // itself is reported by its own state.
       return cursor === operationId ? null : { kind: "live", intent: read };
     }
     if (read.resolvedBy === null) {
-      // invariant: The chain's LAST leaf can itself be an unresolved conflict. That leaf — not the
-      // ancestor whose `resolved_by` already links to it — is the fork a reviewed replacement must
-      // address, so it is the entry's live work instead of an unreadable settlement.
       return cursor === operationId ? null : { kind: "live", intent: read };
     }
     fork = cursor;
@@ -1131,13 +940,6 @@ async function remoteSettlementOf(context: StoreContext, operationId: string): P
   }
 }
 
-/**
- * note: The durable decline cause of a composite whose outstanding provider intents are all
- * abandoned ORIGINALS and whose confirmed components all carry a readable receipt. Confirmed
- * components are named in the cause: an effect-free claim would invite a duplicate publish of work
- * the provider already carries. A withdrawn REPAIR never reaches this cause - its fork is still
- * repairable, so it keeps the reservation prepared instead.
- */
 function abandonedRemoteCause(
   abandoned: readonly { operationId: string; reason: string | null }[],
   confirmed: readonly RemoteIntent[] = [],
@@ -1149,8 +951,6 @@ function abandonedRemoteCause(
   const settled = confirmed
     .map((entry) => `provider:${entry.operationId}${entry.confirmed === null ? "" : ` (issue ${entry.confirmed.identity.issueId})`}`)
     .join(", ");
-  // invariant: A mixed decline names the request that can finish the batch: confirmed components are
-  // durable, so only the entries that did not settle belong in the new request.
   const retry =
     settled === ""
       ? "reissue the verb under a new operation id"
@@ -1190,12 +990,6 @@ function abandonedRemoteCause(
   };
 }
 
-/**
- * note: The recovery of an entry whose reviewed repair was withdrawn before it confirmed. The fork
- * that repair replaced is still repairable (a resolution is admitted over an abandoned one), so a
- * NEW reviewed replacement confirmed there finalizes THIS reservation: the verb resumes on its own
- * operation id instead of starting over.
- */
 function withdrawnRepairRecovery(withdrawn: { repair: string; reason: string | null; fork: string }): string {
   return (
     `The reviewed replacement ${withdrawn.repair} of ${withdrawn.fork} was abandoned` +
@@ -1208,14 +1002,6 @@ function withdrawnRepairRecovery(withdrawn: { repair: string; reason: string | n
   );
 }
 
-/**
- * invariant: A confirmed repair acknowledges the business outcome the ORIGINAL request named, never
- * merely that its fork merged. The confirmed record's CURRENT disposition must be the one the frozen
- * request asked for: a closure whose repair kept the record open published no closure, so the plan
- * effect is never acknowledged from it. Mirrors the registration's changed-content refusal: the
- * settled effect is named, and the correction route re-freezes against the merged head under a NEW
- * operation id.
- */
 function repairedOutcomeMismatch(settlement: Extract<RemoteSettlement, { kind: "confirmed" }>): StoreError | null {
   const repair = settlement.repair;
   const frozen = settlement.settled.event;
@@ -1232,11 +1018,6 @@ function repairedOutcomeMismatch(settlement: Extract<RemoteSettlement, { kind: "
   const expected = (frozen.change.mstar.fields as Record<string, unknown>).disposition;
   const actual = (confirmed.event.change.mstar.fields as Record<string, unknown>).disposition;
   if (expected === actual) return null;
-  // invariant: The recovery is disposition-specific, because only one of the two settlements leaves a
-  // retried closure runnable. An OPEN settlement keeps the issue closable, so the retry is admitted
-  // once the operator has the CURRENT revision. A TERMINAL settlement is the decision that now
-  // stands: closure requires `open`, so the retry is unreachable until the issue is deliberately
-  // reopened, and only the reopened revision makes a new closure admissible.
   const showId = frozen.change.issueRef;
   const terminal =
     typeof actual === "string" && (TERMINAL_DISPOSITIONS as readonly string[]).includes(actual);
@@ -1262,8 +1043,6 @@ function repairedOutcomeMismatch(settlement: Extract<RemoteSettlement, { kind: "
     {
       settled_operations: [repair.operationId],
       settled_records: [confirmed.recordId],
-      // invariant: The settled provider work is DURABLE; a replayed decline names it so the operator
-      // never re-sends it while the execution acknowledgement stays unapplied.
       confirmed_components: [`provider:${repair.operationId}`],
       requested_disposition: expected,
       confirmed_disposition: actual,
@@ -1272,15 +1051,8 @@ function repairedOutcomeMismatch(settlement: Extract<RemoteSettlement, { kind: "
   );
 }
 
-/**
- * note: The state-specific recovery of ONE outstanding provider entry: the live replacement when the
- * chain has one (dispatch it with its fork observation, or reconcile an uncertain send), otherwise
- * the action that can settle the entry's own state.
- */
 function outstandingRecovery(entry: RemoteIntent, leaf: RemoteIntentRead | undefined): string {
   if (entry.state === "confirmed") {
-    // invariant: The supported re-observation form is the reviewed bind's own `observe --input`
-    // command; a `--project` observation is not a command this release publishes.
     return (
       `Restore this project's read permission by submitting a verified observation with ` +
       `\`mstar store collaboration remote observe --harness <abs> --input <file|->\`, then reissue this SAME verb with ` +
@@ -1289,9 +1061,6 @@ function outstandingRecovery(entry: RemoteIntent, leaf: RemoteIntentRead | undef
   }
   if (leaf !== undefined) {
     if (leaf.state === "conflict") {
-      // invariant: The live leaf is itself an unresolved conflict, so the original already links to
-      // it: a second `outbox-resolve` of the original is refused. The leaf's OWN fork takes the
-      // reviewed successor.
       return (
         `The conflicted intent ${entry.operationId} is taken over by ${leaf.operationId}, which is itself an unresolved ` +
         `conflict: record a reviewed replacement of THAT fork with \`mstar store collaboration remote outbox-resolve ` +
@@ -1335,12 +1104,6 @@ function outstandingRecovery(entry: RemoteIntent, leaf: RemoteIntentRead | undef
   );
 }
 
-/**
- * why: A `remote` checkout's composite has no local collaboration effect to apply: the provider
- * event is the effect. The frame finalizes ONLY the execution delta of a reservation whose
- * outbox intent is confirmed, and reports the durable state otherwise — never a business success
- * for a queued provider write, and never a second application of a confirmed one.
- */
 async function runRemoteComposite<T>(
   context: ExecutionContext | StoreContext,
   intent: CompositeIntent,
@@ -1366,22 +1129,7 @@ async function runRemoteComposite<T>(
     remoteIntents = outcome === null ? null : Array.isArray(outcome) ? outcome : [outcome];
   } catch (error) {
     if (codeOf(error) === "collaboration.operation-partial") throw error;
-    // invariant: A DETERMINISTIC refusal of the preparation itself froze no provider intent (a
-    // partially frozen multi-entry preparation reports its own `collaboration.operation-partial`
-    // above). Retaining the reservation would block the addressed row and every corrected
-    // retry, so it is declined durably and the corrected request proceeds under a new id.
-    //
-    // A `remote.operation-conflict` that READ a durable outbox row (`durable_intent`) proves the
-    // opposite: another same-id attempt already froze the entry, so this is a race-safe proof of
-    // POST-freeze state, never a pre-freeze failure. Declining here would release the winner's
-    // reservation out from under its durable intent; the reservation is retained and the same-id
-    // replay completes from the frozen intent instead.
     if (isDeterministicRefusal(error) && detailsOf(error)?.durable_intent !== true) {
-      // invariant: This refusal proves a PRE-freeze failure only against the sample it was decided
-      // on, and a same-id attempt admitted before this decline can still freeze after that sample.
-      // The absence check and the durable decline therefore happen INSIDE the freeze's own write
-      // lane: a durable intent found there retains the reservation, and a freeze that begins after
-      // the decline commits meets the reservation's declined phase in that same lane and refuses.
       const cause: DeclineCause = {
         code: codeOf(error) as string,
         message:
@@ -1441,8 +1189,6 @@ async function runRemoteComposite<T>(
     });
   }
   if (remoteIntents === null) {
-    // invariant: A kind whose remote collaboration half is only the validated lane has no
-    // provider effect to wait for; its execution delta is the whole effect and commits now.
     const receipt: CollaborationEffectReceipt = {
       key: intent.key,
       requestHash: intent.requestHash,
@@ -1466,11 +1212,6 @@ async function runRemoteComposite<T>(
       });
     }
   }
-  // invariant: An intent row is not always the answer: a conflicted fork is repaired by a
-  // separate confirmed intent linked through `resolved_by`, and an abandoned intent will never
-  // confirm. Both are settled HERE, so a plan reservation never waits on them forever. A
-  // settlement counts only with its own readable receipt: a confirmed state whose effect is
-  // undisclosed or unreadable proves nothing and never finalizes (state alone is not a receipt).
   const effective: RemoteIntent[] = [];
   const abandoned: Array<{ operationId: string; reason: string | null }> = [];
   const liveLeaves = new Map<string, RemoteIntentRead>();
@@ -1487,14 +1228,10 @@ async function runRemoteComposite<T>(
       try {
         settlement = await remoteSettlementOf(context, entry.operationId);
       } catch (error) {
-        // note: An unreadable settlement is reported as outstanding with its read failure named,
-        // never masked into an ordinary pending row that points the operator at the wrong command.
         unreadSettlements.push(`${entry.operationId}: ${messageOf(error)}`);
         settlement = null;
       }
       if (settlement?.kind === "confirmed") {
-        // invariant: A repair acknowledges the OUTCOME the frozen request named, not merely that its
-        // fork merged; a mismatch is decided below, with every settled component named and durable.
         repairedMismatch ??= repairedOutcomeMismatch(settlement);
         effective.push({
           ...entry,
@@ -1509,17 +1246,10 @@ async function runRemoteComposite<T>(
       }
       if (settlement?.kind === "abandoned") {
         if (settlement.fork === null) {
-          // invariant: Only an abandoned ORIGINAL can never acquire a successor. It is carried as
-          // abandoned, which lets the settled-composite decision below see the whole chain instead
-          // of waiting on the original conflict forever.
           abandoned.push({ operationId: settlement.operationId, reason: settlement.reason });
           effective.push({ ...entry, state: "abandoned" });
           continue;
         }
-        // invariant: An abandoned REPAIR is withdrawn work, not settled work: the fork it withdrew
-        // from stays repairable (`outbox-resolve` admits a replacement over an abandoned one), so a
-        // successor confirmed there still finalizes THIS reservation. The entry stays outstanding,
-        // and its recovery names that replacement instead of a new request.
         withdrawnRepairs.set(entry.operationId, {
           repair: settlement.operationId,
           reason: settlement.reason,
@@ -1527,22 +1257,13 @@ async function runRemoteComposite<T>(
         });
       }
       if (settlement?.kind === "live") {
-        // invariant: The chain ends in a LIVE replacement, not in a settlement: the entry stays
-        // outstanding, and the recovery names the replacement to dispatch (or reconcile) instead of
-        // the original conflicted row — a second `outbox-resolve` of that fork is refused while the
-        // live repair is linked.
         liveLeaves.set(entry.operationId, settlement.intent);
       }
     }
     effective.push(entry);
   }
-  // note: Only a PROVED confirmation settles an entry: state with no readable receipt stays
-  // outstanding, and the composite finalizes only on entries whose effect it can actually read.
   const proved = (entry: RemoteIntent): boolean => entry.state === "confirmed" && entry.confirmed !== null;
   const confirmedEntries = effective.filter((entry) => proved(entry));
-  // invariant: EVERY entry is scanned, not just the first outstanding one: one confirmed entry with
-  // an unreadable receipt keeps the reservation (a mixed decline would hide provider work), and
-  // every outstanding entry is named in the refusal.
   const outstanding = effective.filter((entry) => !proved(entry));
   const unreadableConfirmed = outstanding.find((entry) => entry.state === "confirmed");
   if (outstanding.length > 0) {
@@ -1551,10 +1272,6 @@ async function runRemoteComposite<T>(
       unreadableConfirmed === undefined &&
       effective.every((entry) => entry.state === "confirmed" || entry.state === "abandoned")
     ) {
-      // invariant: Every outstanding provider intent is abandoned with no live repair, so no
-      // provider effect can ever arrive from them, and every confirmed component carries a readable
-      // receipt. Confirmed components are named in the decline: an effect-free claim would hide
-      // provider work already committed and invite duplicates.
       const cause = abandonedRemoteCause(abandoned, confirmedEntries);
       const settlement = await markDeclined(context, intent, cause);
       if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
@@ -1594,10 +1311,6 @@ async function runRemoteComposite<T>(
     });
   }
   if (repairedMismatch !== null) {
-    // invariant: Every provider component is durable, but the settled repair does not carry the
-    // business outcome this reservation asked for, so NO execution binding is acknowledged from it.
-    // The reservation is declined with the settled disclosure and a supported correction route
-    // instead of retrying a finalization that can never succeed.
     const cause: DeclineCause = {
       code: codeOf(repairedMismatch) as string,
       message: messageOf(repairedMismatch),
@@ -1607,10 +1320,6 @@ async function runRemoteComposite<T>(
     if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
     throw recordedRefusal(intent.key.operationId, cause);
   }
-  // invariant: A remote composite owns no local collaboration revision; the confirmed provider
-  // events ARE its effect receipt. Every entry is named with the record and issue it confirmed, so
-  // a multi-entry kind's effects stay inspectable after the fact, and the confirmed event itself
-  // is carried so the finalizer validates the frozen request against what the provider published.
   const receipt: CollaborationEffectReceipt = {
     key: intent.key,
     requestHash: intent.requestHash,
@@ -1633,10 +1342,6 @@ async function runRemoteComposite<T>(
   } catch (error) {
     if (codeOf(error) === "collaboration.operation-partial") throw error;
     if (codeOf(error) === "remote.effect-mismatch") {
-      // invariant: The settled provider effect does not carry the business outcome the frozen
-      // request reviewed, so NO execution binding is recorded from it. The reservation is declined
-      // with the settled disclosure and a supported correction route instead of retrying a
-      // finalization that can never succeed.
       const cause: DeclineCause = {
         code: codeOf(error) as string,
         message: messageOf(error),
@@ -1646,9 +1351,6 @@ async function runRemoteComposite<T>(
       if (!settlement.settled) throw unsettledDeclineRefusal(intent, cause, settlement.error);
       throw recordedRefusal(intent.key.operationId, cause);
     }
-    // invariant: Q2: every provider effect is confirmed and durable. An execution-acknowledgement
-    // failure discloses exactly those components and the same-operation replay path instead of
-    // reporting the local error alone and obscuring the external effect.
     throw partialRefusal({
       intent,
       phase: "collaboration-confirmed",
@@ -1662,11 +1364,6 @@ async function runRemoteComposite<T>(
   }
 }
 
-/**
- * why: Phase 3: commit the execution delta and its receipt, then mark the reservation
- * confirmed, in ONE execution transaction. A concurrent attempt that finalized
- * first serves its recorded result instead of committing the delta twice.
- */
 async function finalizeComposite<T>(
   context: StoreContext,
   intent: CompositeIntent,
@@ -1674,11 +1371,6 @@ async function finalizeComposite<T>(
   finalize: CollaborationCompositeEffects<T>["finalize"],
 ): Promise<T> {
   return withExecutionTransaction(context, (tx) => {
-    // why: The minimal import is the ONE composite whose execution half PROMOTES a
-    // staged authority together with the imported rows, so no interruption can
-    // expose an ACTIVE store that holds no imported workflow. It re-asserts the
-    // promotion itself inside its finalization transaction; every other kind
-    // keeps the active-authority requirement.
     if (intent.kind !== "execution-import") {
       assertActiveExecutionAuthority(
         tx,
@@ -1703,9 +1395,6 @@ async function finalizeComposite<T>(
       }
       return markReplayed(parseJson(row.receiptJson, "execution_collaboration_intents.receipt_json") as T);
     }
-    // why: The frozen identity (payload/actor/scope/target) is the admission; the
-    // caller fingerprint is deliberately not compared, so a recovered coordinator
-    // identity continues the intent instead of taking it over.
     assertSameIntent(row, intent);
     const result = finalize(tx, receipt);
     tx.db
@@ -1734,8 +1423,6 @@ export async function runCollaborationComposite<T>(
   intent: CompositeIntent,
   effects: CollaborationCompositeEffects<T>,
 ): Promise<T> {
-  // invariant: A `remote` checkout has no local collaboration authority to write, so the frame
-  // takes its remote branch: the provider event is the effect and only the execution delta is local.
   if (resolveCollaborationLocation(context).mode === "remote") return runRemoteComposite(context, intent, effects);
   let effect: EffectOutcome;
   try {
@@ -1767,8 +1454,6 @@ export async function runCollaborationComposite<T>(
       });
     }
     if (declined.kind === "committed") {
-      // why: A concurrent same-id attempt committed the effect first: finalize THAT
-      // effect instead of declining it.
       effect = declined;
     } else {
       const settlement = await markDeclined(context, intent, declined.cause);

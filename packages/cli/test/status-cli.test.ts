@@ -9,10 +9,6 @@ import { initializeCollaborationStore, initializeStore, openStore, resolveCollab
 import { runCli, withTempDir } from "./harness";
 import { cliEnvelope } from "./support/cli-assertions";
 
-/**
- * note: Both the in-process reads and the spawned CLI resolve the collaboration lane
- * through the user home: pin it to a private root and restore it afterwards.
- */
 const HOME_ROOT = mkdtempSync(join(tmpdir(), "status-cli-home-"));
 const PRIOR_HOME = process.env.HOME;
 let homeSpy: { mockRestore(): void } | undefined;
@@ -79,11 +75,6 @@ function captureInputOf(occurrenceKey: string, severity: string): Record<string,
   };
 }
 
-/**
- * note: A real checkout: issue authority is the repository's collaboration lane, so
- * `store init` needs an origin or `[collaboration]` identity before it can
- * create anything.
- */
 function seedCheckout(dir: string): void {
   execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
   writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
@@ -122,7 +113,6 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
         total_open: 1,
         by_severity: { critical: 0, high: 1, medium: 0, low: 0, nit: 0 },
         by_project: { _default: 1 },
-        // note: Additive evidence: the scope and instant that answered the totals.
         collaboration: { completeness: "complete", scope: { kind: "repository", key: "open-issues:repository" } },
       });
     });
@@ -133,7 +123,6 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
       seedCheckout(dir);
       const result = runCli(["status", "tech-debt", "--harness", dir]);
       expect(result.exitCode).toBe(1);
-      // invariant: Missing collaboration data is never an empty success.
       expect(cliEnvelope(result, "refused", "collaboration.not-initialized").data).toBeUndefined();
     });
   });
@@ -144,7 +133,6 @@ describe("mstar status tech-debt — open-issue rollup over the issue store", ()
       seedCheckout(dir);
       const handle = await initializeStore({ harnessDir: dir });
       handle.close();
-      // invariant: A staged lane exists but is not published: ordinary reads refuse it.
       await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: dir }));
       // A read in THIS process first: a child's first read of a store the
       // runner just wrote intermittently fails to open (task-3 report §obs).

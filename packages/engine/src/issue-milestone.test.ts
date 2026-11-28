@@ -18,8 +18,6 @@ const repo = join(root, "repo");
 mkdirSync(repo, { recursive: true });
 execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
 execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
-// note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-// own repository, which never publishes the selector ref.
 execFileSync("git", ["config", `url.${repo}.insteadOf`, "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
 writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
 const harness = join(repo, ".mstar");
@@ -27,7 +25,6 @@ const context: StoreContext = { harnessDir: harness };
 const projectId = "milestone-assignment-project";
 let db: StoreDb;
 let issueNumber = 0;
-/** note: v2 made the stable reference NOT NULL and unique; the fixture mints one per row. */
 let issueRefSequence = 0;
 function makeIssue(id: string, project = projectId): void {
   const issueRef = `mstar:issue:00000000-0000-4000-8000-${String(++issueRefSequence).padStart(12, "0")}`;
@@ -51,8 +48,6 @@ beforeAll(async () => {
   mkdirSync(harness, { recursive: true });
   const location = resolveCollaborationLocation(context);
   await initializeCollaborationStore(location);
-  // invariant: The real activation also records this checkout's binding: an ACTIVE
-  // authority is never usable from an unbound checkout.
   const seeded = new DatabaseSync(location.dbPath);
   let authority: { storeId: string; epoch: number } | null = null;
   try {

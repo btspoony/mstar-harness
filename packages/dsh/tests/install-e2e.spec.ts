@@ -81,10 +81,6 @@ import { packAndProbe } from './install-e2e-pack-probe.ts'
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
 /** The real CLI entry (plan 001 surface) run as a subprocess. */
 const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
-/** why: Neutral cwd for CLI subprocesses: harness resolution must answer from the
- * disposable home, never from the ambient control checkout's own `.mstarc`. The
- * cwd is itself a declared git repo, or the init bootstrap's upward identity
- * probe escapes it and writes a `.mstarc` into `$TMPDIR` itself. */
 const cliCwd = mkdtempSync(join(tmpdir(), 'dsh-cli-cwd-'))
 execFileSync('git', ['init', '-q', '-b', 'main', cliCwd], { stdio: 'ignore' })
 writeFileSync(join(cliCwd, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-cli-cwd-${cliCwd.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)

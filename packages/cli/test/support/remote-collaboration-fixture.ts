@@ -1,18 +1,3 @@
-/**
- * note: The controlled host and sandbox fixture for the remote collaboration suites.
- *
- * The fixture owns the provider state in memory in the TEST RUNNER and a local
- * bare Git origin that publishes the protected authority ref plus a tracked
- * checkout branch. A sandbox is a fresh clone of that branch, with its OWN
- * workspace and `HOME`, spawned with an allowlisted child environment: only
- * public JSON DTOs (written under that sandbox's own directory) cross into the
- * CLI, and no prior store, filesystem path or provider credential is ever
- * handed to another sandbox. Children run the locally built CLI entry.
- *
- * `verify` and `observe` are test-runner operations: they build the documents
- * the Host Agent would submit, and the CLI receives them as files. No provider
- * client, callback, token or in-process object is passed into the CLI.
- */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -101,17 +86,12 @@ export type RemoteSandbox = Readonly<{
   repo: string;
   harness: string;
   home: string;
-  /** note: The CLI entry this sandbox's children run; it is the built artifact. */
   entry: string;
-  /** note: The exact allowlisted environment this sandbox's children receive. */
   environment: Readonly<Record<string, string>>;
   run(args: readonly string[]): RunResult;
   runJson(args: readonly string[]): SandboxCommand;
-  /** note: Write one host document under THIS sandbox's own directory. */
   writeJson(name: string, value: unknown): string;
-  /** note: A fresh absolute path under this sandbox for a handoff document the CLI writes with `--out`. */
   outPath(name: string): string;
-  /** note: The handoff document this sandbox wrote, parsed; a missing file is the assertion's own failure. */
   readOut(path: string): Record<string, unknown>;
   status(): SandboxCommand;
   bind(check: ScopeCheckDocument): SandboxCommand;
@@ -163,12 +143,6 @@ export type OutboxReceiptDocument = Readonly<{
   outcome: unknown;
 }>;
 
-/**
- * invariant: A sandbox child sees only its own workspace `HOME` and the
- * interpreter path. Ambient harness variables, the invoking session identity
- * and every other sandbox's paths are absent by construction, never scrubbed
- * one by one.
- */
 function childEnvironment(home: string): Readonly<Record<string, string>> {
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
@@ -178,18 +152,10 @@ function childEnvironment(home: string): Readonly<Record<string, string>> {
   };
 }
 
-/** note: The deadline every fixture child gets; a wedged CLI or Git process is killed, never waited out. */
 const CHILD_TIMEOUT_MS = 120_000;
-/** note: The exit code a killed child reports, so a timed-out run fails instead of reading as null. */
 const TIMEOUT_EXIT_CODE = 124;
-/** note: A shared fixture-only Git home; ambient `HOME` and host Git config never reach a fixture child. */
 const FIXTURE_GIT_HOME = join(tmpdir(), "mstar-fixture-git-home");
 
-/**
- * invariant: A fixture Git child sees its own `HOME` and an explicit minimal environment, and
- * no system or global Git config, so a runner-set signing, hook or `insteadOf` setting can
- * neither redirect nor block the fixture's clone, commit or push.
- */
 function gitEnvironment(home: string): Record<string, string> {
   mkdirSync(home, { recursive: true });
   return {
@@ -248,7 +214,6 @@ export function parseSandboxCommand(result: RunResult): SandboxCommand {
   try {
     envelope = asRecord(JSON.parse(result.stdout));
   } catch {
-    // note: A non-JSON body stays empty; the raw result carries the failure.
   }
   const details = asRecord(envelope.details);
   return {
@@ -273,7 +238,6 @@ export type ProviderIssueRecord = Readonly<{
   subject: Readonly<Record<string, unknown>>;
 }>;
 
-/** note: One provider record: the event the host appended and the identity it landed on. */
 type ProviderEffect = Readonly<{
   operationId: string;
   attemptId: string;
@@ -282,7 +246,6 @@ type ProviderEffect = Readonly<{
   event: RemoteEvent;
 }>;
 
-/** note: One provider record as a traversal renders it; a project event carries no issue record. */
 function providerRecord(effect: ProviderEffect): ProviderIssueRecord | null {
   const { change } = effect.event;
   return change.kind === "project-replace"
@@ -299,15 +262,10 @@ export class RemoteCollaborationFixture {
   private readonly localPublisher: string;
   private sandboxSequence = 0;
   private published: PublishedSelector | null = null;
-  /** note: The provider records a lookup can observe; `send` appends and `withheld` holds the rest. */
   private readonly effects: ProviderEffect[] = [];
-  /** note: Records the provider holds while a stale read cannot observe them yet; they are never lost. */
   private readonly withheld: ProviderEffect[] = [];
-  /** note: Records the provider already held before this run; a traversal renders their complete history. */
   private readonly seeded: Array<Readonly<{ issueId: string; record: ProviderIssueRecord }>> = [];
-  /** note: The portable project document a traversal renders; the default carries empty history. */
   private projectDocument: Readonly<Record<string, unknown>> | null = null;
-  /** note: Every provider call the TEST RUNNER made; the CLI has no channel into this state. */
   readonly providerCalls: Array<Readonly<{ kind: "send" | "lookup"; operationId: string }>> = [];
   private issues: readonly FixtureIssue[] = [
     {
@@ -318,9 +276,7 @@ export class RemoteCollaborationFixture {
     },
   ];
 
-  /** note: `repoKey` is derived from the synthetic canonical HTTPS origin. */
   readonly repoKey: string;
-  /** note: The SECOND origin's key: the `local` lane a two-checkout move addresses as its destination. */
   readonly localRepoKey: string;
 
   constructor(name: string) {
@@ -333,8 +289,6 @@ export class RemoteCollaborationFixture {
     this.publisher = join(this.root, "publisher");
     mkdirSync(this.bare, { recursive: true });
     fixtureGit(this.root, ["init", "-q", "--bare", this.bare]);
-    // note: The SECOND origin. A `remote` checkout cannot write a `local` lane, so the two-checkout
-    // move's other half runs in a clone of this origin, whose `.mstarc` declares local mode.
     this.localBare = join(this.root, "local-origin.git");
     this.localPublisher = join(this.root, "local-publisher");
     mkdirSync(this.localBare, { recursive: true });
@@ -351,7 +305,6 @@ export class RemoteCollaborationFixture {
     fixtureGit(this.publisher, ["init", "-q", "-b", TRACKED_BRANCH]);
     fixtureGit(this.publisher, ["config", "user.name", "Remote Selector"]);
     fixtureGit(this.publisher, ["config", "user.email", "selector@example.test"]);
-    // invariant: the collaboration declaration is TRACKED; a sandbox obtains it from Git.
     writeFileSync(join(this.publisher, ".mstarc"), "[collaboration]\nmode=remote\n");
     fixtureGit(this.publisher, ["add", ".mstarc"]);
     fixtureGit(this.publisher, ["commit", "-q", "-m", "declare remote collaboration"]);
@@ -362,16 +315,10 @@ export class RemoteCollaborationFixture {
     rmSync(this.root, { recursive: true, force: true });
   }
 
-  /** note: One fresh clone of the tracked branch, with its own workspace, `HOME` and host inputs. */
   sandbox(name: string): RemoteSandbox {
     return this.checkout(name, "remote", this.bare, this.origin);
   }
 
-  /**
-   * note: One fresh clone of the SECOND origin, whose `.mstarc` declares `local` mode. It is the
-   * destination half of a local-to-remote move and the destination half of a remote-to-local one:
-   * the checkout whose lane the record lands in.
-   */
   localSandbox(name: string): RemoteSandbox {
     return this.checkout(name, "local", this.localBare, `https://${this.localRepoKey}.git`);
   }
@@ -381,11 +328,7 @@ export class RemoteCollaborationFixture {
     const repo = join(dir, "repo");
     const home = join(dir, "home");
     mkdirSync(dir, { recursive: true });
-    // invariant: The sandbox's own `HOME` exists BEFORE the clone, so clone, commit and push
-    // all run under it rather than under the test runner's Git configuration.
     mkdirSync(home, { recursive: true });
-    // invariant: a genuine clone through the synthetic canonical URL; the checkout,
-    // its origin and `.mstarc` are all canonical Git state, never fixture-written files.
     fixtureGit(this.root, [
       "clone",
       "-q",
@@ -452,11 +395,6 @@ export class RemoteCollaborationFixture {
     };
   }
 
-  /**
-   * note: Publish one reviewed `active` selector generation to the bare origin. A
-   * successor names the generation it supersedes and its fenced cutover, so the
-   * moved-selector case is a real reviewed advance rather than an edited file.
-   */
   publish(generation: number, overrides: Readonly<Record<string, unknown>> = {}): PublishedSelector {
     const previous = this.published;
     const payload = {
@@ -483,7 +421,6 @@ export class RemoteCollaborationFixture {
       ...overrides,
     };
     writeFileSync(join(this.publisher, "authority.json"), `${JSON.stringify(payload, null, 2)}\n`);
-    // note: A successor commit must differ even when only its generation number does.
     writeFileSync(join(this.publisher, "generation.txt"), `${String(generation)}-${String(Date.now())}-${String(Math.random())}\n`);
     fixtureGit(this.publisher, ["add", "authority.json", "generation.txt"]);
     fixtureGit(this.publisher, ["commit", "-q", "-m", `publish generation ${String(generation)}`]);
@@ -493,7 +430,6 @@ export class RemoteCollaborationFixture {
     return this.published;
   }
 
-  /** note: Replace the readable provider issues the next observation carries. */
   setIssues(issues: readonly FixtureIssue[]): void {
     this.issues = issues;
   }
@@ -503,12 +439,6 @@ export class RemoteCollaborationFixture {
     this.projectDocument = project;
   }
 
-  /**
-   * note: The provider holds a COMPETING record for one dispatched attempt instead of the frozen
-   * effect: one other event per observed fork head, each addressing the same record in the same
-   * scope under its own operation id. They are persisted in provider state, so a later traversal
-   * re-renders the competing subject the host must review rather than the event it sent.
-   */
   conflict(permit: OutboxPermit): OutboxReceiptDocument {
     this.providerCalls.push({ kind: "send", operationId: permit.operationId });
     const frozen = permit.frozenRequest.event as RemoteEvent;
@@ -569,16 +499,9 @@ export class RemoteCollaborationFixture {
     };
   }
 
-  /**
-   * note: What a lookup can observe of one attempt, while the record its single send produced
-   * stays in provider state: a stale view that has not exposed it yet, exactly that record, or
-   * that record plus the duplicate the provider applied under a second immutable id. Recovery
-   * must name the record the send produced, never one reinserted to make confirmation pass.
-   */
   setAttemptObservable(permit: OutboxPermit, observable: "stale" | "sole" | "duplicated"): void {
     const owned = (effect: ProviderEffect): boolean =>
       effect.operationId === permit.operationId && effect.attemptId === permit.attemptId;
-    // note: Restore every withheld record first, then rebuild only the view the caller asks for.
     for (let index = this.withheld.length - 1; index >= 0; index -= 1) {
       const effect = this.withheld[index]!;
       if (!owned(effect)) continue;
@@ -589,7 +512,6 @@ export class RemoteCollaborationFixture {
     if (record === undefined) {
       throw new Error(`fixture: the provider holds no record for attempt ${permit.attemptId}`);
     }
-    // note: Everything past the first record is a duplicate application; fold it back to one.
     for (let index = this.effects.length - 1; index >= 0; index -= 1) {
       const effect = this.effects[index]!;
       if (owned(effect) && effect.recordId !== record.recordId) this.effects.splice(index, 1);
@@ -601,43 +523,27 @@ export class RemoteCollaborationFixture {
     }
   }
 
-  /** note: The confirmed issue record the provider holds for one operation; `null` once discarded. */
   confirmedIssue(operationId: string): ProviderIssueRecord | null {
     const effect = this.effects.find((entry) => entry.operationId === operationId);
     return effect === undefined ? null : providerRecord(effect);
   }
 
-  /**
-   * note: The provider loses its confirmed record for one operation. The native issue itself
-   * stays readable, so the traversal still shows the issue but no marker: its existence is
-   * never mistaken for the record's survival.
-   */
   discardEffects(operationId: string): void {
     for (let index = this.effects.length - 1; index >= 0; index -= 1) {
       if (this.effects[index]!.operationId === operationId) this.effects.splice(index, 1);
     }
   }
 
-  /**
-   * note: A record the provider ALREADY holds for one native issue (a prior finding), so an
-   * observation can carry non-empty extension history instead of only this run's effects.
-   */
   seedRecord(issueId: string, record: ProviderIssueRecord): void {
     this.seeded.push({ issueId, record });
   }
 
-  /** note: The confirmed issue record the provider holds for one native issue, if it holds one. */
   private recordFor(issueId: string): ProviderIssueRecord | null {
     const effect = this.effects.find((entry) => entry.identity.issueId === issueId);
     if (effect !== undefined) return providerRecord(effect);
     return this.seeded.find((entry) => entry.issueId === issueId)?.record ?? null;
   }
 
-  /**
-   * note: The host sends one issued permit to the provider and records the effect it actually
-   * produced. Called twice for one attempt it records a duplicate effect, which is exactly
-   * the cardinality a `lookup` must report as ambiguous.
-   */
   send(permit: OutboxPermit): OutboxReceiptDocument {
     this.providerCalls.push({ kind: "send", operationId: permit.operationId });
     const recordId = randomUUID();
@@ -653,7 +559,6 @@ export class RemoteCollaborationFixture {
       attemptId: permit.attemptId,
       recordId,
       identity,
-      // note: The provider stores the frozen event it received; its DTO crosses as opaque JSON.
       event: permit.frozenRequest.event as RemoteEvent,
     });
     return {
@@ -669,11 +574,6 @@ export class RemoteCollaborationFixture {
     };
   }
 
-  /**
-   * note: The host looks up what the provider holds for one attempt under its ORIGINAL binding.
-   * Exactly one exact record confirms; none is `not-found` and a duplicate is `ambiguous`,
-   * so neither is ever reported as a business success.
-   */
   lookup(intent: OutboxIntent): OutboxReceiptDocument {
     this.providerCalls.push({ kind: "lookup", operationId: intent.operationId });
     const found = this.effects.filter(
@@ -697,10 +597,6 @@ export class RemoteCollaborationFixture {
     return { ...envelope, outcome: { kind: "unconfirmed", reason } };
   }
 
-  /**
-   * note: The Host Agent's live scope check for one selected project. Everything is
-   * current at submission time, which is what a positive check must prove.
-   */
   verify(project: FixtureProject = REMOTE_PROJECT): ScopeCheckDocument {
     return {
       projectId: project.localProjectId,
@@ -727,7 +623,6 @@ export class RemoteCollaborationFixture {
     };
   }
 
-  /** note: One complete provider traversal for the selected project. */
   observe(project: FixtureProject = REMOTE_PROJECT, expectRevision = 0): ObservationDocument {
     const published = this.requirePublished();
     const check = this.verify(project);
@@ -757,7 +652,6 @@ export class RemoteCollaborationFixture {
             },
           ],
           catalogLinks: [],
-          // note: A seeded document replaces the empty defaults member by member.
           ...this.projectDocument,
         },
         issues: this.issues.map((issue) => {
@@ -773,7 +667,6 @@ export class RemoteCollaborationFixture {
             nativeTitle: issue.title,
             nativeStatus: issue.status,
             providerUpdatedAt: issue.updatedAt,
-            // note: A record the provider no longer holds renders as an unmarked native issue.
             mstar: record === null ? null : { issueRef: record.issueRef, head: record.head, ...record.subject },
           };
         }),
@@ -781,11 +674,6 @@ export class RemoteCollaborationFixture {
     };
   }
 
-  /**
-   * note: The cache lane this sandbox's `HOME` resolves for the fixture repository.
-   * It is found, never assumed: a missing lane is exactly what the absent-data
-   * case asserts.
-   */
   cachePath(sandbox: RemoteSandbox): string {
     const found: string[] = [];
     const walk = (dir: string): void => {

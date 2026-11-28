@@ -87,8 +87,6 @@ describe("mstar compound validate — knowledge-doc schema / index / scope", () 
       writeFileSync(doc, KNOWLEDGE_GOOD);
       const harness = join(dir, ".mstar");
       mkdirSync(harness);
-      // why: The configured root is the fixed `<dir>/.mstar`, so the missing
-      // collaboration lane is the one the completeness query refuses over.
       const knowledgeDir = join(dir, ".agents", "knowledge");
       mkdirSync(knowledgeDir, { recursive: true });
       writeFileSync(join(knowledgeDir, "existing.md"), KNOWLEDGE_GOOD);

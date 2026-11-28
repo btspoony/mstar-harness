@@ -94,8 +94,6 @@ async function corruptStore(harnessDir: string): Promise<void> {
   await mkdir(join(harnessDir, 'store.db'), { recursive: true })
 }
 
-/** note: Make the COLLABORATION database unopenable through the REAL engine channel
- * (a directory where the file belongs → `collaboration.unreadable`). */
 async function corruptCollaboration(harnessDir: string): Promise<void> {
   const dbPath = collaborationDbPathAt(harnessDir)
   await rm(dbPath, { force: true })
@@ -235,8 +233,6 @@ describe('store cutover — the authority is the store, never the retired files'
     // The knowledge digest came from the catalog table — no README.md exists.
     expect(state.knowledge).toEqual({ docCount: 1, categories: ['conventions'] })
     expect(state.storeFacts?.kind).toBe('store')
-    // note: The rollup discloses the collaboration observation that produced it —
-    // not an execution projection (this view reads no execution source).
     expect(state.storeFacts?.completeness).toBe('complete')
     expect(typeof state.storeFacts?.asOf).toBe('string')
     expect(state.storeFacts?.projection).toBeNull()
@@ -278,11 +274,6 @@ describe('store cutover — the authority is the store, never the retired files'
   })
 })
 
-/* ===========================================================================
- * invariant: 2. Freshness disclosure: a scoped observation names its own proof, and a
- *    stale execution projection never stands in for it
- * ========================================================================== */
-
 describe('store cutover — collaboration freshness is disclosed', () => {
   it('a stale execution projection neither hides nor impersonates the complete collaboration rollup', async () => {
     const { app, harnessDir } = await storeApp()
@@ -307,8 +298,6 @@ describe('store cutover — collaboration freshness is disclosed', () => {
 
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     expect(state?.storeFacts?.kind).toBe('store')
-    // note: The rollup's proof is the collaboration observation; execution
-    // projection health is neither read nor sold as it.
     expect(state?.storeFacts?.completeness).toBe('complete')
     expect(typeof state?.storeFacts?.asOf).toBe('string')
     expect(state?.storeFacts?.projection).toBeNull()
@@ -331,13 +320,6 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     })
     await seedOpenIssue(harnessDir, { title: 'invisible only while the store refuses', severity: 'critical', operationId: 'op-refused' })
 
-    // invariant: The below-floor/capability refusal cannot be staged in-process: the
-    // engine reads the runtime off `globalThis.Bun`, which Bun exposes as a
-    // non-writable, non-configurable property. So the REFUSAL CHANNEL is
-    // proven with a refusal the engine really raises on the collaboration
-    // lane (an unopenable database), and the floor refusal itself is pinned
-    // below through the engine's own check — the same single authority the
-    // readers surface.
     await corruptCollaboration(harnessDir)
 
     const probe = await probeCollaborationAuthority({ harnessDir })
@@ -389,8 +371,6 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     expect(state?.storeFacts?.diagnostic).toContain('collaboration.not-initialized')
     expect(state?.residualFindings).toBeNull()
 
-    // invariant: A missing collaboration lane is an authority verdict, not a register
-    // permission: the register write is refused with the same cause.
     const probe = await probeCollaborationAuthority({ harnessDir })
     expect(probe).toMatchObject({ kind: 'absent', code: 'collaboration.not-initialized' })
 
@@ -410,7 +390,6 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     expect(gate.ok).toBe(false)
     expect(gate.violations[0]?.message).toContain('collaboration.not-active')
 
-    // invariant: The dsh aggregate never renders a staged lane as an empty success.
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     expect(state?.storeFacts?.kind).toBe('unavailable')
     expect(state?.storeFacts?.diagnostic).toContain('collaboration.not-active')
@@ -517,9 +496,6 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
   async function sealStoreForReaders(harnessDir: string): Promise<void> {
     const handle = await openStore({ harnessDir }, 'read')
     handle.close()
-    // note: Warm the collaboration lane too: the host gates now read IT for a
-    // register verdict, and the first read after publication is the one the
-    // documented bun-test open flake affects.
     expect(await probeCollaborationAuthority({ harnessDir })).toMatchObject({ kind: 'active' })
   }
 
@@ -763,9 +739,6 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
 
   it('a register alias landing on ANOTHER register without an ACTIVE lane is refused by authority (RV-2)', async () => {
     const { app, harnessDir } = await appWithRoot('store-authority-cross-absent')
-    // invariant: Neither context has an ACTIVE collaboration lane: the landed register's
-    // authority is the verdict, and it is a refusal — never the document
-    // validator.
     const destHarness = join(dirname(harnessDir), 'dest-workspace', '.mstar')
     await seedHarness(destHarness, {
       'status.json': v2Root([]),
@@ -857,11 +830,6 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
   })
 })
 
-/* ===========================================================================
- * note: 7. Collaboration host authority: every source combination names its own
- *    cause, and the dsh aggregate discloses completeness/asOf.
- * ========================================================================== */
-
 describe('collaboration host authority — source combinations and diagnostics', () => {
   const targetOf = (path: string): FsTarget => ({ targetKey: path as FsTarget['targetKey'], displayPath: path })
 
@@ -918,7 +886,6 @@ describe('collaboration host authority — source combinations and diagnostics',
     expect(status).toBeInstanceOf(StatusVetoError)
     expect((status as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['execution.direct-write-refused'])
 
-    // invariant: The aggregate reports the missing proof as unavailable — never zero.
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     expect(state?.storeFacts).toMatchObject({ kind: 'unavailable', completeness: 'unavailable', asOf: null })
     expect(state?.storeFacts?.diagnostic).toContain('collaboration.not-initialized')

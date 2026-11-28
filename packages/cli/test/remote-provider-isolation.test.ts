@@ -1,18 +1,3 @@
-/**
- * note: Provider isolation and the remote refusal matrix at the shipped boundary.
- *
- * Two independent proofs: a static walk of the remote modules' reachable
- * production imports and their owning manifests, and a runtime guard preloaded
- * into the BUILT CLI with `NODE_OPTIONS=--require`. The guard denies and records
- * net/HTTP(S)/TLS/WebSocket/fetch connections, reads of a host credential
- * sentinel outside the sandbox, and any subprocess other than Git; the inbound
- * MStar MCP server remains an allowed local surface and is pinned by its own
- * suites.
- *
- * Every refusal runs through the real CLI and the controlled host fixture: the
- * provider state lives in the test runner, each sandbox owns its workspace and
- * `HOME`, and only public JSON documents cross into the child.
- */
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -38,7 +23,6 @@ const GUARD = join(import.meta.dir, "support/remote-no-provider.cjs");
 const REMOTE = ["store", "collaboration", "remote"] as const;
 const SECOND_ISSUE_ID = "88888888-8888-4888-8888-888888888888";
 
-/** note: The remote implementation plus the two bootstrap modules this plan changed. */
 const REMOTE_ROOTS = [
   "packages/engine/src/collaboration-remote.ts",
   "packages/engine/src/collaboration-remote-read.ts",
@@ -64,30 +48,18 @@ function forbiddenImport(specifier: string): boolean {
   return NETWORK_MODULES[specifier] === true || PROVIDER_MODULES.some((pattern) => pattern.test(specifier));
 }
 
-/** note: A declared workspace export: the sources the walk enters, or why it must not. */
 type ExportSource = readonly string[] | "data" | "unresolved";
 
 type WorkspacePackage = Readonly<{ sources: ReadonlyMap<string, ExportSource> }>;
 
-/** note: A module-graph target: JavaScript, or TypeScript source. */
 const CODE_TARGET = /\.(?:[cm]?[jt]sx?)$/;
 
-/** note: A `types` target is a declaration, never the module the package executes. */
 const DECLARATION_TARGET = /\.d\.[cm]?[jt]s$/;
 
-/**
- * note: A bundle name a package's build script renames: `dist/<bundle>` is built from
- * `src/<source>`, so substituting `dist` for `src` cannot find it. A stale entry leaves the
- * target unresolved, which fails the walk instead of skipping the module.
- */
 const BUILD_ENTRIES: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   engine: { "dist/engine": "src/index" },
 };
 
-/**
- * note: Every module a conditional export can run, across `import`/`require`/`default` and nested
- * conditions. A `types` target is skipped: it names a declaration, not the executed module.
- */
 function runtimeTargets(value: unknown): string[] {
   if (typeof value === "string") {
     return CODE_TARGET.test(value) && !DECLARATION_TARGET.test(value) ? [value] : [];
@@ -98,10 +70,6 @@ function runtimeTargets(value: unknown): string[] {
     .flatMap(([, target]) => runtimeTargets(target));
 }
 
-/**
- * note: The source file behind one build target. Packages compile `src/` into `dist/`, so the
- * target path — not the export key — names the source; an unmatched probe stays unresolved.
- */
 function sourceFor(root: string, target: string): string | null {
   const base = target.replace(/^\.\//, "").replace(/(?:\.d)?\.[cm]?[jt]sx?$/, "");
   const parts = base.split("/");
@@ -109,7 +77,6 @@ function sourceFor(root: string, target: string): string | null {
   const probes = renamed === undefined ? [base] : [base, renamed];
   parts.forEach((part, index) => {
     if (part === "dist") probes.push([...parts.slice(0, index), "src", ...parts.slice(index + 1)].join("/"));
-    // note: A declaration root above the package (`dist/<pkg>/src/…`) still ends in the source path.
     if (part === "src") probes.push(parts.slice(index).join("/"));
   });
   for (const probe of probes) {
@@ -121,28 +88,19 @@ function sourceFor(root: string, target: string): string | null {
   return null;
 }
 
-/**
- * note: What one declared export resolves to. Every runtime target must resolve to a source, so a
- * declaration can never stand in for the module the package actually executes.
- */
 function exportSource(root: string, target: unknown): ExportSource {
   const targets = runtimeTargets(target);
-  // note: An export of only non-executable paths (a stylesheet, a document) has no module to walk.
   if (targets.length === 0) return "data";
-  // note: A glob selects several modules and cannot map to one source.
   if (targets.some((value) => value.includes("*"))) return "unresolved";
   const sources: string[] = [];
   for (const value of targets) {
     const source = sourceFor(root, value);
-    // invariant: An unresolved runtime target fails closed; it never falls back to a declaration
-    // source the package does not run.
     if (source === null) return "unresolved";
     if (!sources.includes(source)) sources.push(source);
   }
   return sources;
 }
 
-/** note: Each workspace package's name and every declared export mapped to its source. */
 function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): Map<string, WorkspacePackage> {
   const packages = new Map<string, WorkspacePackage>();
   for (const entry of readdirSync(packagesDir, { withFileTypes: true })) {
@@ -161,8 +119,6 @@ function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): M
     for (const [key, value] of Object.entries(declared)) {
       sources.set(key.replace(/^\.\/?/, ""), exportSource(root, value));
     }
-    // note: Only a package without an `exports` map falls back to `main`; otherwise a bare import
-    // of an undeclared root must fail the walk, as it would fail at runtime.
     if (Object.keys(declared).length === 0 && !sources.has("")) {
       sources.set("", exportSource(root, manifest.main ?? "./src/index.ts"));
     }
@@ -171,7 +127,6 @@ function workspacePackages(packagesDir: string = join(REPO_ROOT, "packages")): M
   return packages;
 }
 
-/** note: Resolve one production specifier to its sources: relative, or a workspace package export. */
 function resolveProductionFile(
   specifier: string,
   fromFile: string,
@@ -182,7 +137,6 @@ function resolveProductionFile(
     if (specifier !== name && !specifier.startsWith(`${name}/`)) continue;
     const subpath = specifier === name ? "" : specifier.slice(name.length + 1);
     const source = pkg.sources.get(subpath);
-    // invariant: An unresolved workspace import fails the walk; it is never silently skipped.
     if (source === undefined) throw new Error(`${fromFile} imports ${specifier}, which ${name} does not export`);
     if (source === "unresolved") throw new Error(`${fromFile} imports ${specifier}, whose source cannot be resolved`);
     return source === "data" ? [] : source;
@@ -190,7 +144,6 @@ function resolveProductionFile(
   return [];
 }
 
-/** note: Every reachable production file (absolute), following workspace packages across their boundary. */
 function walkRemoteImports(
   roots: readonly string[] = REMOTE_ROOTS.map((path) => join(REPO_ROOT, path)),
   workspace: ReadonlyMap<string, WorkspacePackage> = workspacePackages(),
@@ -213,7 +166,6 @@ function importSpecifiers(source: string): string[] {
   return [...source.matchAll(/(?:from\s+|import\s*\(\s*|require\s*\(\s*|import\s+)(["'])([^"']+)\1/g)].map((match) => match[2]!);
 }
 
-/** note: Rule violations with their source line, so a failure names the exact regression. */
 function offendingText(source: string): string[] {
   const findings: string[] = [];
   const at = (index: number): string => `line ${String(source.slice(0, index).split("\n").length)}`;
@@ -254,7 +206,6 @@ function guardUnder(root: string): Guard {
   return { log: join(root, "provider-guard.log"), sentinel };
 }
 
-/** note: The one executable the runtime guard allows; any other `git` on PATH is foreign. */
 function pinnedGit(): string {
   const git = Bun.which("git");
   if (git === null) throw new Error("the runtime provider guard needs a `git` binary");
@@ -272,7 +223,6 @@ function guardEnvironment(sandbox: RemoteSandbox, guard: Guard, overrides: Recor
   };
 }
 
-/** note: The built CLI runs under node here; the guard is a CJS preload, not a Bun option. */
 function guardedRun(sandbox: RemoteSandbox, guard: Guard, args: readonly string[]): RunResult {
   const node = Bun.which("node");
   if (node === null) throw new Error("the runtime provider guard needs a `node` binary for the built CLI");
@@ -293,15 +243,10 @@ function guardRecords(log: string): Array<{ kind: string; detail?: string }> {
 
 function assertGuardClean(guard: Guard): void {
   const records = guardRecords(guard.log);
-  // note: Each guarded child appends its own load record; anything beyond that is an attempt.
   expect(records.length).toBeGreaterThan(0);
   expect(records.filter((record) => record.kind !== "loaded")).toEqual([]);
 }
 
-/**
- * note: A host-only credential must never reach the child environment, a host-submitted
- * document, a CLI answer DTO or a persisted cache/outbox row.
- */
 function assertCredentialAbsent(
   credential: string,
   sandbox: RemoteSandbox,
@@ -318,7 +263,6 @@ function assertCredentialAbsent(
     expect(answer.result.stdout + answer.result.stderr).not.toContain(credential);
   }
   const caches = sandboxCacheFiles(sandbox.home);
-  // invariant: The assertion is never vacuous: the cache and outbox rows were persisted.
   expect(caches).toHaveLength(1);
   for (const path of caches) expect(readFileSync(path, "utf8")).not.toContain(credential);
 }
@@ -346,7 +290,6 @@ describe("provider isolation: the shipped remote path", () => {
       expect(runtime.filter(forbiddenImport)).toEqual([]);
     }
 
-    // invariant: The inbound MStar MCP server is the legitimate local surface and stays in place.
     const cliManifest = JSON.parse(readFileSync(join(REPO_ROOT, "packages/cli/package.json"), "utf8")) as {
       dependencies?: Record<string, string>;
     };
@@ -358,15 +301,11 @@ describe("provider isolation: the shipped remote path", () => {
 
   test("the walk crosses a workspace package boundary and would reject a provider import behind it", () => {
     const files = walkRemoteImports();
-    // invariant: The commands family imports the engine by package name; the walk must enter it.
     expect([...files.keys()]).toContain(join(REPO_ROOT, "packages/engine/src/index.ts"));
-    // invariant: A declared non-root export resolves to its source instead of being dropped.
     expect(
       resolveProductionFile("@mstar-harness/engine/src/audit", join(REPO_ROOT, "packages/cli/src/index.ts"), workspacePackages()),
     ).toEqual([join(REPO_ROOT, "packages/engine/src/audit.ts")]);
 
-    // note: Negative control - a provider SDK reached only through a non-root exported subpath is
-    // still found, so the walk cannot silently drop a workspace export it fails to map.
     const root = mkdtempSync(join(tmpdir(), "mstar-static-boundary-"));
     try {
       const entry = join(root, "entry.ts");
@@ -382,18 +321,11 @@ describe("provider isolation: the shipped remote path", () => {
           name: "@mstar-harness/synthetic",
           exports: {
             ".": { types: "./dist/index.d.ts", default: "./dist/index.js" },
-            // invariant: The key names the API; the declared target names the source it walks.
             "./audit": { types: "./dist/internal.d.ts", default: "./dist/internal.js" },
-            // invariant: A conditional code export without `default` is a module, not data.
             "./conditional": { import: "./dist/conditional.js" },
-            // invariant: `types` and the runtime default name different sources; the walk enters
-            // the runtime module, never the decoy declaration.
             "./aliased": { types: "./dist/decoy.d.ts", default: "./dist/internal.js" },
-            // invariant: Every runtime condition is walked, not just the first one declared.
             "./split": { import: "./dist/split-import.js", require: "./dist/split-require.js" },
-            // invariant: A resolvable declaration never masks an unresolved runtime target.
             "./declared-only": { types: "./dist/index.d.ts", default: "./dist/missing.js" },
-            // invariant: A conditional code export with no source fails closed, not as data.
             "./broken": { import: "./dist/broken.js" },
           },
         }),
@@ -418,27 +350,21 @@ describe("provider isolation: the shipped remote path", () => {
       writeFileSync(entry, 'import { conditional } from "@mstar-harness/synthetic/conditional";\n');
       expect([...walkRemoteImports([entry], workspacePackages(join(root, "packages"))).keys()]).toContain(conditional);
 
-      // invariant: A `types` declaration never substitutes for the runtime module; the differing
-      // runtime target is walked and the decoy declaration is not scanned.
       writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/aliased";\n');
       const differing = walkRemoteImports([entry], workspacePackages(join(root, "packages")));
       expect([...differing.keys()]).toContain(aliased);
       expect([...differing.keys()]).not.toContain(declaration);
       expect(importSpecifiers(differing.get(aliased) ?? "")).toContain("@linear/sdk");
 
-      // invariant: Both runtime branches are walked, so neither `import` nor `require` hides one.
       writeFileSync(entry, 'import { split } from "@mstar-harness/synthetic/split";\n');
       expect([...walkRemoteImports([entry], workspacePackages(join(root, "packages"))).keys()]).toContain(splitRequire);
 
-      // invariant: A resolvable declaration does not mask an unresolved runtime target.
       writeFileSync(entry, 'import { declared } from "@mstar-harness/synthetic/declared-only";\n');
       expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/declared-only/);
 
-      // invariant: An import outside the manifest's exports fails the walk instead of vanishing.
       writeFileSync(entry, 'import { audit } from "@mstar-harness/synthetic/src/private";\n');
       expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/src\/private/);
 
-      // invariant: A declared export whose source cannot be established fails the walk.
       writeFileSync(entry, 'import { broken } from "@mstar-harness/synthetic/broken";\n');
       expect(() => walkRemoteImports([entry], workspacePackages(join(root, "packages")))).toThrow(/broken/);
     } finally {
@@ -475,13 +401,10 @@ describe("provider isolation: the shipped remote path", () => {
       expect(attempt('require("node:tls").connect(443, "127.0.0.1")')).not.toBe(0);
       expect(attempt('new WebSocket("wss://example.test/socket")')).not.toBe(0);
       expect(attempt(`require("node:fs").readFileSync(${JSON.stringify(guard.sentinel)})`)).not.toBe(0);
-      // note: The sentinel is compared by canonical identity: a symlink to it, a `file:` URL and a
-      // `..`-spelled path name the same file and are all refused.
       const sentinelLink = join(root, "host-credential.link");
       symlinkSync(guard.sentinel, sentinelLink);
       expect(attempt(`require("node:fs").readFileSync(${JSON.stringify(sentinelLink)})`)).not.toBe(0);
       expect(attempt(`require("node:fs").readFileSync(new URL("file://${guard.sentinel}"))`)).not.toBe(0);
-      // invariant: Copying the sentinel discloses it just as reading it does, and the copy never lands.
       const copied = join(root, "copied-credential.txt");
       expect(
         attempt(`require("node:fs").copyFileSync(${JSON.stringify(guard.sentinel)}, ${JSON.stringify(copied)})`),
@@ -490,12 +413,9 @@ describe("provider isolation: the shipped remote path", () => {
       expect(
         attempt(`require("node:fs").cpSync(${JSON.stringify(sentinelLink)}, ${JSON.stringify(join(root, "copied-tree.txt"))})`),
       ).not.toBe(0);
-      // note: A recursive copy of the sentinel's own directory discloses it just the same.
       expect(
         attempt(`require("node:fs").cpSync(${JSON.stringify(root)}, ${JSON.stringify(join(root, "tree-copy"))})`),
       ).not.toBe(0);
-      // note: A descriptor that already IS the sentinel (an inherited fd) is refused by identity;
-      // this child's stdin is the credential file.
       const readv = Bun.spawnSync([node, "-e", "require(\"node:fs\").readvSync(0, [Buffer.alloc(8)])"], {
         env: environment,
         stdin: Bun.file(guard.sentinel),
@@ -504,11 +424,9 @@ describe("provider isolation: the shipped remote path", () => {
       });
       expect(readv.exitCode).not.toBe(0);
       expect(attempt('require("node:child_process").execFileSync("sh", ["-c", "true"])')).not.toBe(0);
-      // note: The one allowed subprocess is exactly the pinned Git executable, by path or by PATH.
       expect(attempt(`require("node:child_process").execFileSync(${JSON.stringify(git)}, ["--version"])`)).toBe(0);
       expect(attempt('require("node:child_process").execFileSync("git", ["--version"])')).toBe(0);
 
-      // note: A same-named executable earlier on PATH is foreign even though its basename is `git`.
       const foreign = join(root, "git");
       const marker = join(root, "foreign-git-ran");
       writeFileSync(foreign, `#!/bin/sh\n: > ${JSON.stringify(marker)}\n`);
@@ -520,8 +438,6 @@ describe("provider isolation: the shipped remote path", () => {
       ).not.toBe(0);
       expect(existsSync(marker)).toBe(false);
 
-      // note: The spawn options, not this process, decide the executable; an option-level PATH
-      // must not pass the pin and then run the foreign `git` it points at.
       expect(
         attempt(
           `require("node:child_process").execFileSync("git", ["--version"], { env: { PATH: ${JSON.stringify(root)} } })`,
@@ -529,8 +445,6 @@ describe("provider isolation: the shipped remote path", () => {
       ).not.toBe(0);
       expect(existsSync(marker)).toBe(false);
 
-      // note: An empty PATH entry means the child's cwd, where the foreign `git` lives; skipping
-      // it would approve the pinned Git from the later entry and then run the foreign one.
       expect(
         attempt(
           `require("node:child_process").execFileSync("git", ["--version"], { cwd: ${JSON.stringify(root)}, env: { PATH: ${JSON.stringify(`:${dirname(git)}`)} } })`,
@@ -538,12 +452,10 @@ describe("provider isolation: the shipped remote path", () => {
       ).not.toBe(0);
       expect(existsSync(marker)).toBe(false);
 
-      // note: A shell wrapper interprets the command itself, so it is refused even for pinned Git.
       expect(
         attempt(`require("node:child_process").execFileSync(${JSON.stringify(git)}, ["--version"], { shell: true })`),
       ).not.toBe(0);
 
-      // note: A Node ESM child imports builtins by name; the same channels must deny it too.
       expect(attemptModule(`import { readFileSync } from "node:fs"; readFileSync(${JSON.stringify(guard.sentinel)});`)).not.toBe(0);
       expect(
         attemptModule('import { readFile } from "node:fs/promises"; await readFile(process.env.MSTAR_NO_PROVIDER_SENTINEL);'),
@@ -579,8 +491,6 @@ describe("provider isolation: the built CLI under the deny-and-record guard", ()
 
   test("the bootstrap loop and one confirmed outbox effect run with zero provider attempts", () => {
     const credential = "fixture-host-credential-never-serialized";
-    // invariant: The process-global credential is restored to its exact prior state, so a later
-    // case in this worker never inherits or loses a caller-supplied key.
     const ambientCredential = process.env.LINEAR_API_KEY;
     process.env.LINEAR_API_KEY = credential;
     try {
@@ -641,13 +551,11 @@ describe("provider isolation: the built CLI under the deny-and-record guard", ()
         available: false,
         projects: [expect.objectContaining({ completeness: "unavailable", code: "remote.effect-confirmed" })],
       });
-      // invariant: An invalidated cache answers no count at all, rather than a zero total.
       const listed = cli(["issue", "list", "--harness", harness]);
       expect(listed.exitCode).toBe(1);
       expect(listed.code).toBe("remote.unavailable");
       expect(listed.data.total).toBeUndefined();
       expect(fixture.providerCalls).toEqual([{ kind: "send", operationId: operation }]);
-      // invariant: The host credential is present only in host state; it reaches no child or row.
       assertCredentialAbsent(credential, sandbox, answers, guard);
       assertGuardClean(guard);
     } finally {
@@ -682,7 +590,6 @@ describe("remote refusals at the CLI boundary", () => {
       expect(sandboxCacheFiles(sandbox.home)).toEqual([]);
       expect(sandbox.status().data.binding).toMatchObject({ state: "unbound" });
     }
-    // invariant: The refusal refused only the foreign tuple; the exact tuple still binds.
     const exact = fixture.sandbox("mismatch-exact");
     expect(exact.bind(fixture.verify()).exitCode).toBe(0);
     expect(sandboxCacheFiles(exact.home)).toHaveLength(1);
@@ -751,7 +658,6 @@ describe("remote refusals at the CLI boundary", () => {
       expect(listed.code).toBe("remote.unavailable");
       expect(listed.data.total).toBeUndefined();
 
-      // invariant: No send permit and no gate/count success while the check is negative.
       const dispatched = sandbox.runJson([...REMOTE, "outbox-dispatch", "--harness", harness, "--operation", operation]);
       expect(dispatched.exitCode).toBe(1);
       expect(dispatched.code).toBe("remote.dispatch-refused");
@@ -764,9 +670,6 @@ describe("remote refusals at the CLI boundary", () => {
       expect(sandbox.runJson(["issue", "list", "--harness", harness]).data.providerIssues).toHaveLength(1);
     }
 
-    // invariant: A positive snapshot carrying a portable field the cache cannot keep refuses the
-    // observation by name AND invalidates the addressed cache, so no reader keeps serving the
-    // previous complete revision behind the refusal.
     const oversizeCheck = positive();
     const base = submission(oversizeCheck, revision, true);
     const snapshot = base.snapshot as Record<string, unknown>;
@@ -834,9 +737,6 @@ describe("remote refusals at the CLI boundary", () => {
     expect(blockedRead.exitCode).toBe(1);
     expect(blockedRead.code).toBe("remote.unavailable");
     expect(blockedRead.data.total).toBeUndefined();
-    // invariant: The decoder-detected unsafe snapshot revokes the verified writer in the same
-    // transaction as the invalidation, so the outbox discloses state only, without the frozen
-    // event it cannot prove is faithful.
     const blockedShow = sandbox.runJson([...REMOTE, "outbox-show", "--harness", harness, "--operation", operation]);
     expect(blockedShow.exitCode).toBe(0);
     expect(blockedShow.data).toMatchObject({ state: "enqueued", disclosure: "metadata", event: null });
@@ -885,7 +785,6 @@ describe("remote refusals at the CLI boundary", () => {
       "--input", sandbox.writeJson("observe", fixture.observe(REMOTE_PROJECT, 0)),
     ]).exitCode).toBe(0);
 
-    // note: Pre-send refusal - the host never calls send, and records its own not-sent proof.
     const refusedOperation = "11111111-1111-4111-8111-111111111111";
     expect(adopt(refusedOperation, FIXTURE_ISSUE_ID).data.state).toBe("enqueued");
     const refusedPermit = dispatch(refusedOperation);
@@ -918,8 +817,6 @@ describe("remote refusals at the CLI boundary", () => {
     expect(abandoned.data.state).toBe("abandoned");
     expect(fixture.providerCalls).toEqual([]);
 
-    // note: Lost response - the effect landed, the response did not, and only a unique
-    // exact lookup may confirm it.
     const lostOperation = "22222222-2222-4222-8222-222222222222";
     expect(adopt(lostOperation, FIXTURE_ISSUE_ID).data.state).toBe("enqueued");
     const lostPermit = dispatch(lostOperation);
@@ -949,7 +846,6 @@ describe("remote refusals at the CLI boundary", () => {
     });
     expect(cli(["issue", "list", "--harness", harness]).code).toBe("remote.unavailable");
 
-    // note: Ambiguity - a duplicate provider record is never a confirmation.
     const status = cli([...REMOTE, "status", "--harness", harness]);
     const revision = (status.data.projects as Array<Record<string, unknown>>)[0]!.revision as number;
     fixture.setIssues([
@@ -981,7 +877,6 @@ describe("remote refusals at the CLI boundary", () => {
     expect(blocked.data).toMatchObject({ kind: "state", state: "unconfirmed" });
     expect(blocked.data.permit).toBeUndefined();
 
-    // invariant: Every provider call was the TEST RUNNER's; the CLI made none.
     expect(fixture.providerCalls).toEqual([
       { kind: "send", operationId: lostOperation },
       { kind: "lookup", operationId: lostOperation },
@@ -993,7 +888,6 @@ describe("remote refusals at the CLI boundary", () => {
   }, 60_000);
 });
 
-/** note: The strict adoption document the host submits; one durable intent, never a local write. */
 function adoptionDocument(operation: string): unknown {
   const at = new Date().toISOString();
   return {

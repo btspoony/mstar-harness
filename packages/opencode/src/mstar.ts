@@ -1,63 +1,3 @@
-/** why: MorningStarHarness plugin for OpenCode.
- *
- * - Injects one-time harness bootstrap into first user message.
- * - Registers skill paths only inside this package: `harness-skills/` (synced by `bundle-assets` at build time; includes `mstar-host`).
- * - Loads agents from `harness-agents/` only (same sync). Does not use `process.cwd()` so OpenCode project cwd does not matter.
- * - Loads custom commands from `harness-commands/` only (same sync).
- * - Dual-mode harness coordination-document write lint (roadmap §8.5
- * `beforeStatusWrite`, v3 hard cutover): on structured file-write tools
- * targeting the v2 root `{HARNESS_DIR}/status.json`, workflow snapshots
- * (`{HARNESS_DIR}/workflows/<id>/snapshot.json`) or project registers
- * (`{HARNESS_DIR}/projects/<id>/residuals.json`), runs the matching
- * engine validator (`status.validateStatus` /
- * `workflow.validateWorkflowSnapshot` / `project.validateProjectRegister`).
- * Default (no `Enforcement: hard`):
- * `warn` lines on violations, never blocks. Hard mode (repo iteration
- * compass frontmatter `enforcement: hard`, engine
- * `status.resolveCompassEnforcement`): error-level lines with a skill-text
- * pointer + a GateResult carrying `hardBlocked: true` (a refusal-capable
- * caller MUST refuse the write — this hook itself cannot abort the tool).
- * G4b authority protection: a write to `{HARNESS_DIR}/store.db` (`-wal`/`-shm`)
- * and a write to a project register of a store-backed workspace are refused
- * UNCONDITIONALLY (authority invariant, not the enforcement axis) —
- * `store.direct-write-refused`, `project.register.retired`,
- * `store.authority-unavailable`; a register is authorized only by the ACTIVE
- * collaboration authority — a missing, staged or unreadable lane refuses
- * (`store.authority-unavailable`) instead of leaving the register writable.
- * Plan S4 adds
- * the EXECUTION authority's retired persistence route: a root `status.json` /
- * `workflows/<id>/snapshot.json` write is refused
- * `execution.direct-write-refused` while that authority is ACTIVE (fail-closed
- * when it exists and cannot be read) — canonical and symlinked targets alike.
- * This host has no refusal channel, so every one of those verdicts is a
- * decision record + error log, never an OS/tool fence.
- * The file write hook remains decision-only because `tool.execute.before`
- * returns `Promise<void>` and cannot stop a tool call; its validators report
- * through logs and structured results without claiming an OS/tool fence.
- * The engine is bundled with this plugin (see the package's build), so every
- * validator, resolver and authority read is a static import — a plugin build
- * can never link against a different engine generation.
- * Hook coverage resolves the harness root from the target itself
- * ( the marker probe (`status.json` + `workflows/` +
- * `projects/` ancestor, correct for the default `.mstar` layout whose
- * nested `plans/` rung used to shadow the root), falling back to
- * `resolveHarnessDir` — the fixed `<main worktree>/.mstar`; `harness_dir`
- * and `MSTAR_HARNESS_DIR` are retired and refused, and the legacy
- * `.agents/` / `.plans/` / `plans/` candidates are never adopted — see
- * package README "Status write lint (hook coverage)". * - Dual-mode `beforeDispatch` dispatch lint (roadmap §8.5): on `task`-tool
- * executions (subagent dispatch), validates the Assignment header — field
- * presence (`Execute as` / `Delegation` / `Task category`, backward-compat
- * `assignment.presence.*` codes), full field validation from the engine
- * (`dispatch.validateAssignmentFields`: exactly-one Working-branch form,
- * create-form `<base>`, Branch policy reason), the default-branch gate
- * (`dispatch.assertDefaultBranchProtected` with the CLI ea010f1
- * direct-on-exception wiring) and the anti-recursion binding check. The
- * Assignment's OWN `Enforcement: hard` flag (bold or plain) switches the
- * hook to hard mode: error-level lines + a GateResult carrying
- * `hardBlocked: true`; flag absent (or `Enforcement: soft`) stays warn-only.
- * Never throws raw exceptions in either mode (refusal-channel limitation as
- * above — see `validateDispatchAssignment`).
- */
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
@@ -249,18 +189,10 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === "" ? "store.authority-unreadable" : code, message };
 }
 
-/** invariant: What the collaboration authority says about a register target: `retired` =
- * ACTIVE lane (the register is migration history), `unavailable` = the lane is
- * missing, staged or unreadable and the write fails closed. A missing or staged
- * lane is never a pre-activation permission. */
 type AuthorityRoute =
   | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
-/** invariant: The authority answers from the ACTIVE collaboration lane: the runtime floor is
- * asserted on the ACTUAL runtime (`detectStoreRuntime` — the Bun global first,
- * never Bun's emulated `process.versions.node`), then the lane's own probe
- * decides. No execution-store read takes part in this verdict. */
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
   try {
     assertStoreRuntimeSupported(detectStoreRuntime());
@@ -284,9 +216,6 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
-/** note: The harness root of the register a write LANDS on (stricter-wins veto): the
- * landed destination is the authority the bytes belong to, even when the
- * caller's own path already classified as a register elsewhere. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(path.resolve(landed));

@@ -72,11 +72,6 @@ import { previewExecutionRestore } from "./execution-recovery.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-store-"));
 
-/**
- * invariant: The collaboration lane is user-level. Every fixture resolves `homedir` into
- * this temporary root; the guard in `collaborationLocationOf` refuses an escape
- * before a database is created in the operator's storage.
- */
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 let homeSpy: { mockRestore(): void } | undefined;
@@ -144,8 +139,6 @@ function controlRoot(label: string): StoreContext {
     { cwd: root, stdio: "ignore" },
   );
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${label}.git`], { cwd: root, stdio: "ignore" });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${label}.git`], {
     cwd: root,
     stdio: "ignore",
@@ -156,11 +149,6 @@ function controlRoot(label: string): StoreContext {
   return { harnessDir, checkoutRoot: root };
 }
 
-/**
- * invariant: The collaboration lane this fixture's catalog writes address. The store is
- * user-level, so the module-level `homedir` spy above must resolve inside the
- * temporary root; this guard fails the case instead of writing to the real home.
- */
 function collaborationLocationOf(context: StoreContext) {
   const location = resolveCollaborationLocation(context);
   if (!location.dbPath.startsWith(`${ROOT}${sep}`)) {
@@ -227,7 +215,6 @@ async function freshStore(label: string): Promise<{ context: StoreContext; epoch
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   try {
-    // note: The catalog writes these suites register live in the collaboration lane.
     const location = collaborationLocationOf(context);
     await initializeCollaborationStore(location);
     const db = new DatabaseSync(location.dbPath);
@@ -2016,8 +2003,6 @@ describe("execution-domain: \u00A73 workflow creation, sealed input and authorit
   test("an unrelated current catalog edit never rewrites the sealed input", async () => {
     const { context } = await freshStore("domain-sealed-input");
     const initialized = await readExecutionState(context);
-    // note: A pin names the COLLABORATION catalog identity, which creation verifies
-    // before its execution write transaction.
     const catalogAuthority = await readCollaborationAuthority(context);
     const planRevision = await registerPlan(context, "p-1");
     await registerPlan(context, "p-2");
@@ -3102,7 +3087,6 @@ describe("execution-domain: the optional review_base of a completed row", () => 
 });
 
 describe("execution-composite-intents: the reservation ledger", () => {
-  /** note: One reservation row; `phase` decides whether it still holds the plan. */
   const reservation = (
     db: StoreDb,
     epoch: number,
@@ -3136,15 +3120,11 @@ describe("execution-composite-intents: the reservation ledger", () => {
       seedExecutionGraph(db);
 
       reservation(db, epoch, { operationId: "op-a", planId: "p-1", phase: "prepared" });
-      // note: A second PENDING reservation on the same addressed row is the exclusion.
       expect(() => reservation(db, epoch, { operationId: "op-b", planId: "p-1", phase: "prepared" })).toThrow(/UNIQUE|unique/);
-      // note: A declined or confirmed row released the plan, and another plan row is
-      // independently reservable.
       reservation(db, epoch, { operationId: "op-c", planId: "p-1", phase: "declined" });
       reservation(db, epoch, { operationId: "op-d", planId: "p-1", phase: "confirmed" });
       reservation(db, epoch, { operationId: "op-e", planId: "p-2", phase: "prepared" });
       expect(scalar(db, "select count(*) as n from execution_collaboration_intents")).toBe(4);
-      // note: The phase vocabulary is closed at the storage boundary.
       expect(() =>
         db
           .prepare("update execution_collaboration_intents set phase = 'abandoned' where operation_id = 'op-a'")
@@ -3167,19 +3147,13 @@ describe("execution-composite-intents: the reservation ledger", () => {
             "values ('store-1', ?, ?, 'issue-move', ?, 'wf-1', 'p-1', 'project-manager', 'token', 1, '{}', '{}', ?, ?, ?)",
         ).run(epoch, operationId, `hash-${operationId}`, phase, TS, TS);
       };
-      // invariant: A prepared move reservation holds the plan row exactly like any other kind, so
-      // the rebuild cannot have dropped the pending-plan exclusion on the way to `issue-move`.
       move("move-a", "prepared");
       expect(() => reservation(db, epoch, { operationId: "op-b", planId: "p-1", phase: "prepared" })).toThrow(
         /UNIQUE|unique/,
       );
-      // note: The transition is an UPDATE of the row the reservation already holds; `move` always
-      // INSERTs, so a second call would conflict on the primary key instead of moving the phase.
       db.prepare("update execution_collaboration_intents set phase = 'confirmed' where operation_id = 'move-a'").run();
       expect(scalar(db, "select phase from execution_collaboration_intents where operation_id = 'move-a'")).toBe("confirmed");
-      // note: The released row no longer excludes the plan, so the next composite may reserve it.
       reservation(db, epoch, { operationId: "op-c", planId: "p-1", phase: "prepared" });
-      // note: The kind vocabulary stays closed around the new member.
       expect(() =>
         db
           .prepare("update execution_collaboration_intents set kind = 'issue-copy' where operation_id = 'move-a'")
@@ -3192,13 +3166,8 @@ describe("execution-composite-intents: the reservation ledger", () => {
 
   test("the intents-rebuild migration preserves a populated reservation and its pending-plan exclusion", async () => {
     const context = controlRoot("composite-intents-v21-upgrade");
-    // note: The migration under test is the one that rebuilds execution_collaboration_intents,
-    // found by name rather than pinned — a merge renumbers migrations, it does not change which
-    // one carries the rebuild. Its immediate predecessor is where the populated reservation lives.
     const rebuild = MIGRATIONS.find((migration) => migration.name === "execution-issue-move-intent")!;
     const predecessorVersions = MIGRATIONS.slice(0, MIGRATIONS.indexOf(rebuild));
-    // note: A real predecessor store: the migrations before the rebuild executed with this build's
-    // own bodies and checksums, so the upgrade finds exactly the shape a released workspace holds.
     const before = new DatabaseSync(storePath(context));
     try {
       before.exec("pragma foreign_keys=ON");
@@ -3240,8 +3209,6 @@ describe("execution-composite-intents: the reservation ledger", () => {
     const after = rawDb(storePath(context));
     try {
       expect(scalar(after, "select max(version) as v from schema_version")).toBe(MIGRATIONS.length);
-      // invariant: The rebuild copies the live reservation verbatim — losing a `prepared` row would
-      // free a plan another operation still holds.
       expect(
         one(
           after,
@@ -3255,7 +3222,6 @@ describe("execution-composite-intents: the reservation ledger", () => {
         plan_id: "p-1",
         expected_token: "token",
       });
-      // invariant: The pending-plan exclusion is restored by the rebuild, not merely the rows.
       expect(() =>
         after
           .prepare(
@@ -3266,7 +3232,6 @@ describe("execution-composite-intents: the reservation ledger", () => {
           )
           .run(TS, TS),
       ).toThrow(/UNIQUE|unique/);
-      // note: The rebuilt CHECK admits the new member for the row that was preserved.
       after.prepare("update execution_collaboration_intents set kind = 'issue-move' where operation_id = 'op-live'").run();
       expect(scalar(after, "select kind from execution_collaboration_intents where operation_id = 'op-live'")).toBe("issue-move");
       expect(all(after, "pragma foreign_key_check")).toEqual([]);
@@ -3281,7 +3246,6 @@ describe("execution-composite-intents: the reservation ledger", () => {
     try {
       seedExecutionGraph(db);
       reservation(db, epoch, { operationId: "op-a", planId: "p-1", phase: "prepared" });
-      // note: The same operation id in the NEXT generation is a different reservation.
       reservation(db, epoch + 1, { operationId: "op-a", planId: "p-1", phase: "prepared" });
       expect(
         scalar(db, "select count(*) as n from execution_collaboration_intents where operation_id = 'op-a'"),
@@ -3297,9 +3261,6 @@ describe("execution-composite-intents: the reservation ledger", () => {
   test("the reservation ledger is part of the whole-store loss inventory", async () => {
     const { context, epoch } = await freshStore("composite-inventory");
     const backup = await backupStore(context, { out: join(context.harnessDir, "recovery", "composite.db") });
-    // invariant: A reservation recorded AFTER the recovery point must appear as a lost row,
-    // which is only possible when the inventory reads this table and its
-    // FK-safe replacement position.
     const db = rawDb(storePath(context));
     try {
       seedExecutionGraph(db);

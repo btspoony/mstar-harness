@@ -132,7 +132,6 @@ export function makeFixture(): Fixture {
   roots.push(root);
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
-  // note: The fixture has no origin; its explicit repo id makes the lane deterministic.
   writeFileSync(
     join(root, ".mstarc"),
     `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
@@ -428,8 +427,6 @@ export async function reportOnlyGitFixture(): Promise<GitFixture> {
   return fixture;
 }
 
-
-
 /* ------------------------------------------------------------------------ *
  * Store-backed fixtures
  * ------------------------------------------------------------------------ */
@@ -506,4 +503,3 @@ export function finding(id: string, overrides: Record<string, unknown> = {}): Re
     ...overrides,
   };
 }
-

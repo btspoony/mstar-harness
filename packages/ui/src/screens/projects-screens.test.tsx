@@ -111,7 +111,6 @@ const milestoneRow = (
 /** see packages/ui/src/screens/projects-screens.test.tsx - The arm the screen renders for one rollup read. */
 const armOf = (read: MilestoneRead): Resolved<MilestonesModel> => milestonesArm({ state: "read", data: read });
 
-// why: a slot assertion must be met inside this milestone's own block, not anywhere on the page.
 const boardBlockOf = (html: string, milestoneId: string): string => {
   const start = html.indexOf(`data-ms-milestone="${milestoneId}"`);
   return start === -1 ? "" : html.slice(start, html.indexOf("</section>", start));
@@ -335,18 +334,12 @@ describe("ProjectDetail — the milestone timeline", () => {
   });
 
   test("a node carries the retired-over-total pair and the open count", () => {
-    // why: the fixture's milestone is 10 total, 4 open → 6/10 · 4 open, asserted inside ITS node.
     const node = timelineNodeOf(html, "9f2c4a10");
     expect(node).toContain("6/10");
     expect(node).toContain("4 open");
   });
 
   test("nodes follow the store's ordinal order, then the unassigned node", () => {
-    // why: a and b share ordinal 1 and are entered in NON-id order (b before a), so a
-    // stable ordinal-only sort would render c, b, a — the id tie-break is the only
-    // way the asserted order c, a, b arises. The other single-key alternatives also
-    // disagree: by id ascending a, b, c; by id descending c, b, a; by effort
-    // ascending b(3), c(4), a(5); by effort descending a(5), c(4), b(3).
     const ordered = renderDetail({
       milestones: armOf(
         milestoneRead({
@@ -397,7 +390,6 @@ describe("ProjectDetail — the milestone timeline", () => {
     expect(b).toBeLessThan(unassigned);
     expect(timelineNodeOf(ordered, "c-position")).toContain("4 sessions · delivered");
     expect(timelineNodeOf(ordered, "a-position")).toContain("5 sessions · planned");
-    // invariant: the trailing node is the unassigned issues only — no effort line, no estimate word.
     const trailing = timelineNodeOf(ordered, "unassigned");
     expect(trailing).toContain("1 issues");
     expect(trailing).not.toContain("session");
@@ -424,22 +416,15 @@ describe("ProjectDetail — the milestone board", () => {
   const html = renderDetail({});
 
   test("the board carries status, effort sessions, the four tallies and its issues", () => {
-    // why: every slot is asserted inside this milestone's own block — the timeline node
-    // prints the same effort line, so a page-wide search would pass with the board slot gone.
     const block = boardBlockOf(html, "9f2c4a10");
     expect(block).not.toBe("");
     expect(block).toContain("Release the shared layer");
     expect(block).toContain(">active<");
-    // why: a kept attribute with no rendered count must still fail, so the cell's own hook AND the
-    // number it prints are both asserted - the display renders the bare count (`sessionsLabel` is
-    // the write form's label only).
     const effortSessions = 12;
     const effortAt = block.indexOf("data-ms-effort");
     expect(effortAt).toBeGreaterThan(-1);
     expect(block).toContain(`data-ms-effort="${effortSessions}"`);
     const effortClose = block.indexOf("</span>", effortAt) + "</span>".length;
-    // why: the cell prints the count inside the localized effort copy, so the assertion is the
-    // number itself - asserting a bare `>12<` would encode one surface's wording.
     expect(block.slice(effortAt, effortClose)).toContain(String(effortSessions));
     expect(block).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
@@ -581,11 +566,8 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
-    // why: the engine's add verb has no status field, so creation is name + effort only.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
-    // why: the effort field keeps the raw text — a number input sanitises bad text to
-    // "" — and it is never a calendar date.
     expect(createForm).toContain('inputMode="numeric"');
     expect(createForm).not.toContain('type="number"');
     expect(createForm).not.toContain('type="date"');
@@ -650,14 +632,9 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
     return arm.value.milestones[0]!;
   };
 
-  // why: the component-level sequence (clear → cancel → reopen → Save) is not expressible
-  // in this package — the suite renders with react-dom/server and has no DOM runtime.
-  // Each case below names the draft/patch contract it actually drives.
   test("reopening after a discarded draft reseeds from the milestone, so a rename-only patch carries no effortSessions", () => {
     const milestone = stored();
     expect(milestone.effortSessions).toBe(12);
-    // why: cancel throws the draft away, so reopening seeds a NEW draft from the
-    // milestone — the value the stale draft held (empty) cannot come back.
     const reopened = milestoneDraft(milestone);
     expect(reopened).toEqual({
       name: "Release the shared layer",
@@ -681,12 +658,9 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("a refresh shows the milestone's own value for every field the operator did not touch", () => {
-    // why: keeping a stale displayed value is worse than losing the seed — an editor showing the
-    // old status makes selecting that same option a no-op, so the operator's choice never travels.
     const milestone = stored();
     const touchedOnlyEffort = withTouched(new Set(), "effort");
     const kept = { name: "Renamed", effort: "20", status: "delivered", touched: [...touchedOnlyEffort] };
-    // note: the refreshed milestone another writer left behind.
     const refreshed = { ...milestone, name: "Renamed upstream", status: "delivered" } as typeof milestone;
     const seeded = {
       name: kept.touched.includes("name") ? kept.name : refreshed.name,
@@ -718,16 +692,11 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("a garbage effort text is refused, not coerced into a cleared estimate", () => {
-    // why: `0` is a whole number, so it reaches the engine, whose range validator
-    // refuses it. Only non-integer text stops at the screen — never coerced to `null`.
     expect(effortInput("0")).toEqual({ kind: "count", sessions: 0 });
     expect(milestoneCreateInput("New milestone", "0", 0)).toEqual({
       kind: "input",
       input: { name: "New milestone", effortSessions: 0, ordinal: 0 },
     });
-    // safety: a digit string the browser's JSON encoding would turn into null (a silent
-    // clear the engine reads as legitimate) is refused before any write; "0" and
-    // in-range values still travel to the engine, which owns the range.
     expect(effortInput("9".repeat(309))).toEqual({ kind: "invalid" });
     expect(milestoneCreateInput("New milestone", "9".repeat(309), 0)).toEqual({ kind: "invalid" });
     expect(effortInput("9007199254740993")).toEqual({ kind: "invalid" });
@@ -745,9 +714,6 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("a NEW milestone takes one past the highest ordinal, never the count — gaps sort it last", () => {
-    // why: deletions leave gaps (ordinals 0, 2). The milestone COUNT (2) would sort
-    // the new one alongside the existing ordinal-2 work or ahead of it on the id
-    // tie-break; one past the highest ordinal (3) places it after everything.
     const gapped = [milestoneRow({ ordinal: 0 }), milestoneRow({ milestoneId: "b-position", ordinal: 2 })];
     expect(nextMilestoneOrdinal(gapped)).toBe(3);
     expect(nextMilestoneOrdinal([])).toBe(0);
@@ -778,9 +744,6 @@ describe("ProjectDetail — the edit form's draft and patch contract", () => {
   });
 
   test("a refused write keeps the typed draft; an accepted one clears it", () => {
-    // why: the engine refuses 0 / negative / over-range counts AFTER the operator
-    // may have edited the name and status too. The draft is theirs, not the
-    // engine's to throw away — only an accepted write closes the editor.
     const typed = { name: "Renamed", effort: "0", status: "active" };
     expect(draftAfterWrite(typed, { refusal: "[milestone.effort-range] Effort sessions must be a positive count." })).toEqual(typed);
     expect(draftAfterWrite(typed, { refusal: null })).toBeNull();
@@ -865,32 +828,20 @@ describe("ProjectDetail — the host-owned draft store", () => {
     store.write("m-1", { name: "Renamed", effort: "9", status: "active" });
     expect(store.read("create")).toEqual({ name: "Typed milestone", effort: "4" });
     expect(store.read("m-1")).toEqual({ name: "Renamed", effort: "9", status: "active" });
-    // why: a write merges into the target's entry — the name keystroke must not erase the
-    // effort the operator typed before it.
     store.write("create", { name: "Typed milestone edited" });
     expect(store.read("create")).toEqual({ name: "Typed milestone edited", effort: "4" });
     store.clear("create");
     expect(store.read("create")).toBeUndefined();
-    // invariant: clearing one target never touches another — the open editor's draft is not
-    // the create form's to lose.
     expect(store.read("m-1")).toEqual({ name: "Renamed", effort: "9", status: "active" });
   });
 
   test("a re-mounted form seeds from the store: the draft survives the refresh", () => {
-    // why: the unmount/remount cycle itself needs a DOM runtime this suite does not have, but
-    // the mount-half of the cycle IS observable here — the first render IS the re-mounted form's
-    // open, and the input values it prints are exactly what the useState seeding produced. The
-    // draft is keyed by the page's identity: this fixture's project is `engine`.
     const store = createMilestoneDraftStore();
     store.write("engine:create", { name: "Typed before the conflict", effort: "4" });
     const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} };
     const html = renderDetail({ writes, drafts: store });
-    // invariant: the rendered inputs carry the typed text — removing the component's seeding
-    // turns both values empty and fails this test, because the store lookup is then dead code.
     expect(html).toContain('value="Typed before the conflict"');
     expect(html).toContain('value="4"');
-    // invariant: with the entry gone the form opens empty — the seed is the store entry itself,
-    // not a fallback that happens to echo it.
     store.clear("engine:create");
     const empty = renderDetail({ writes, drafts: store });
     expect(empty).toContain('data-ms-milestone-create=""');
@@ -898,24 +849,17 @@ describe("ProjectDetail — the host-owned draft store", () => {
   });
 
   test("a conflict retry sends only the field the operator touched, never a revert of the refreshed one", () => {
-    // why: the draft is seeded with every field, so a refresh that changed an untouched field
-    // would be reverted by a patch built from the stale snapshot. Only touched fields travel.
     const milestone = stored();
     const seeded = { ...milestoneDraft(milestone), touched: withTouched(milestoneDraft(milestone).touched, "name") };
     const renamed = { ...seeded, name: "Renamed" };
-    // note: the refreshed milestone another writer left behind: its estimate moved to 8.
     const refreshed = { ...milestone, effortSessions: 8 } as typeof milestone;
     expect(milestonePatch(refreshed, renamed)).toEqual({ name: "Renamed" });
-    // note: an untouched effort field is never sent, even though its typed text no longer matches.
     expect("effortSessions" in milestonePatch(refreshed, renamed)).toBe(false);
-    // note: touching the field is what lets it travel, and clearing it stays expressible.
     const cleared = { ...milestoneDraft(refreshed), effort: "", touched: withTouched(milestoneDraft(refreshed).touched, "effort") };
     expect(milestonePatch(refreshed, cleared)).toEqual({ effortSessions: null });
   });
 
   test("the edit editor's seed prefers the stored draft's status over the milestone's", () => {
-    // why: the operator may have changed the status dropdown before the conflict; re-seeding
-    // from the milestone would silently revert it to the stored state.
     const milestone = stored();
     const kept = { name: "Renamed", effort: "9", status: "delivered", touched: ["name", "effort", "status"] as const };
     const seeded = {

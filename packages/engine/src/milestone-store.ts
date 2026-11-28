@@ -38,26 +38,19 @@ function project(db: StoreDb, projectId: string): void {
 function validEffortSessions(value: unknown): value is number | null { return value === null || (typeof value === "number" && Number.isSafeInteger(value) && value >= 1); }
 function validName(name: unknown): name is string { return typeof name === "string" && name.trim().length > 0; }
 function validOrdinal(ordinal: unknown): ordinal is number { return typeof ordinal === "number" && Number.isSafeInteger(ordinal) && ordinal >= 0; }
-/** note: The status transitions one milestone update admits, shared by both transports. */
 const MILESTONE_TRANSITIONS: Record<ProjectMilestoneStatus, ProjectMilestoneStatus[]> = { planned:["planned","active","dropped"], active:["active","planned","delivered","dropped"], delivered:["delivered","active"], dropped:["dropped","active"] };
 function write<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
-/**
- * note: A REMOTE milestone's id is derived from its own operation id, so a replay of the verb
- * names the same row it froze instead of minting a second identity for the same write.
- */
 function milestoneIdForOperation(operationId: string): string {
   const digest = createHash("sha256").update(`milestone:${operationId}`, "utf8").digest();
   const hex = Buffer.from(digest.subarray(0, 16)).toString("hex");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-4${hex.slice(13, 16)}-a${hex.slice(17, 20)}-${hex.slice(20, 32)}`;
 }
 
-/** note: The business result one remote milestone write derives from the observed document it froze against. */
 type MilestoneWriteResult = Readonly<{ changed: boolean; revision: number }>;
 
-/** note: The recorded result of one confirmed milestone write, or null when none was recorded. */
 function recordedMilestoneResult(value: unknown): MilestoneWriteResult | null {
   if (value === null || typeof value !== "object") return null;
   const body = value as Record<string, unknown>;
@@ -67,12 +60,6 @@ function recordedMilestoneResult(value: unknown): MilestoneWriteResult | null {
   return { changed: body.changed, revision: body.revision as number };
 }
 
-/**
- * note: The business result of one milestone request, derived from the same observed document the
- * request froze against: a no-op update keeps its revision and reports no change, a removal reports
- * the revision it removed, an add reports the first revision. Recorded at preparation, because the
- * confirmed document no longer carries the before-state.
- */
 function milestoneWriteResult(
   milestoneId: string,
 ): (current: Record<string, unknown>, subject: Record<string, unknown>) => MilestoneWriteResult {
@@ -89,10 +76,6 @@ function milestoneWriteResult(
   };
 }
 
-/**
- * note: The confirmed business result of a remote milestone write, read from the result recorded
- * with the frozen request. A remote write owns no local collaboration revision.
- */
 function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, milestoneId: string): MilestoneReceipt {
   if (intent.confirmed === null) {
     throw new MilestoneError(
@@ -118,12 +101,6 @@ function confirmedMilestoneReceipt(intent: RemoteIntent, projectId: string, mile
   };
 }
 
-/**
- * note: The remote branch of every milestone write: freeze the new project journal document as one
- * durable outbox intent and report it. A confirmed intent reports the recorded business result of
- * an identical replay; anything else is `remote.effect-pending`. A milestone row is never written
- * locally in `remote` mode.
- */
 async function queueMilestoneWrite(
   context: StoreContext,
   projectId: string,
@@ -136,8 +113,6 @@ async function queueMilestoneWrite(
   if (!Number.isSafeInteger(expectedStoreRevision) || expectedStoreRevision < 0) {
     fail("milestone.invalid-input", "A non-negative expected store revision is required.");
   }
-  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
-  // would close the cycle before the milestone contract initializes.
   const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
   const intent = await prepareRemoteProjectWrite(context, {
     projectId,
@@ -145,9 +120,6 @@ async function queueMilestoneWrite(
     origin,
     next,
     result: milestoneWriteResult(milestoneId),
-    // invariant: `expectedStoreRevision` is the caller's observed base in remote mode too. The
-    // guard runs inside the freeze transaction, so a competing write or a newer observation that
-    // landed after the caller read the project refuses instead of silently superseding it.
     guard: ({ observationRevision }) => {
       if (observationRevision === expectedStoreRevision) return;
       fail(
@@ -164,16 +136,10 @@ async function queueMilestoneWrite(
   throw pendingRemoteEffect(intent);
 }
 
-/** note: The observed milestone rows of one project document, as the projection reads them. */
 function observedMilestones(current: Record<string, unknown>): Array<Record<string, unknown>> {
   return current.milestones as Array<Record<string, unknown>>;
 }
 
-/**
- * note: The open issues assigned to one milestone. The snapshot's issue list is ALREADY the bound
- * project's scope, so its entries are never re-filtered by the local project key: that key and the
- * provider project id are different identifiers, and comparing them counts nothing.
- */
 function openIssuesOf(issues: readonly RemoteIssue[], milestoneId: string): number {
   return issues.filter(
     (issue) =>
@@ -183,7 +149,6 @@ function openIssuesOf(issues: readonly RemoteIssue[], milestoneId: string): numb
   ).length;
 }
 
-/** note: Every issue assigned to one milestone — settled rows included, exactly as the local rule counts. */
 function assignedIssuesOf(issues: readonly RemoteIssue[], milestoneId: string): number {
   return issues.filter((issue) => issue.mstar !== null && issue.mstar.fields.milestoneId === milestoneId).length;
 }
@@ -217,9 +182,6 @@ function mutate(db: StoreDb, projectId: string, milestoneId: string, patch: Mile
     const transitions = MILESTONE_TRANSITIONS;
     if (!transitions[row.status].includes(nextStatus)) fail("milestone.invalid-transition", `Cannot transition ${row.status} to ${nextStatus}.`);
     if (nextStatus === "delivered") {
-      // Contract §Gates: a complete observation that proves zero open issues
-      // passes — including a milestone that links none; any open row keeps the
-      // refusal. Missing/unavailable authority refuses before this point.
       const counts = db.prepare("select sum(case when disposition='open' then 1 else 0 end) as open from issues where project_id=? and milestone_id=?").get(projectId, milestoneId) as { open: number | null };
       if (counts.open) fail("milestone.open-issues", "A milestone with open issues cannot be delivered.");
     }

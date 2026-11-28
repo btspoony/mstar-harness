@@ -240,8 +240,6 @@ describe("shared host-health helpers", () => {
     git("add", "README.md");
     git("commit", "--quiet", "-m", "fixture");
     git("remote", "add", "origin", "https://github.com/Acme/Repo.git");
-    // note: Every origin-backed checkout now proves selector absence with a live lookup;
-    // route the synthetic origin to an empty local bare instead of a network transport.
     const emptyOrigin = path.join(root, "empty-origin.git");
     execFileSync("git", ["init", "--quiet", "--bare", emptyOrigin], { stdio: ["ignore", "pipe", "pipe"] });
     git("config", `url.${emptyOrigin}.insteadOf`, "https://github.com/Acme/Repo.git");
@@ -263,9 +261,6 @@ describe("shared host-health helpers", () => {
         openBrowser: async () => {},
       },
     };
-    // why: The home is process-wide and Bun caches `homedir()`, so the engine's
-    // `userHome` seam cannot pass through a command; the expectation is derived
-    // from the same ambient home the command reads.
     const expected = {
       repoKey: "github.com/acme/repo",
       mode: "local",
@@ -284,8 +279,6 @@ describe("shared host-health helpers", () => {
       data: { linkedWorktree: true, harnessDir: path.join(main, ".mstar"), collaboration: expected },
     });
 
-    // why: An unconfigured mode is disclosed as the engine's named diagnostic: the
-    // command still resolves every existing field instead of failing.
     writeText(main, ".mstarc", "[config]\nreview_dir=process/reviews\n");
     const withoutMode = await definition.execute({ path: main }, context);
     expect(withoutMode.status).toBe("ok");

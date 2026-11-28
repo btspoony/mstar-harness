@@ -15,7 +15,6 @@ import { executeCommand } from "../src/index.js";
 import { getMilestoneCommandDefinitions } from "../src/families/milestone.js";
 import type { InvocationContext } from "../src/types.js";
 
-/** invariant: Collaboration lanes created here live under a private home, never the operator's. */
 const HOME_ROOT = mkdtempSync(join(tmpdir(), "commands-milestone-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -29,10 +28,6 @@ afterAll(() => {
   rmSync(HOME_ROOT, { recursive: true, force: true });
 });
 function invocation(cwd:string): InvocationContext { return { cwd,controlRoot:null,versions:{engine:null,cli:null,plugin:null,host:null,platform:null},signal:new AbortController().signal,effects:{spawnProcess:async()=>({exitCode:0,stdout:"",stderr:""})} } as InvocationContext; }
-/**
- * why: A checkout that owns its collaboration lane: milestone authority is the
- * repository lane, so a fixture without an identity has no store at all.
- */
 async function laneFixture(cwd: string, harness: string): Promise<void> {
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
   writeFileSync(join(cwd, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${cwd.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
@@ -113,8 +108,6 @@ test("shared admission distinguishes zero, false, and true selectors at real mil
  const exclusive=await update({effortSessions:3,clearEffortSessions:true});
  expect(exclusive.details?.diagnostics).toContainEqual(expect.objectContaining({code:"exclusive"}));
 
-// why: an invalid value the schema admits (a blank name) reaches the engine's own
-// milestone.invalid-input refusal; its recovery names the effort flag (A-refusal).
  const blankName=await update({name:"   ",effortSessions:3});
  expect(blankName).toMatchObject({status:"refused",code:"milestone.invalid-input"});
  expect(blankName.message).toContain("Name, effort sessions, or ordinal is invalid.");
@@ -185,8 +178,6 @@ test("collaboration command evidence: milestone list carries its project's lane 
  expect(listed.status).toBe("ok");
  if(listed.status!=="ok") return;
  const read=listed.data as { milestones: unknown[]; collaboration: { scope:{kind:string;key:string};completeness:string;asOf:string } };
- // note: The list is one project-scoped lane read; the envelope's evidence names the
- // same scope and instant it answered with.
  expect(read.collaboration).toMatchObject({ scope:{kind:"milestone",key:"proj-evidence"}, completeness:"complete" });
  expect(Number.isNaN(Date.parse(read.collaboration.asOf))).toBe(false);
 });

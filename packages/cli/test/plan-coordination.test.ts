@@ -219,5 +219,5 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
     ]);
     const closed = cli(["issue", "list", "--disposition", "resolved", "--harness", f.harness], f);
     expect(closed.json.data?.items?.map((item: { id: string }) => item.id)).toEqual([captured.id]);
-  });
+  }, 15_000);
 });

@@ -281,7 +281,6 @@ export type DetailProps = {
   readonly assignableIssues?: AssignableIssuesRead
   /** see packages/dsh/src/client/panel/destinations.tsx - Re-issue the picker's read after a failure. */
   readonly onRetryAssignable?: () => void
-  /** note: the seat-owned draft store, passed to the project page's forms. */
   readonly drafts?: MilestoneDraftStore
 }
 
@@ -438,7 +437,6 @@ export function ProjectDetailDestination(props: {
   assignableIssues?: AssignableIssuesRead
   /** see packages/dsh/src/client/panel/destinations.tsx - Re-issue the picker's read after a failure. */
   onRetryAssignable?: () => void
-  /** note: the seat-owned milestone draft store (the forms' drafts survive a read refresh). */
   drafts?: MilestoneDraftStore
   /** see packages/dsh/src/client/panel/destinations.tsx - Test seam: the tab the page opens on. Production always starts at the default. */
   initialFeature?: ProjectFeature

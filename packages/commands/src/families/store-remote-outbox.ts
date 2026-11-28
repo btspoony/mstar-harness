@@ -1,17 +1,3 @@
-/**
- * note: store-remote-outbox.ts (command family) — the provider-free recovery surface of the
- * collaboration outbox: `store collaboration remote outbox-*`.
- *
- * Every verb here is a thin route to ONE engine operation; none of them opens a provider
- * connection, holds a credential or retries a send. The CLI reports what the durable lane
- * recorded: a `confirmed` state is the only effect success, and an `unconfirmed` or
- * `conflict` state is a settled command outcome that still awaits the host's evidence.
- *
- * `--harness` names this checkout's harness ABSOLUTELY, exactly like the observation lane,
- * because the outbox belongs to the binding that harness recorded and never to a discovered
- * root. JSON documents use `--input <file|->` and are read here, before any store work, so a
- * malformed or unreadable document is a usage refusal that mutates nothing.
- */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -89,12 +75,6 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   });
 }
 
-/**
- * note: The cache rebuild route, mirroring the engine's own text: a cache whose bytes an in-place
- * settlement cannot honor may hold OTHER unsettled intents - including a permitted send whose
- * provider outcome is unknown - so the operator settles those, retains the file as evidence,
- * proves a fresh reviewed bind is admissible, and only then removes the name the checkout reads.
- */
 const CACHE_REBUILD_ROUTE =
   "settle every other unsettled intent that cache holds (outbox-pending lists them, and outbox-show, " +
   "outbox-dispatch, outbox-receipt, outbox-abandon, outbox-resolve and outbox-reconcile move each state), keep " +
@@ -102,15 +82,8 @@ const CACHE_REBUILD_ROUTE =
   "this checkout's binding satisfy a fresh reviewed bind, then remove the name the checkout reads, run " +
   "mstar store collaboration remote status --harness <abs>, and perform a fresh reviewed remote bind";
 
-/**
- * note: The exact supported route for one refusal, by cause and by the verb that refused it. A
- * document refusal is resubmitted to the verb that reads THAT document: a resolution is not
- * a receipt, and reconciliation is not a receipt either. Texts stay literal because the
- * repository's refusal-quality lint proves each named command statically.
- */
 function recoveryFor(code: string, verb: OutboxVerb): string {
   if (code === "remote.intent-not-found") {
-    // note: An unknown id is never guessed or replaced by retrying the business verb.
     return "List this project's durable intents with mstar store collaboration remote outbox-pending --harness <abs> --project <local-project-id>, then address the operation id it names; an operation id is never regenerated to make a write succeed.";
   }
   if (code === "remote.operation-conflict") {
@@ -121,16 +94,9 @@ function recoveryFor(code: string, verb: OutboxVerb): string {
       return "The named intent is not dispatchable in its recorded state. Read it with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>; an enqueued reviewed resolution still needs the host fork observation through mstar store collaboration remote outbox-dispatch --harness <abs> --operation <uuid> --input <file|->, an uncertain send is reconciled under its original binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->, and a moved base needs a fresh observation before a new intent. Never reuse a dispatched operation id.";
     }
     if (verb === "outbox-receipt") {
-      // note: This cause covers two different row states, and the recovery must not pick one for
-      // the operator: a normal `conflict` row has a supported settlement, while a row whose state
-      // says confirmed beside only a conflict receipt is damaged cache bytes. The row's own state
-      // is what tells them apart, so the text names both branches and the read that decides.
       return "The receipt names an attempt id or a state this intent does not hold. Read the row's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, then take the branch that state names: a row whose state is conflict is settleable in place, so settle it through mstar store collaboration remote outbox-resolve --harness <abs> --operation <uuid> --input <file|->, while a row whose state says confirmed beside a recorded conflict receipt holds a state that contradicts its evidence, so that damaged row has no in-place settlement and the cache rebuild is its route: " + CACHE_REBUILD_ROUTE + ". For any other cause, resubmit the receipt for that exact attempt with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->; evidence of another send never settles this attempt.";
     }
     if (verb === "outbox-reconcile") {
-      // note: The same two row states as the receipt branch: a normal `conflict` row is settled
-      // with a reviewed resolution, and only the damaged confirmed-beside-conflict row needs the
-      // rebuild. Naming one branch for both would move a shared cache for a settleable conflict.
       return "Reconciliation is read-only evidence for a dispatched attempt under its original binding. Read the row's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid>, then take the branch that state names: a row whose state is conflict is settleable in place, so settle it through mstar store collaboration remote outbox-resolve --harness <abs> --operation <uuid> --input <file|->, while a row whose state says confirmed beside a recorded conflict receipt holds a state that contradicts its evidence, so that damaged row has no in-place settlement and the cache rebuild is its route: " + CACHE_REBUILD_ROUTE + ". For any other cause, resubmit under that binding with mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->; a pre-send not-sent proof is only the original host's own receipt, recorded with mstar store collaboration remote outbox-receipt --harness <abs> --input <file|->.";
     }
     return "Read the intent's recorded state with mstar store collaboration remote outbox-show --harness <abs> --operation <uuid> and correct the named precondition; an operation id is never regenerated to make a write succeed.";
@@ -175,11 +141,6 @@ function absoluteFile(value: string, flag: string): string {
   return value;
 }
 
-/**
- * note: Read one JSON document for a verb: a file path (resolved against the caller's working
- * directory, exactly like the observation lane's reader), or `-` for stdin. An unreadable
- * path or a body that is not JSON is a usage refusal naming the flag, before any store work.
- */
 async function readJsonDocument(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
   let raw: string;
@@ -209,8 +170,6 @@ async function execute(id: string, input: OutboxInput, invocation: InvocationCon
     const operation = () => required(input.operation, "--operation");
     if (verb === "outbox-show") return ok(id, await readRemoteIntent(context, operation()));
     if (verb === "outbox-dispatch") {
-      // note: Only a reviewed resolution carries a host ForkObservation; an ordinary intent's
-      // base is its complete cached snapshot, and the engine refuses evidence it must not take.
       const forkObservation = input.input === undefined ? undefined : await readJsonDocument(invocation, input.input, "--input");
       return ok(id, await dispatchRemoteIntent(context, operation(), forkObservation));
     }
@@ -229,12 +188,6 @@ async function execute(id: string, input: OutboxInput, invocation: InvocationCon
   }
 }
 
-/**
- * note: The strict `--input` document each outbox verb carries, published through schema
- * discovery (`payloadSchemas.inputDocument`). The descriptor name is deliberately NOT an
- * input field: the CLI value of `--input` stays a file path (or `-` for stdin), so only
- * discovery sees the schema and nothing reshapes the path input.
- */
 const outboxInputDocuments: Partial<Record<OutboxVerb, z.ZodType>> = {
   "outbox-dispatch": remoteForkObservationDocumentSchema,
   "outbox-receipt": remoteReceiptDocumentSchema,
@@ -310,10 +263,7 @@ function outboxDefinition(verb: OutboxVerb): CommandDefinition<OutboxInput, unkn
     id,
     cli: { path: ["store", "collaboration", "remote", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    // note: `payloadSchemas.inputDocument` is the strict JSON the --input flag carries;
-    // the flag's own value stays a file path, so no admission schema changes.
     ...(outboxInputDocuments[verb] === undefined ? {} : { payloads: { inputDocument: { schema: outboxInputDocuments[verb] } } }),
-    // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
     rootInputs: [],
     output: commandEnvelopeSchema,
     effects: effects[verb],

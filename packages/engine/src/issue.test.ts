@@ -64,11 +64,6 @@ const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
-/**
- * invariant: The collaboration store is user-level, so the resolver's home must be this
- * fixture and never the operator's. One spy serves the whole file: nesting a
- * second and restoring it would discard this one.
- */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -84,11 +79,6 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/**
- * why: A synthetic checkout: the git origin names the repository the collaboration
- * authority is keyed by, and `.mstarc` selects the local mode an operator's own
- * clone would declare.
- */
 function ctx(name: string) {
   const checkoutRoot = mkdtempSync(join(ROOT, name));
   execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
@@ -97,8 +87,6 @@ function ctx(name: string) {
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
     cwd: checkoutRoot,
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`],
@@ -110,7 +98,6 @@ function ctx(name: string) {
   return { harnessDir, checkoutRoot };
 }
 
-/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activate(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -131,23 +118,19 @@ function activate(context: StoreContext): void {
   writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
-/** note: Initialize this context's collaboration authority without activating it. */
 async function stagedIssueStore(context: StoreContext): Promise<void> {
   await initializeCollaborationStore(resolveCollaborationLocation(context));
 }
 
-/** note: The collaboration authority the issue verbs read and write. */
 async function activeIssueStore(context: StoreContext): Promise<void> {
   await stagedIssueStore(context);
   activate(context);
 }
 
-/** note: One fixture effect on the collaboration authority. */
 function seedCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   return withCollaborationWrite(context, ({ db }) => fn(db));
 }
 
-/** note: One fixture read of the collaboration authority. */
 async function readCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
   const handle = await openCollaborationStore(context, "read");
   try {
@@ -157,7 +140,6 @@ async function readCollab<T>(context: StoreContext, fn: (db: StoreDb) => T): Pro
   }
 }
 
-/** note: The collaboration revision the receipts of this fixture's effects report. */
 function collaborationRevision(context: StoreContext): Promise<number> {
   return readCollab(context, (db) => (db.prepare("select revision from collaboration_meta where id = 1").get() as {
     revision: number;
@@ -221,7 +203,6 @@ describe("collaboration issues", () => {
       { operationId: "collab-close", actor: "project-manager", expectedRevision: triaged.revision },
     );
     expect(await collaborationRevision(context)).toBe(3);
-    // note: The rows the verbs wrote are the collaboration lane's own.
     expect(await readCollab(context, (db) => db.prepare("select count(*) as n from issues").get())).toEqual({ n: 1 });
   });
 
@@ -233,9 +214,6 @@ describe("collaboration issues", () => {
     await captureIssue(context, baseInput({ rootCauseKey: "second", occurrenceKey: "second" }), mut("cas-capture-2"));
     expect(await collaborationRevision(context)).toBe(2);
 
-    // invariant: The EXECUTION lane keeps its own counter; a move carrying that number as
-    // its store CAS is refused by the collaboration lane, because the two lanes
-    // never share a revision.
     const execution = await openStore(context, "read");
     let executionRevision: number;
     try {
@@ -272,7 +250,6 @@ describe("collaboration issues", () => {
           " values ('I-000001', 'proj-a', 'Ledger row', 'bug', 'high', 'open', 'i', 'a', ?, ?, 1, 'local', 'ledger-row', 'mstar:issue:11111111-1111-4111-8111-111111111111')",
       ).run(at, at);
     });
-    // note: The sync ledger records its own standalone receipt under this id.
     await seedCollab(context, (db) => {
       db.prepare(
         "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
@@ -297,10 +274,8 @@ describe("collaboration issues", () => {
     expect(first.id).toBe(created.issueId);
     assertIssueRef(first.issue_ref);
 
-    // invariant: A recurrence appends history to the same issue and never re-keys it.
     const recurrence = await captureIssue(context, baseInput({ occurrenceKey: "run-2" }), mut("ref-second"));
     expect(recurrence.issueId).toBe(created.issueId);
-    // invariant: A different semantic identity is a different issue with its own reference.
     const other = await captureIssue(
       context,
       baseInput({ rootCauseKey: "other-cause", occurrenceKey: "run-3" }),
@@ -842,8 +817,6 @@ async function liveAuthority(name: string): Promise<LiveAuthority> {
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
   git(["remote", "add", "origin", `https://github.com/acme/${basename(root)}.git`], root);
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   git(["config", `url.${root}.insteadOf`, `https://github.com/acme/${basename(root)}.git`], root);
   writeFileSync(join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = join(root, ".mstar");
@@ -1138,7 +1111,6 @@ describe("issue dispositions, revisions, and relations", () => {
       operationId: "reopen-stale", actor: "project-manager", expectedRevision: closed.revision,
     })).rejects.toMatchObject({ code: "issue.revision-conflict" });
     const again = await getIssue(context, created.issueId);
-    // invariant: A read's observation time is not state: the persisted detail must match.
     expect({ ...again, collaboration: { ...again.collaboration, asOf: "same" } }).toEqual({
       ...detail,
       collaboration: { ...detail.collaboration, asOf: "same" },
@@ -1606,10 +1578,6 @@ describe("issue action vocabulary", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: Remote selection: portable reference, native detail and a refused write path
-// ---------------------------------------------------------------------------
-
 describe("remote issue reads", () => {
   test("a remote checkout reads admitted findings and keeps an unmarked issue visible", async () => {
     const fixture = createRemoteScope(ROOT, "issue-remote");
@@ -1632,13 +1600,10 @@ describe("remote issue reads", () => {
     const native = await showIssue(context, REMOTE_IDS.providerOnlyIssueId, REMOTE_IDS.projectId);
     expect(native).toMatchObject({ kind: "provider-only", issueRef: null, nativeStatus: "Done" });
 
-    // invariant: The unmarked issue has no MStar detail; a display id and a guessed project never resolve.
     await expect(getIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(showIssue(context, REMOTE_IDS.providerOnlyIssueId)).rejects.toMatchObject({ code: "issue.scope-refused" });
     await expect(showIssue(context, "I-000001", REMOTE_IDS.projectId)).rejects.toMatchObject({ code: "issue.scope-refused" });
 
-    // invariant: A remote closure is never a local write: it freezes one outbox intent and reports
-    // the pending effect. The CAS baseline is mandatory, and a missing one writes nothing.
     await expect(
       closeIssue(
         context,
@@ -1684,8 +1649,6 @@ describe("remote issue reads", () => {
     };
     await ingestRemoteObservation(context, submission(commit, check, snapshot, 0));
 
-    // invariant: The MStar total stays its own; the provider list honours the same page, ordered
-    // by provider update so an offset names the same rows on a re-read.
     const first = await listIssues(context, { limit: 2 });
     expect(first.total).toBe(1);
     expect(first.providerIssues?.map((issue) => issue.title)).toEqual(["Native newest", "Native middle"]);
@@ -1714,10 +1677,7 @@ describe("remote issue reads", () => {
     const snapshot: RemoteSnapshot = {
       ...base,
       issues: [
-        // note: Only MStar subjects carry findings semantics; the page's native arm is under test.
         ...base.issues.filter((issue) => issue.mstar !== null),
-        // invariant: Within one second `00.500Z` is NEWER than whole-second `00Z`; a text
-        // comparison puts `Z` after `.` and would page the earlier issue first.
         native("aaaaaaaa-0000-4000-8000-000000000001", "Fractional half", "2026-11-20T00:00:00.500Z"),
         native("aaaaaaaa-0000-4000-8000-000000000002", "Whole second", "2026-11-20T00:00:00Z"),
         native("aaaaaaaa-0000-4000-8000-000000000003", "Earlier", "2026-11-19T23:59:59.999Z"),
@@ -1733,10 +1693,6 @@ describe("remote issue reads", () => {
 });
 
 describe("cross-authority relations", () => {
-  /**
-   * note: An ACTIVE lane of an unrelated repository, the destination of a first hop: no checkout,
-   * only the catalog project the admission needs.
-   */
   async function bareLane(repoKey: string, projectId: string): Promise<void> {
     const location = collaborationLocationOfRepoKey(repoKey, "local");
     mkdirSync(join(location.dbPath, ".."), { recursive: true, mode: 0o700 });
@@ -1750,7 +1706,6 @@ describe("cross-authority relations", () => {
     });
   }
 
-  /** note: Register one project in the lane of a bound checkout (admission lands on it). */
   async function registerLaneProject(context: StoreContext, projectId: string): Promise<void> {
     await withCollaborationWrite(context, ({ db }) => {
       db.prepare(
@@ -1774,14 +1729,11 @@ describe("cross-authority relations", () => {
     const aRefRow = await readCollab(context, (db) => db.prepare("select issue_ref from issues where id = ?").get(a.issueId));
     const aRef = (aRefRow as { issue_ref: string }).issue_ref;
     const gone = "mstar:issue:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-    // note: The row publication rewrites an edge into: the record whose reference is not in this
-    // lane is named by `to_ref` with `to_issue` null.
     await seedCollab(context, (db) => {
       db.prepare("insert into relations(from_issue, relation, to_ref) values (?, 'blocks', ?)").run(a.issueId, gone);
     });
 
     const detail = await getIssue(context, a.issueId);
-    // invariant: The detail read now names the stable reference the lane holds for this record.
     expect(detail.issueRef).toBe(aRef);
     expect(detail.relations).toContainEqual({ fromIssue: a.issueId, relation: "related", toIssue: b.issueId, toRef: null, title: "Staying" });
     expect(detail.relations).toContainEqual({ fromIssue: a.issueId, relation: "blocks", toIssue: null, toRef: gone, title: null });
@@ -1813,10 +1765,6 @@ describe("cross-authority relations", () => {
   });
 
   test("a canonical related swap replaces the unresolved edge stored from the local issue", async () => {
-    // invariant: `related` is stored in canonical order, but an unresolved edge is stored from whichever
-    // LOCAL issue asked for it. When the target's display id sorts lower, the canonical write swaps the
-    // sides — so the stale-edge lookup must address the ORIGINAL local issue, or it misses the row it
-    // was meant to replace and leaves both spellings of one logical relation.
     const context = ctx("related-swap-");
     await activeIssueStore(context);
     const lower = await captureIssue(
@@ -1829,9 +1777,6 @@ describe("cross-authority relations", () => {
       baseInput({ occurrenceKey: "swap-higher", rootCauseKey: "swap-higher", title: "Higher local" }),
       mut("cap-swap-higher"),
     );
-    // note: The canonical swap under test: the local issue we link FROM is the higher display id, so
-    // the resolved row is stored from `lower`. The unresolved row is stored from `higher`, as a local
-    // writer does when the target is not in the lane yet.
     expect(higher.issueId > lower.issueId).toBe(true);
     const lowerRef = (await readCollab(context, (db) =>
       db.prepare("select issue_ref from issues where id = ?").get(lower.issueId))) as { issue_ref: string };
@@ -1849,7 +1794,6 @@ describe("cross-authority relations", () => {
       { ...mut("link-swap"), expectedRevision: higher.revision },
     );
 
-    // invariant: One logical relation, in exactly one spelling, with no `to_ref` row left behind.
     const detail = await getIssue(context, higher.issueId);
     expect(detail.relations).toEqual([
       { fromIssue: lower.issueId, relation: "related", toIssue: higher.issueId, toRef: null, title: "Lower target" },
@@ -1864,7 +1808,6 @@ describe("cross-authority relations", () => {
     await activeIssueStore(context);
     await initializeStore(context).then((handle) => handle.close());
 
-    // note: The record that leaves, then returns.
     const moving = await captureIssue(context, baseInput({ title: "Moving target" }), mut("cap-arrival-t"));
     const staying = await captureIssue(
       context,
@@ -1873,9 +1816,6 @@ describe("cross-authority relations", () => {
     );
     await linkIssue(context, staying.issueId, { relation: "blocks", issueId: moving.issueId }, { ...mut("link-arrival"), expectedRevision: staying.revision });
 
-    // note: The first hop's destination lane is keyed by the SECOND checkout's repository: a
-    // checkout may write only the lane it is bound to, so the checkout below is the one that
-    // moves the record back into this lane.
     const bound = ctx("arrival-second-");
     const boundContext: StoreContext = { harnessDir: bound.harnessDir, checkoutRoot: bound.checkoutRoot };
     const boundLocation = resolveCollaborationLocation(boundContext);
@@ -1890,7 +1830,6 @@ describe("cross-authority relations", () => {
       reason: "to the other authority",
     });
 
-    // invariant: Publication left the staying record's edge in the unresolved shape.
     const unresolved = await getIssue(context, staying.issueId);
     expect(unresolved.relations).toHaveLength(1);
     expect(unresolved.relations[0]).toMatchObject({
@@ -1902,7 +1841,6 @@ describe("cross-authority relations", () => {
     const movingRef = unresolved.relations[0]!.toRef!;
     expect(movingRef).toMatch(/^mstar:issue:/);
 
-    // note: The display id the hop allocated is recorded on that lane's destination row.
     const admitted = new DatabaseSync(boundLocation.dbPath);
     let admittedId: string;
     try {
@@ -1913,8 +1851,6 @@ describe("cross-authority relations", () => {
     } finally {
       admitted.close();
     }
-    // note: The bound checkout needs the same two stores any source checkout does: its execution
-    // store for the composite, and the collaboration binding to the lane the record lives in.
     await initializeStore(boundContext).then((handle) => handle.close());
     activate(boundContext);
     await registerLaneProject(context, "proj-a");
@@ -1927,8 +1863,6 @@ describe("cross-authority relations", () => {
       reason: "back to the first authority",
     });
 
-    // invariant: The same transaction that admitted the record localised the edge: it is a plain
-    // local relation now, under the new display id, with no leftover `to_ref` spelling.
     const resolved = await getIssue(context, staying.issueId);
     const [edge] = resolved.relations;
     expect(resolved.relations).toHaveLength(1);

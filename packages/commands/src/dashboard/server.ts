@@ -72,8 +72,6 @@ function statusForCode(code: string): number {
   if (code === "issue.not-found" || code === "not-found") return 404;
   // see docs/specs/architecture/overview.md - a CAS conflict is a routine outcome, not a server fault.
   if (code.endsWith(".revision-conflict")) return 409;
-  // invariant: An unavailable required source is service-unavailable, never a 404 that
-  // claims the record does not exist.
   if (
     code.startsWith("store.") ||
     code.startsWith("projection.") ||

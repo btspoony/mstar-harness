@@ -89,8 +89,6 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                         : code.startsWith("execution.adoption")
                           ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
                           : code === "collaboration.mode-unavailable"
-                            // invariant: A remote checkout has no local catalog or registration lane, so the
-                            // named cause is the mode, not the request payload.
                             ? "Remote authority admits no local catalog or registration lane, so nothing was reserved. Read the addressed plan rows and their catalog pins with mstar plan show --workflow <workflow-id> --plan <plan-id>, then re-register against the provider project or run this verb in a local or mirror checkout."
                             : undefined;
   const refusalDetails = details === undefined

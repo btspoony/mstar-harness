@@ -124,7 +124,6 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
 
 const query = { filters: { ...DEFAULT_ISSUE_FILTERS }, offset: 0 };
 
-/** note: An explicit partial observation, as a source that could not prove its scope reports. */
 const partialObservation = {
   scope: { kind: "query" as const, key: "issues" },
   completeness: "partial" as const,

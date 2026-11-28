@@ -582,8 +582,9 @@ export type UnclassifiedComment = { line: number; endLine: number; text: string 
 const POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
 const POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+";
 
-/** see skills/mstar-coding-behavior/references/comments.md § MUST: four shapes —
- * a bounded marker, a contract pointer, @generated, or a tracked TODO. Anything
+/** see skills/mstar-coding-behavior/references/comments.md § MUST: five shapes —
+ * a bounded marker, a contract pointer, @generated, a tracked TODO, or a
+ * lint-owned marker (`hash-gate: authorized`, `reachability: manual`). Anything
  * else is a restatement, a stale note or a changelog line. */
 const COMMENT_SHAPES: readonly RegExp[] = [
   // why: the bounded-shortcut vocabulary (comments.md § Markers).
@@ -598,6 +599,21 @@ const COMMENT_SHAPES: readonly RegExp[] = [
   new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`),
   /@generated\b/i,
 ];
+
+/** see skills/mstar-coding-behavior/references/comments.md § MUST: each lint-owned marker is accepted only under the roots its owning script scans. */
+const LINT_MARKER_SHAPES: readonly { pattern: RegExp; roots: readonly string[] }[] = [
+  { pattern: /^hash-gate:\s*authorized\s*\u2014\s*\S/, roots: ["packages/engine/src/"] },
+  { pattern: /^reachability:\s*manual\s*\u2014\s*\S/, roots: ["packages/engine/src/", "packages/commands/src/"] },
+];
+
+/** see skills/mstar-coding-behavior/references/comments.md § MUST: a marker outside its owner's scan roots is prose, not an anchor. */
+function markerShapesFor(filePath: string | undefined): readonly RegExp[] {
+  const normalized = filePath?.replace(/\\/g, "/");
+  if (normalized === undefined) return [];
+  return LINT_MARKER_SHAPES
+    .filter(({ roots }) => roots.some((root) => normalized.startsWith(root) || normalized.includes(`/${root}`)))
+    .map(({ pattern }) => pattern);
+}
 
 /** why: the marker is a shape only when a tracking reference (an owner, an
  * issue, a removal path) holds somebody to it. */
@@ -642,7 +658,7 @@ function opensCommentContent(maskedLine: string, at: number, scan: Uint8Array, l
 
 /** why: the changed-line gate reads the whole span, so a unit carries both its
  * first and last line together with the body a shape match reads. */
-type CommentUnit = { line: number; endLine: number; body: string; doc: boolean };
+type CommentUnit = { line: number; endLine: number; body: string; doc: boolean; singleLine: boolean };
 
 /** why: a block or run may start and end far apart, so a position is mapped to
  * its 1-based line by binary search over the line-start table. */
@@ -726,6 +742,7 @@ function commentUnits(fileText: string, scan: Uint8Array, masked: readonly strin
     endLine: lineAt(offsets, Math.max(run.start, run.end - 1)),
     body: commentBody(fileText.slice(run.start, run.end)),
     doc: run.doc,
+    singleLine: run.line,
   }));
 }
 
@@ -743,8 +760,9 @@ function documentsExport(lines: readonly string[], afterLine: number): boolean {
 
 /** why: a TODO/FIXME is a shape only with a tracking reference, and only when
  * it opens the comment content — a mid-sentence mention is prose. */
-function hasCommentShape(line: string): boolean {
+function hasCommentShape(line: string, unit: CommentUnit, markers: readonly RegExp[]): boolean {
   if (COMMENT_SHAPES.some((shape) => shape.test(line))) return true;
+  if (unit.singleLine && markers.some((shape) => shape.test(line.trimStart()))) return true;
   if (!TODO_MARKER_RE.test(line) || !hasTrackingReference(line)) return false;
   return line.search(TODO_MARKER_RE) === 0;
 }
@@ -766,17 +784,18 @@ function hasCommentShape(line: string): boolean {
  * read, so a trailing `#`/`;`/`--` comment (`x = 1 # note`) is unreported.
  * upgrade: a per-extension comment tokenizer replacing `comment-scan.ts`.
  */
-export function findUnclassifiedComments(fileText: string, dialect: SourceDialect = "c"): UnclassifiedComment[] {
+export function findUnclassifiedComments(fileText: string, dialect: SourceDialect = "c", filePath?: string): UnclassifiedComment[] {
   if (fileText === "") return [];
   const lines = fileText.split(/\r?\n/);
   const masked = maskLiterals(fileText, dialect).split(/\r?\n/);
   const scan = scanSource(fileText, dialect);
   const offsets = lineOffsets(fileText);
   const findings: UnclassifiedComment[] = [];
+  const markers = markerShapesFor(filePath);
   for (const unit of commentUnits(fileText, scan, masked, offsets, dialect)) {
     if (unit.body.trim() === "") continue;
     if (unit.doc && documentsExport(lines, unit.endLine)) continue;
-    if (unit.body.split("\n").some(hasCommentShape)) continue;
+    if (unit.body.split("\n").some((text) => hasCommentShape(text, unit, markers))) continue;
     findings.push({ line: unit.line, endLine: unit.endLine, text: lines[unit.line - 1]!.trim() });
   }
   return findings;

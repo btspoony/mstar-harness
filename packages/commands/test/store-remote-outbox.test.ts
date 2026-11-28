@@ -1,12 +1,3 @@
-/**
- * note: The provider-free outbox command surface: `adopt-issue` preparation, the seven recovery
- * verbs, and the domain families' pending-effect propagation.
- *
- * Every case drives real command definitions against a real remote cache lane and a real Git
- * selector ref. No provider exists anywhere in the fixture: the CLI/engine read the selector,
- * freeze intents and record receipts, and the host's provider call is never simulated inside
- * the product code.
- */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import * as nodeOs from "node:os";
@@ -26,7 +17,6 @@ const roots: string[] = [];
 const HOME = mkdtempSync(join(tmpdir(), "mstar-outbox-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
-  // note: The collaboration lane is user-level, so every fixture's homedir is private.
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 });
 afterAll(() => {
@@ -69,10 +59,6 @@ type Fixture = {
   text: (name: string, content: string) => string;
 };
 
-/**
- * note: A real remote checkout: a bare origin carrying the protected selector ref, a `.mstarc`
- * selecting remote, and this checkout's harness directory. Nothing else is created.
- */
 function remoteFixture(label: string): Fixture {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `mstar-outbox-${label}-`)));
   roots.push(root);
@@ -230,7 +216,6 @@ function dataOf(result: CommandEnvelope): Record<string, unknown> {
   return result.data as Record<string, unknown>;
 }
 
-/** note: Read one member of a published JSON Schema document; every step is checked, nothing is assumed. */
 function atPath(value: unknown, ...keys: string[]): unknown {
   let cursor: unknown = value;
   for (const key of keys) {
@@ -288,7 +273,6 @@ const RECEIPT_SCOPE = {
   projectId: IDS.projectId,
 };
 
-/** note: A prepared fixture with one enqueued adoption, its dispatch permit and the frozen event. */
 async function adoptAndDispatch(label: string) {
   const fixture = remoteFixture(label);
   await fixture.bind();
@@ -329,7 +313,6 @@ describe("remote outbox commands", () => {
     const { fixture, intent, permit } = await adoptAndDispatch("lifecycle");
     expect(intent).toMatchObject({ operationId: OPERATIONS.adopt, state: "enqueued", replayed: false, projectId: IDS.projectId });
 
-    // invariant: A replay of the identical adoption returns the stored intent, never a second row.
     const replay = await invoke("store.collaboration.remote.adopt-issue", {
       harness: fixture.harness,
       project: IDS.projectId,
@@ -352,8 +335,6 @@ describe("remote outbox commands", () => {
     });
     expect((shown.event as Record<string, unknown>).change).toMatchObject({ kind: "issue-adopt" });
 
-    // note: The listing reports every unsettled row of the current binding with its state, so the
-    // dispatched attempt above is still visible to the operator who must settle it.
     const pending = dataOf(await invoke("store.collaboration.remote.outbox-pending", {
       harness: fixture.harness,
       project: IDS.projectId,
@@ -399,8 +380,6 @@ describe("remote outbox commands", () => {
   test("--input reads a relative file path as well as stdin", async () => {
     const { fixture, permit } = await adoptAndDispatch("relative-input");
     const absolute = fixture.path("relative-receipt", receiptOf(permit, { kind: "unconfirmed", reason: "no-response" }));
-    // invariant: The documented file input is a PATH, not an absolute path: it resolves against
-    // the caller's working directory exactly like the observation lane's reader.
     const recorded = await invoke("store.collaboration.remote.outbox-receipt", {
       harness: fixture.harness,
       input: relative(process.cwd(), absolute),
@@ -411,8 +390,6 @@ describe("remote outbox commands", () => {
 
   test("a refused document names the verb that reads that document, not another DTO's verb", async () => {
     const { fixture } = await adoptAndDispatch("recovery-routing");
-    // note: Valid JSON that is not the document the verb reads reaches the engine's own
-    // narrow validation; the recovery must resubmit it to THIS verb.
     const reconcile = await invoke("store.collaboration.remote.outbox-reconcile", {
       harness: fixture.harness,
       input: fixture.path("bad-reconcile", { version: 1 }),
@@ -444,7 +421,6 @@ describe("remote outbox commands", () => {
       harness: fixture.harness,
       input: fixture.path("receipt", receiptOf(permit, { kind: "unconfirmed", reason: "no-response" })),
     }, fixture.repo);
-    // note: Exit 0 acknowledges the recorded evidence only; the state is the durable outcome.
     expect(unconfirmed).toMatchObject({ status: "ok", exitCode: 0 });
     expect(dataOf(unconfirmed)).toMatchObject({ state: "unconfirmed" });
 
@@ -469,7 +445,6 @@ describe("remote outbox commands", () => {
 
   test("an unconfirmed send blocks the next dispatch and is abandoned only with recorded proof", async () => {
     const { fixture, permit } = await adoptAndDispatch("blocking");
-    // note: A second intent of the same project waits behind the first unconfirmed send.
     const queued = await invoke("store.collaboration.remote.adopt-issue", {
       harness: fixture.harness,
       project: IDS.projectId,
@@ -479,9 +454,6 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(queued).toMatchObject({ status: "ok" });
 
-    // invariant: The public recovery for a refused receipt names BOTH row states behind this cause,
-    // and the read that tells them apart: a normal conflict row is settled in place, and only the
-    // damaged confirmed-beside-conflict row has no in-place settlement.
     const waiting = dataOf(await invoke("store.collaboration.remote.outbox-show", {
       harness: fixture.harness,
       operation: "13131313-1313-4313-8313-131313131313",
@@ -523,8 +495,6 @@ describe("remote outbox commands", () => {
     for (const at of steps) expect(at).toBeGreaterThan(-1);
     expect([...steps].sort((left, right) => left - right)).toEqual(steps);
 
-    // invariant: The reconcile verb's own refusal carries the same two branches, so a refused
-    // reconciliation never sends the operator to the rebuild for a settleable conflict either.
     const undispatched = await invoke("store.collaboration.remote.outbox-reconcile", {
       harness: fixture.harness,
       input: fixture.path("reconcile-undispatched", {
@@ -590,15 +560,12 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(dataOf(conflicted)).toMatchObject({ state: "conflict" });
 
-    // invariant: The original conflicted intent is never rewritten or resent.
     const resend = await invoke("store.collaboration.remote.outbox-dispatch", {
       harness: fixture.harness,
       operation: OPERATIONS.adopt,
     }, fixture.repo);
     expect(resend).toMatchObject({ status: "refused", code: "remote.dispatch-refused" });
 
-    // note: The fixture adopts an issue, so its reviewed repair is an issue-replace that keeps the
-    // adopted portable reference and the history both branches carry.
     const adopted = frozen.change;
     if (adopted.kind === "project-replace") throw new Error("the fixture adoption freezes an issue event");
     const reviewedRepair = (operationId: string) => ({
@@ -619,7 +586,6 @@ describe("remote outbox commands", () => {
       }),
     }, fixture.repo));
     expect(resolved).toMatchObject({ operationId: OPERATIONS.resolution, state: "enqueued" });
-    // invariant: One reviewed resolution per fork, and the original intent keeps its conflict.
     const twice = await invoke("store.collaboration.remote.outbox-resolve", {
       harness: fixture.harness,
       operation: OPERATIONS.adopt,
@@ -642,8 +608,6 @@ describe("remote outbox commands", () => {
       operation: OPERATIONS.resolution,
     }, fixture.repo);
     expect(bare).toMatchObject({ status: "refused", code: "remote.dispatch-refused" });
-    // invariant: An enqueued resolution missing its fork evidence is recovered by supplying that
-    // evidence to the dispatch verb, not by reconciling a send that never happened.
     expect(bare.details?.recovery).toContain("outbox-dispatch");
     expect(bare.details?.recovery).toContain("--input");
 
@@ -692,14 +656,11 @@ describe("remote outbox commands", () => {
     ];
     for (const [id, input] of cases) {
       const result = await invoke(id, input, fixture.repo);
-      // invariant: A durable enqueue is a pending refusal carrying the operation id and state.
       expect(result).toMatchObject({ status: "refused", code: "remote.effect-pending", exitCode: 1 });
       expect(result.status === "refused" ? result.details : {}).toMatchObject({ operationId: expect.any(String), state: "enqueued" });
       expect(result.details?.recovery).toContain("outbox-show");
     }
 
-    // note: The mirror keeps its own command surface and its own inputs: a remote lane holds no
-    // mirror ledger, so this verb refuses before recording anything into the cache or a local row.
     const sync = await invoke("issue-sync.pending", { harness: fixture.harness, project: IDS.projectId }, fixture.repo);
     expect(sync).toMatchObject({ status: "refused", exitCode: 1 });
     expect(String(sync.code)).toMatch(/^(linear|collaboration)\./);
@@ -725,9 +686,6 @@ describe("remote outbox commands", () => {
       operationId: "00000000-0000-4000-8000-0000000000c1",
       actor: "project-manager",
     };
-    // invariant: A remote catalog write appends to ONE project journal. The execution
-    // registration's advertised correction therefore carries --project; without it the CLI
-    // forwards no project and the engine refuses before enqueuing anything.
     expect(await invoke("catalog.update", correction, fixture.repo)).toMatchObject({
       status: "refused",
       code: "catalog.invalid-entity",
@@ -758,21 +716,15 @@ describe("remote outbox commands", () => {
     for (const id of withDocument) {
       const json = await publish(id);
       expect(json, id).toBeDefined();
-      // note: Each document carries its own marker field; the resolution envelope has no
-      // version member and the adoption publishes its arms, so the assertion reads
-      // the published schema instead of assuming one shape.
       const marker = id.endsWith("adopt-issue") ? "sourceIssue"
         : id.endsWith("outbox-resolve") ? "operator"
           : id.endsWith("outbox-dispatch") ? "conflictOperationId"
             : "version";
       expect(JSON.stringify(json), id).toContain(marker);
-      // invariant: The option help names the document by the verb's OWN registered id, so an
-      // author can copy the command out of --help and run it.
       const help = String(byId.get(id)?.cli.options.find((option) => option.key === "input")?.help);
       expect(help).toContain(`mstar schema --command ${id}`);
       expect(help).not.toContain("<verb>");
     }
-    // note: The observation's own strict document: every envelope field is required.
     const observe = await publish("store.collaboration.remote.observe") as {
       properties?: Record<string, unknown>;
     };
@@ -803,14 +755,9 @@ describe("remote outbox commands", () => {
       listOf(atPath(documentOf(id).toJSONSchema(), "properties", "outcome", "anyOf"))
         .map((arm) => atPath(arm, "properties", "kind", "const"));
 
-    // invariant: The two verbs publish DIFFERENT outcome documents: a reconciliation reports what
-    // a lookup saw, so `not-sent` is absent from the document it advertises.
     expect(outcomeKinds(RECEIPT)).toEqual(["confirmed", "unconfirmed", "conflict", "not-sent"]);
     expect(outcomeKinds(RECONCILE)).toEqual(["confirmed", "unconfirmed", "conflict"]);
 
-    // invariant: The published event is a closed, typed document: the issue arm carries the six
-    // typed subject members and every history row closes its own fields, so discovery never
-    // advertises a loose map the engine would then reject field by field.
     const issueChange = listOf(atPath(documentOf(RECEIPT).toJSONSchema(), "properties", "outcome", "anyOf"))
       .flatMap((arm) => listOf(atPath(arm, "properties", "event", "properties", "change", "anyOf")))
       .find((arm) => atPath(arm, "properties", "mstar") !== undefined);
@@ -832,17 +779,13 @@ describe("remote outbox commands", () => {
       recordId: "abababab-abab-4bab-8bab-abababababab",
       event: frozen,
     });
-    // invariant: A representative accepted document parses against the published contract...
     expect(documentOf(RECEIPT).safeParse(accepted).success).toBe(true);
-    // note: one document with an extra nested event member does not parse, exactly as the engine refuses it.
     const nested = {
       ...accepted,
       outcome: { ...accepted.outcome, event: { ...frozen, change: { ...frozen.change, unsupportedMember: [] } } },
     };
     expect(documentOf(RECEIPT).safeParse(nested).success).toBe(false);
 
-    // invariant: The real engine applies the same split the documents advertise instead of
-    // accepting `not-sent` at this verb and rejecting it later.
     const notSent = receiptOf(permit, { kind: "not-sent", code: "host-pre-send-refusal" });
     expect(documentOf(RECEIPT).safeParse(notSent).success).toBe(true);
     expect(documentOf(RECONCILE).safeParse(notSent).success).toBe(false);
@@ -879,8 +822,6 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
     const message = String(result.message);
-    // invariant: ONE refusal answers the whole document - every invalid envelope field, a surplus
-    // top-level member, a surplus outcome member and each nested member the engine cannot read.
     for (const diagnostic of [
       "receipt.version",
       "receipt.selectorCommit",
@@ -898,7 +839,6 @@ describe("remote outbox commands", () => {
     ]) {
       expect(message).toContain(diagnostic);
     }
-    // invariant: The refusal names the published document to consult and the correction to resubmit.
     expect(message).toContain("mstar schema --command store.collaboration.remote.outbox-receipt");
     expect(message).toContain("resubmit the corrected --input");
     expect(result.details?.recovery).toContain("outbox-receipt");
@@ -975,12 +915,9 @@ describe("remote outbox commands", () => {
         ],
       },
     };
-    // invariant: The published document accepts the marked observation shape the engine itself
-    // requires — `fields` included — so discovery never refuses a document the runtime accepts.
     const schema = definition("store.collaboration.remote.observe").payloads?.inputDocument?.schema;
     expect(schema).toBeDefined();
     expect(schema!.safeParse(document).success).toBe(true);
-    // invariant: The same document through the real command: accepted end to end.
     const result = await invoke("store.collaboration.remote.observe", {
       harness: fixture.harness,
       input: fixture.path("marked-observe", document),
@@ -1018,8 +955,6 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
     const message = String(result.message);
-    // invariant: ONE refusal answers every structural defect — the unknown identity key, BOTH bad
-    // scope ids, the bad issue id, and each bad event member — instead of one defect per attempt.
     for (const diagnostic of [
       "receipt.outcome.identity.surplusKey",
       "receipt.outcome.identity.workspaceId",
@@ -1104,15 +1039,11 @@ describe("remote outbox commands", () => {
         },
       },
     };
-    // invariant: The published document — engine-owned since the convergence — reports all
-    // three defects of the known event arm together, exactly as the runtime refusal does.
     const schema = definition("store.collaboration.remote.outbox-receipt").payloads?.inputDocument?.schema;
     expect(schema).toBeDefined();
     const parsed = schema!.safeParse(document);
     expect(parsed.success).toBe(false);
     if (!parsed.success) {
-      // note: The outcome and its `change` are unions of arms, so zod v4 nests each arm's issues
-      // under the union issue's `errors`; every level is walked for the together-report assertion.
       const paths: string[] = [];
       const pending = [...parsed.error.issues];
       while (pending.length > 0) {
@@ -1121,9 +1052,6 @@ describe("remote outbox commands", () => {
         if (Array.isArray(issue.errors)) pending.push(...(issue.errors as unknown[]).flat() as { path: PropertyKey[] }[]);
       }
       const joined = paths.join("\n");
-      // note: Inside a union arm zod v4 reports the path relative to the union value, so the
-      // subject defects appear under their `mstar.` prefix; the together-report assertion reads
-      // those.
       for (const defect of [
         "mstar.fields.title",
         "mstar.fields.revision",
@@ -1139,9 +1067,6 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
     const message = String(result.message);
-    // invariant: ONE runtime refusal answers the whole known event arm — both bad subject fields
-    // and BOTH malformed history entries, the second after the first — so the caller corrects the
-    // document in one pass instead of discovering one sibling per submission.
     for (const diagnostic of [
       "receipt.outcome.event.change.mstar.fields.title",
       "receipt.outcome.event.change.mstar.fields.revision",
@@ -1170,8 +1095,6 @@ describe("remote outbox commands", () => {
     }, fixture.repo);
     expect(result).toMatchObject({ status: "refused", code: "remote.input-invalid", exitCode: 1 });
     const message = String(result.message);
-    // invariant: EVERY invalid envelope field is named by the ONE refusal, so the caller
-    // fixes the whole document per attempt instead of discovering one field per submission.
     for (const field of [
       "receipt.version",
       "receipt.selectorCommit",

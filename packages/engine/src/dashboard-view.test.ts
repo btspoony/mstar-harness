@@ -62,8 +62,6 @@ async function workspace(name: string): Promise<StoreContext> {
     cwd: dir,
     stdio: ["ignore", "ignore", "ignore"],
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${dir}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
@@ -80,11 +78,6 @@ async function workspace(name: string): Promise<StoreContext> {
   return context;
 }
 
-/**
- * invariant: Publish the staged collaboration lane AND this checkout's binding -- the two
- * records the real activation writes. An ACTIVE authority is never usable from
- * an unbound checkout, so a fixture that flips only the lane is refused.
- */
 function activateCollaboration(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const lane = new DatabaseSync(location.dbPath);
@@ -216,8 +209,6 @@ describe("readDashboardView over a real store", () => {
       id: "I-000001",
     });
     const detail: IssueDetail = envelope.data as IssueDetail;
-    // why: The domain reader also stamps its own observation; the dashboard DTO keeps
-    // the detail shape and the envelope carries that observation.
     const direct = await getIssue(context, "I-000001");
     const { collaboration: detailEvidence, ...directDetail } = direct;
     expect(detail).toEqual(directDetail);
@@ -246,7 +237,6 @@ describe("readDashboardView over a real store", () => {
 });
 
 describe("dashboard collaboration disclosure", () => {
-  /** note: Remove the workspace's collaboration authority: an unavailable source, not an empty one. */
   function removeCollaboration(context: StoreContext): void {
     unlinkSync(resolveCollaborationLocation(context).dbPath);
   }
@@ -256,9 +246,7 @@ describe("dashboard collaboration disclosure", () => {
     removeCollaboration(context);
     const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
     const typed = dashboardFailure(failure);
-    // invariant: A typed non-success, never a 404-shaped or zero-row answer.
     expect(typed.code).toBe("collaboration.not-initialized");
-    // why: The refusal keeps the recovery path and drops the user's home and store file.
     expect(typed.message).toContain("mstar store init");
     expect(typed.message).not.toContain(TEST_HOME);
     expect(typed.message).not.toMatch(/\.db\b/);
@@ -274,8 +262,6 @@ describe("dashboard collaboration disclosure", () => {
       expect(typed.message).not.toContain(secret);
       expect(typed.message).toContain("{REDACTED}");
     }
-    // invariant: A scheme-led credential without the header label is redacted too — in any
-    // scheme capitalization (a bare lower-case `bearer` must not escape).
     for (const [scheme, secret] of [
       ["bearer", "sk-live-456"],
       ["bAsIc", "dXNlcjpwYXNz"],
@@ -286,7 +272,6 @@ describe("dashboard collaboration disclosure", () => {
       expect(bare.message).not.toContain(secret);
       expect(bare.message).toContain("{REDACTED}");
     }
-    // note: A Digest value is a parameter list: every parameter is redacted with it.
     const digest = dashboardFailure(
       new Error('Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"'),
     );
@@ -299,15 +284,11 @@ describe("dashboard collaboration disclosure", () => {
   test("an execution-only list keeps its rows and discloses the optional gap", async () => {
     const context = await workspace("disclosure-optional-");
     await createPlanWorkflow(context, "p-disclosure", "Todo");
-    // invariant: A generation is published first, as it would be on a healthy checkout; the
-    // later unavailable catalog must not turn those rows into an empty success.
     const published = await readDashboardView({ context, view: "workflows" });
     expect((published.data as WorkflowListDTO).items.map((item) => item.id)).toContain("p-disclosure");
     removeCollaboration(context);
     const envelope = await readDashboardView({ context, view: "workflows" });
     const list = envelope.data as WorkflowListDTO;
-    // note: Previously usable execution data stays; only the unavailable optional
-    // catalog association is disclosed, and no collaboration counter is claimed.
     expect(list.items.map((item) => item.id)).toContain("p-disclosure");
     expect(envelope.collaboration).toMatchObject({
       completeness: "unavailable",
@@ -464,7 +445,6 @@ function readMember<T>(member: OverviewMember<T>): T {
   return member.data;
 }
 
-/** note: The CAS revision the milestone verbs guard on: the collaboration counter. */
 async function storeRevision(context: StoreContext): Promise<number> {
   return (await readCollaborationAuthority(context)).revision;
 }
@@ -945,10 +925,6 @@ describe("overview read model", () => {
       { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
       operation("register-proj-a"),
     );
-    // why: Remove the one table the milestone member reads; every other reader is
-    // untouched, so only `milestones` may answer `unavailable`. The project is
-    // removed from the catalog, which the milestone grouping resolves against;
-    // the other members keep reading their own rows.
     const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
     try {
       lane.exec("delete from catalog_entities where kind = 'project' and id = 'proj-a'");
@@ -969,10 +945,6 @@ describe("overview read model", () => {
     }
   });
 });
-
-// ---------------------------------------------------------------------------
-// note: Remote selection: the dashboard transport never collapses to an empty page
-// ---------------------------------------------------------------------------
 
 describe("remote dashboard transport", () => {
   test("a complete remote scope serves the issue page and discloses its source", async () => {

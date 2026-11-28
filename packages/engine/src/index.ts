@@ -73,8 +73,6 @@ export {
   collaborationLocationOfRepoKey,
   resolveCollaborationLocation,
 } from "./collaboration-identity.js";
-// note: The collaboration lane's own store: independent staged schema, create-only
-// publication and active-only handles. No execution table or method.
 export type {
   CollaborationAdoption,
   CollaborationAuthority,
@@ -105,9 +103,6 @@ export {
   writeCollaborationBinding,
   writeRemoteCollaborationBinding,
 } from "./collaboration-store.js";
-// note: The remote authority boundary: strict verification/observation DTOs, the explicit bind
-// that materializes the selected provider scope, scoped observation ingest into the cache, and
-// the status read. No provider call, credential or transport lives here.
 export type {
   ObservationSubmission,
   ProviderIssueIdentity,
@@ -170,8 +165,6 @@ export {
   reconcileRemoteIntent,
   remoteEventHead,
 } from "./collaboration-remote.js";
-// note: The remote READ boundary: the same domain DTOs over admitted snapshots. It
-// refuses a failed/partial/stale required scope rather than reading local rows.
 export type {
   RemoteCatalogLinks,
   RemoteCatalogRow,
@@ -180,8 +173,6 @@ export type {
   RemoteReadView,
 } from "./collaboration-remote-read.js";
 export { openRemoteReadView } from "./collaboration-remote-read.js";
-// note: The one-way authority cutover: reviewed manifest, verified staged copy,
-// activation claim, durable source fence, guarded publication and replay.
 export type {
   CutoverActivationOptions,
   CutoverManifest,
@@ -193,17 +184,8 @@ export {
   applyCollaborationCutover,
   planCollaborationCutover,
 } from "./collaboration-cutover.js";
-// note: One record's staged move: the source row is the ledger and the fence, and the phase set is
-// forward-only. The published surface is the routes a transport calls — `moveAcrossAuthorities` for
-// the one-checkout topology, `moveAcrossByDocument` for the two-checkout exchange, and
-// `discardAcrossAuthorities` to abandon either one (a checkout can only release the lanes it holds) —
-// plus `moveDocumentOf` to parse the handoff a peer wrote. The phase engine
-// (`stageMove`/`verifyMove`/`switchMove`/`publishMove`), `discardMove` (the one-checkout release) and
-// the ledger primitives stay internal to the module.
 export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole, IssueMoveRoute } from "./cross-authority-move.js";
 export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
-// note: The two-checkout exchange: one half per checkout, exchanging documents, for a move across a
-// `local`/`remote` boundary.
 export type {
   ExchangeReceipt,
   IssueMoveConfirmation,
@@ -843,9 +825,6 @@ export {
 // Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
 export { mutateExecutionPlan } from "./execution-coordination.js";
-// note: The cross-domain composite contract: the admitted intent, its local effect key
-// and the collaboration receipt. The frame itself stays internal to the engine;
-// only the admitted owning verb may run one.
 export type {
   CollaborationCompositeEffects,
   CollaborationEffectReceipt,
@@ -919,10 +898,6 @@ export {
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
 } from "./issue.js";
-// why: The engine-owned structural definitions of the strict remote/outbox `--input`
-// documents (F-07 convergence): the published command derives its `payloadSchemas
-// .inputDocument` descriptors from these, so discovery and the runtime parsers share one
-// structural owner and the engine's vocabularies are never restated in a second package.
 export {
   moveHandoffDocumentSchema,
   remoteAdoptionDocumentSchema,
@@ -938,9 +913,6 @@ export {
 // transport and no credential, so no provider interface, page envelope or
 // failure list lives here — a listing is the caller's own array.
 export type { ProviderItem, ProviderWritePayload } from "./issue-sync/provider.js";
-// invariant: Sync ledger: the per-item state machine and its read path on the collaboration
-// authority. The transport owns the collaboration write transaction
-// (`withCollaborationWrite`); the verbs compose inside it and never begin one.
 export type {
   AcquireRunInput,
   CursorInput,

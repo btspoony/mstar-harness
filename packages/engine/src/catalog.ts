@@ -121,7 +121,6 @@ export type CatalogOperation = {
   operationId: string;
   actor: string;
   expectedRevision?: number;
-  /** note: The project journal a remote write appends to; a local/mirror write never reads it. */
   projectId?: string;
 };
 
@@ -839,17 +838,6 @@ async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T
   return withCollaborationWrite(context, (handle) => fn(handle.db));
 }
 
-/**
- * note: The remote branch of every catalog write: the portable catalog is part of a project journal,
- * so the change is frozen as one durable project-replace intent against the observed document.
- * Location facts (root kind, relative path, source hash) are checkout evidence the remote
- * document does not carry; the portable identity, metadata and lifecycle are what it publishes.
- */
-/**
- * note: The confirmed business result of a remote catalog write: the frozen document is the
- * recorded effect, so the row's revision comes from it. A remote write owns no local store
- * revision, so `storeRevision` is 0 exactly as a remote composite's collaboration revision is.
- */
 function confirmedCatalogReceipt(intent: RemoteIntent, kind: CatalogReceipt["kind"], id: string): CatalogReceipt {
   const confirmed = intent.confirmed;
   if (confirmed === null) {
@@ -878,8 +866,6 @@ async function queueCatalogWrite(
       "A remote catalog write appends to one project journal; name it with `projectId`. Nothing was enqueued.",
     );
   }
-  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
-  // would close the cycle before the catalog contract initializes.
   const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
   const intent = await prepareRemoteProjectWrite(context, {
     projectId: projectId.trim(),
@@ -891,12 +877,10 @@ async function queueCatalogWrite(
   throw pendingRemoteEffect(intent);
 }
 
-/** note: The observed portable entities of one project journal. */
 function observedEntities(current: Record<string, unknown>): Array<Record<string, unknown>> {
   return current.catalogEntities as Array<Record<string, unknown>>;
 }
 
-/** note: The observed portable links of one project journal. */
 function observedLinks(current: Record<string, unknown>): Array<Record<string, unknown>> {
   return current.catalogLinks as Array<Record<string, unknown>>;
 }
@@ -1206,7 +1190,6 @@ export async function linkCatalogEntities(
           );
         }
       }
-      // note: Replaying an existing link is idempotent; a supplied ordinal replaces the stored one.
       const kept = observedLinks(current).filter(
         (row) =>
           !(
@@ -1368,7 +1351,6 @@ function bindCatalogFilter(filter: CatalogFilter | undefined): { where: string; 
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
-/** note: The canonical scope key of one catalog page: the filters with the applied bounds. */
 function catalogPageScope(filter: CatalogFilter, limit: number, offset: number): CollaborationScope {
   return {
     kind: "query",
@@ -1384,13 +1366,6 @@ function catalogPageScope(filter: CatalogFilter, limit: number, offset: number):
   };
 }
 
-/**
- * invariant: A remote snapshot carries portable catalog IDENTITY only - no checkout-relative
- * path, no resolved absolute path and no live file probe. The catalog's row
- * contract requires those location facts, so this read refuses by name instead
- * of inventing them; the dashboard's catalog identity (and its remote-aware
- * project/iteration/milestone views) is the supported remote route.
- */
 function assertLocalCatalogRead(context: StoreContext): void {
   if (resolveCollaborationLocation(context).mode !== "remote") return;
   throw new StoreError(
@@ -1431,8 +1406,6 @@ export async function listCatalog(
           `order by catalog_entities.kind asc, catalog_entities.title asc, catalog_entities.id asc limit ? offset ?`,
       )
       .all(...params, limit, offset) as EntityRow[];
-    // note: The page's incident links belong to the same snapshot as its rows, total
-    // and revision: read them inside this transaction, before it commits.
     const links = incidentLinks(
       db,
       rows.map((row) => ({ kind: row.kind, id: row.id })),
@@ -1449,7 +1422,6 @@ export async function listCatalog(
     try {
       handle.db.exec("rollback");
     } catch {
-      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {
@@ -1487,7 +1459,6 @@ export async function getCatalog(
     try {
       handle.db.exec("rollback");
     } catch {
-      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {

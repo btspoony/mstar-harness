@@ -1,26 +1,3 @@
-/**
- * `host-gate-paths` — the single-sourced gate path glue every host write gate
- * used to hand-copy (issue #442): the landing-path resolver and the
- * authority-naming sets for the two runtime-owned databases (the execution
- * store at a harness root and the reserved collaboration filename).
- *
- * The copies had drifted. opencode-v1, omp, dsh and the ZCode hook resolved
- * ONE symlink hop (realpath, else a single `readlinkSync`), while opencode-v2
- * followed the chain — and that drift was a real bypass (#438): a two-link
- * alias chain landed on `store.db` without a refusal in the one-hop hosts.
- * The chained resolver (v2's, the strongest shipped semantics) is therefore
- * the ONE implementation here, and every host imports it.
- *
- * Case-insensitivity is engine policy (plan QC fix wave FW-3): on a
- * case-insensitive volume (Darwin/APFS) a case-variant basename IS the same
- * authority file, so neither the authority-name match nor the
- * coordination-document shape match hinges on byte case.
- *
- * Never throws except {@link landedPathOf}'s deliberate
- * {@link SymlinkResolutionError} on a symlink cycle/overflow — hosts translate
- * that into their own refusal envelope. Enforcement decisions stay with the
- * host; this module only resolves paths and classifies names.
- */
 import { readlinkSync, realpathSync } from "node:fs";
 import { basename, dirname, relative, resolve } from "node:path";
 import { isHarnessRootDir, type HarnessDocKind } from "./gates.js";
@@ -121,11 +98,6 @@ export function landedPathOf(filePath: string): string {
   }
 }
 
-/** invariant: The user-level collaboration database and its SQLite sidecars. The name is a
- * RESERVED authority filename everywhere — not only inside the user-level
- * namespace — so a copy can never be hand-written under any path, alias or
- * checkout. An unrelated same-named file is denied as the accepted fail-closed
- * trade-off. */
 const COLLABORATION_AUTHORITY_NAMES: readonly string[] = [
   "collaboration.db",
   "collaboration.db-wal",

@@ -1,14 +1,3 @@
-/**
- * invariant: issue.ts — capture, occurrences, reads, and authorized disposition (plan C2/C3).
- *
- * In-process domain verbs on the collaboration authority. Every read and write
- * names the repository's collaboration store, never the execution store: the
- * issue ledger, its revision and its operation receipts live in one lane, so an
- * execution revision can never stand in as a collaboration CAS. Dedup is source /
- * root-cause / acceptance (`identity_key`), never title. Observation
- * identity lives in `occurrence_key`. Unknown semantic identity refuses
- * `issue.ambiguous-identity` instead of guessing a merge.
- */
 import { createHash, randomUUID } from "node:crypto";
 import { redactSecrets } from "./audit.js";
 import {
@@ -33,7 +22,6 @@ import type {
   RemoteObservedSubject,
 } from "./collaboration-remote.js";
 import { MIGRATIONS, StoreError, type StoreContext, type StoreDb } from "./store-db.js";
-
 
 /**
  * The one authored kind and severity vocabularies. Every validation map, SQL
@@ -66,7 +54,6 @@ export type IssueRelationKind = (typeof ISSUE_RELATIONS)[number];
 /** note: The one provenance-kind vocabulary; a remote snapshot validates against it instead of a copy. */
 export const ISSUE_PROVENANCE_KINDS = ["plan", "iteration", "pr", "report"] as const;
 export type IssueProvenanceKind = (typeof ISSUE_PROVENANCE_KINDS)[number];
-
 
 export type MutationContext = {
   operationId: string;
@@ -268,10 +255,6 @@ export const ISSUE_ACTION_NAMES: readonly IssueAction[] = Object.keys(ISSUE_ACTI
 
 export type IssueReceipt = {
   issueId: string;
-  /**
-   * note: The established occurrence: the local row id, or the frozen occurrence's provider-neutral
-   * event id in `remote` mode (where no local row exists).
-   */
   occurrenceId?: number | string;
   revision: number;
   storeRevision: number;
@@ -308,9 +291,7 @@ export type IssueSummary = {
   lastActivity: string | null;
   revision: number;
   milestoneId: string | null;
-  /** note: The stable portable key, present on a remote subject read. */
   issueRef?: string;
-  /** note: The provider's own status; a display field, never an MStar disposition. */
   nativeStatus?: string;
 };
 
@@ -335,17 +316,11 @@ export type IssuePage = {
   /** How many projects the whole result set spans — the page's own span is not it. */
   projectCount: number;
   storeRevision: number;
-  /**
-   * note: Unmarked native issues of the same observed projects. They are visible but
-   * excluded from `items`/`total`/`projectCount` (and from every disposition,
-   * severity and findings count), so a consumer never reads one as a finding.
-   */
   providerIssues?: ProviderOnlyIssue[];
 };
 
 export type IssueOccurrence = {
   id: number;
-  /** note: The portable event id a remote subject carries (absent on a local row). */
   eventId?: string;
   occurrenceKey: string;
   sourceKind: string;
@@ -362,7 +337,6 @@ export type IssueOccurrence = {
 
 export type IssueTransition = {
   id: number;
-  /** note: The portable event id a remote subject carries (absent on a local row). */
   eventId?: string;
   fromDisposition: string;
   toDisposition: string;
@@ -378,9 +352,7 @@ export type IssueTransition = {
 export type IssueRelation = {
   fromIssue: string;
   relation: string;
-  /** note: `null` while the target lives in another authority; `toRef` names it then. */
   toIssue: string | null;
-  /** note: The unresolved target's stable reference (`null` on a local relation; absent on a remote read). */
   toRef?: string | null;
   /** The other end's title — the prototype's `Title` column. `null` when it has none. */
   title: string | null;
@@ -388,7 +360,6 @@ export type IssueRelation = {
 
 export type IssueProvenance = {
   id: number;
-  /** note: The portable event id a remote subject carries (absent on a local row). */
   eventId?: string;
   kind: string;
   target: string;
@@ -438,7 +409,6 @@ export type IssueDetail = {
   provenance: IssueProvenance[];
   /** Oldest first; empty on a store older than the project-move migration. */
   projectMoves: IssueProjectMove[];
-  /** note: The stable portable key and the provider's own title/status, present on a remote subject read. */
   issueRef?: string;
   nativeTitle?: string;
   nativeStatus?: string;
@@ -483,9 +453,7 @@ export type IssueReopen = { reason: string };
 export type IssueMove = {
   projectId: string;
   reason: string;
-  /** note: The destination authority's `repoKey`; present exactly on the staged cross-authority route. */
   toAuthority?: string;
-  /** note: Refused when supplied: the ledger's own phase decides where a move resumes. */
   stage?: string;
 };
 
@@ -541,9 +509,6 @@ export function assertIssueLinkVocabulary(link: IssueLink): void {
     throw new IssueError("issue.scope-refused", "provenance kind is not a contract vocabulary value");
   }
 }
-
-
-
 
 /** A lookup map for one declared vocabulary tuple — the only way one is built. */
 export function vocabularyMap<const T extends string>(values: readonly T[]): Record<T, true> {
@@ -626,8 +591,6 @@ export function computeIdentityKey(
   return sha256(lengthDelimited([projectId, normalized, rootCauseKey, acceptanceKey]));
 }
 
-
-
 function parseEvidence(json: string): string[] {
   try {
     const parsed = JSON.parse(json) as unknown;
@@ -641,11 +604,6 @@ function parseEvidence(json: string): string[] {
 function requestHash(kind: string, payload: unknown): string {
   return sha256(`${kind}\n${JSON.stringify(payload)}`);
 }
-/**
- * invariant: The collaboration record this module's verbs run on. The execution store's
- * `store_meta` is a different lane: its revision is never a collaboration CAS,
- * so a handle from that lane is a refusal here rather than a silent read.
- */
 function readMeta(db: StoreDb): { authorityState: string; revision: number } {
   const row = db.prepare("select authority_state, revision from collaboration_meta where id = 1").get() as
     | { authority_state?: unknown; revision?: unknown }
@@ -711,9 +669,6 @@ function lookupOperation(db: StoreDb, operationId: string): { request_hash: stri
   if (typeof operationId !== "string" || operationId.trim() === "") {
     throw new IssueError("issue.invalid-operation-id", "operationId must be a non-empty string");
   }
-  // invariant: The standalone namespace is shared by every collaboration domain that does
-  // not compose across stores, so a receipt this verb did not write still
-  // refuses an id reused for a different payload.
   return db
     .prepare(
       "select request_hash, result_json from collaboration_operations where key_space = 'standalone' and operation_id = ?",
@@ -893,14 +848,6 @@ export type ComposedTransactionRevision = {
  */
 export type AuthorizedIssueMutation = MutationContext;
 
-/**
- * invariant: The transaction of ONE public issue mutation: the collaboration writer admits
- * the store, opens `BEGIN IMMEDIATE`, re-verifies the binding and active state
- * under the writer lock, and commits — so neither a payload nor an earlier
- * handle authorizes a write. The body then receives the same handle-taking shape
- * the DB coordination route composes into its own transaction; it never opens a
- * store or a transaction of its own.
- */
 async function withWrite<T>(
   context: StoreContext,
   fn: (handle: CollaborationStoreHandle) => T,
@@ -911,9 +858,6 @@ async function withWrite<T>(
     try {
       return fn(handle);
     } catch (error) {
-      // invariant: The lane's trigger is the fence, so its abort is the one refusal that reaches here
-      // without a typed error: restate it as the partial outcome it is, naming the move that froze the
-      // record. Every other failure keeps its own code.
       const mapped = frozenMoveRefusal(handle.db, error, recordId);
       if (mapped !== null) throw mapped;
       throw error;
@@ -1094,17 +1038,7 @@ export function captureIssueOn(
  * contract's refusal precedence — and the transaction is this route's, so the
  * body below is exactly what the DB coordination route composes.
  */
-// ---------------------------------------------------------------------------
-// note: remote issue writes: one durable intent, never a local row
-// ---------------------------------------------------------------------------
 
-/**
- * note: The recorded business result of a confirmed remote issue write. The provider effect IS the
- * business outcome: the issue is the confirmed record, the revision is the frozen subject's own,
- * and a remote write owns no local collaboration revision (exactly as a remote composite does not).
- * With `occurrenceKey`, the receipt names the eventId of THAT occurrence in the CONFIRMED event —
- * the recorded occurrence, not a guessed one.
- */
 function confirmedIssueReceipt(intent: RemoteIntent, occurrenceKey?: string): IssueReceipt {
   const confirmed = intent.confirmed;
   if (confirmed === null) {
@@ -1129,25 +1063,14 @@ function confirmedIssueReceipt(intent: RemoteIntent, occurrenceKey?: string): Is
   };
 }
 
-/**
- * note: The remote branch of every ordinary issue write: freeze the normalized effect as one durable
- * outbox intent and report it. A confirmed intent reports the recorded business result of an
- * identical replay; anything else is `remote.effect-pending`, never business success, and no
- * local SQL effect ever stands in for the provider.
- */
 async function queueRemoteIssueWrite(context: StoreContext, write: RemoteIssueWrite): Promise<IssueReceipt> {
-  // note: Dynamic on purpose — collaboration-remote.ts imports this module's vocabularies, so a
-  // static import would close a cycle before they initialize.
   const { prepareRemoteIssueWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
   const outcome = await prepareRemoteIssueWrite(context, write);
-  // note: A write the observed authority already carries is the domain's own no-change outcome:
-  // nothing was frozen, and the established receipt stands.
   if ("noChange" in outcome) return outcome.noChange as IssueReceipt;
   if (outcome.confirmed !== null) return confirmedIssueReceipt(outcome, write.occurrenceKey);
   throw pendingRemoteEffect(outcome);
 }
 
-/** note: One frozen occurrence equals this observation, excluding the generated row id and recorded time. */
 function frozenOccurrenceMatches(
   row: Record<string, unknown> | null,
   cols: OccurrenceColumns,
@@ -1198,14 +1121,12 @@ export function residualGenesisSubject(input: CaptureInput, planId: string, at: 
   };
 }
 
-/** note: The observed issue one stable reference or provider id names, if the scope observes it. */
 function observedIssue(observed: RemoteObservedSubject, addressed: string): RemoteIssue | undefined {
   return observed.issues.find(
     (issue) => issue.identity.issueId === addressed || (issue.mstar !== null && issue.mstar.issueRef === addressed),
   );
 }
 
-/** note: A remote relation names an observed issue; a dangling or self edge refuses before freezing. */
 function assertObservedRelation(observed: RemoteObservedSubject, issueId: string, link: IssueLink): void {
   if (!("relation" in link)) return;
   const other = link.issueId;
@@ -1233,8 +1154,6 @@ export function resolveObservedCanonicalTarget(
 ): string | null {
   if (disposition !== "duplicate" && disposition !== "superseded") return null;
   const canonical = evidence.canonicalIssueId!;
-  // note: The closing subject is resolved once, so both of its aliases name the same issue whether
-  // the caller addressed it by its provider id or by its portable reference.
   const self = observedIssue(observed, issueId);
   if (
     self !== undefined &&
@@ -1256,7 +1175,6 @@ export function resolveObservedCanonicalTarget(
   return target.mstar.issueRef;
 }
 
-/** note: The capture's own provenance row: the reviewed business record, never a raw payload. */
 function captureProvenance(eventId: string, cols: OccurrenceColumns): Record<string, unknown> {
   return {
     eventId,
@@ -1272,7 +1190,6 @@ function captureProvenance(eventId: string, cols: OccurrenceColumns): Record<str
   };
 }
 
-/** note: One normalized occurrence row, as the frozen subject and the observed snapshot carry it. */
 function occurrenceSubject(eventId: string, cols: OccurrenceColumns, evidence: readonly string[], at: string): Record<string, unknown> {
   return {
     eventId,
@@ -1290,7 +1207,6 @@ function occurrenceSubject(eventId: string, cols: OccurrenceColumns, evidence: r
   };
 }
 
-/** note: The genesis subject of a remote create: the complete normalized issue, one occurrence, one provenance. */
 function genesisIssueSubject(input: CaptureInput, at: string): Record<string, unknown> {
   const cols = occurrenceColumns(input);
   return {
@@ -1318,7 +1234,6 @@ function genesisIssueSubject(input: CaptureInput, at: string): Record<string, un
   };
 }
 
-/** note: The fields one subject patch advances: the domain's own members plus the revision. */
 function patchedFields(
   current: Record<string, unknown>,
   patch: Record<string, unknown>,
@@ -1333,11 +1248,6 @@ function patchedFields(
   return merged;
 }
 
-/**
- * note: One appended link in the frozen subject: a relation carries the other issue's stable
- * reference, a provenance link carries its reviewed business record. A remote caller therefore
- * names `mstar:issue:<uuid>` (or a portable label) rather than a local display id.
- */
 function linkedSubject(
   current: Record<string, unknown>,
   link: IssueLink,
@@ -1438,23 +1348,12 @@ export async function captureIssue(
   return withWrite(context, (handle) => captureIssueOn(handle.db, input, mutation));
 }
 
-/**
- * note: The remote branch of one capture: dedupe against the observed authority FIRST,
- * exactly as the local body answers its own tables. The same occurrence key returns the
- * established receipt, the same identity appends one occurrence through issue-replace,
- * and only a genuinely new identity freezes a create — so a recurring finding never
- * duplicates the provider record. A frozen intent under this operation id still answers
- * first (the replay identity is the writer's own), like the local operation ledger.
- */
 async function captureIssueRemote(
   context: StoreContext,
   input: CaptureInput,
   mutation: MutationContext,
 ): Promise<IssueReceipt> {
   const cols = occurrenceColumns(input);
-  // note: Dynamic like every collaboration-remote import in this module: that boundary
-  // statically imports this module's vocabularies, so a static import here would close
-  // the cycle before they initialize.
   const { readRemoteIntent, readRemoteObservedIssues } = await import("./collaboration-remote.js");
   const origin = { verb: "captureIssue", request: { input, actor: mutation.actor } } as const;
   const identityOf = (row: Record<string, unknown>): boolean =>
@@ -1469,8 +1368,6 @@ async function captureIssueRemote(
       occurrenceKey: cols.occurrenceKey,
       next: (current, observed) => {
         const subject = current!;
-        // note: The same identity check the replacement path always runs: the authority
-        // is re-read at freeze time, so a moved occurrence never merges silently.
         const authority = (observedIssue(observed, issueRef)?.mstar?.occurrences ?? []) as readonly Record<string, unknown>[];
         if (
           authority.length > 0 &&
@@ -1489,19 +1386,12 @@ async function captureIssueRemote(
           occurrences: [...(subject.occurrences as unknown[]), occurrenceSubject(randomUUID(), cols, input.evidence, at)],
         };
       },
-      // invariant: The freeze-time subject answers the established occurrence, exactly as the
-      // local body answers its own tables: an occurrence that arrived between the dedupe read and
-      // this freeze is answered, never appended a second time. The scan is PROJECT-WIDE: a key
-      // another subject carries is that subject's established occurrence (or a conflict), never
-      // a second append behind a target-only scan.
       unchanged: (_current, observed) => {
         for (const issue of observed.issues) {
           const mstar = issue.mstar;
           if (mstar === null) continue;
           const sameKey = mstar.occurrences.find((row) => row.occurrenceKey === cols.occurrenceKey);
           if (sameKey === undefined) continue;
-          // note: The genesis occurrence defines the issue's identity, exactly as the local
-          // identity_key column does: a key that belongs to another identity is never merged.
           const genesis = mstar.occurrences[0];
           if (
             genesis === undefined ||
@@ -1540,8 +1430,6 @@ async function captureIssueRemote(
       kind: "issue-create",
       occurrenceKey: cols.occurrenceKey,
       next: (_current, observed) => {
-        // invariant: The freeze-time snapshot decides the create: an identity the authority
-        // already carries is never created twice, whatever the older dedupe read sampled.
         const movedRef = observed.issues.find(
           (issue) => issue.mstar !== null && issue.mstar.occurrences.some(identityOf),
         )?.mstar?.issueRef;
@@ -1554,8 +1442,6 @@ async function captureIssueRemote(
             { issueRef: movedRef },
           );
         }
-        // invariant: The occurrence key is project-wide, not identity-local: a create whose key
-        // another subject already carries would mint a second occurrence for one key.
         const keyRef = observed.issues.find(
           (issue) => issue.mstar !== null && issue.mstar.occurrences.some((row) => row.occurrenceKey === cols.occurrenceKey),
         )?.mstar?.issueRef;
@@ -1574,10 +1460,6 @@ async function captureIssueRemote(
     });
   try {
     const frozen = await readRemoteIntent(context, mutation.operationId);
-    // invariant: The writer's own replay identity answers FIRST, exactly as the local body checks
-    // its operation ledger before its tables: an existing entry under this operation id is
-    // answered (or refused) through the replay gate, never bypassed by an observed no-op. A
-    // metadata-only disclosure still names the row, so it refuses instead of guessing from state.
     if (frozen.disclosure !== "full" || (frozen.event === null && frozen.settled === null)) {
       throw new StoreError(
         "remote.unavailable",
@@ -1586,14 +1468,10 @@ async function captureIssueRemote(
         { operationId: mutation.operationId, state: frozen.state },
       );
     }
-    // note: A settled no-change claim records the replay identity a frozen event would carry, so the
-    // capture routes on it the same way; its own replayed answer is the receipt.
     if (frozen.settled !== null) {
       return frozen.settled.kind === "issue-create" ? createIssue() : appendToIssue(frozen.settled.issueRef);
     }
     const change = frozen.event!.change;
-    // note: A capture never freezes a project-replace; re-asking through the create
-    // path lets the replay check answer that collision with its recorded refusal.
     return change.kind === "issue-create" || change.kind === "project-replace"
       ? createIssue()
       : appendToIssue(change.issueRef);
@@ -1601,10 +1479,6 @@ async function captureIssueRemote(
     if (!(error instanceof StoreError && error.code === "remote.intent-not-found")) throw error;
   }
   const issues = await readRemoteObservedIssues(context, input.projectId);
-  // note: The project-wide OCCURRENCE KEY routes before the identity: a key that already exists
-  // on ANY subject is that subject's occurrence, so the append's freeze-time unchanged answer
-  // (inside the replay boundary) decides established/conflict — never an early no-op answer that
-  // a durable intent could bypass.
   for (const issue of issues) {
     const mstar = issue.mstar;
     if (mstar === null) continue;
@@ -1645,8 +1519,6 @@ export async function appendOccurrence(
         const subject = current!;
         const fields = subject.fields as Record<string, unknown>;
         requireExpectedRevision(mutation, Number(fields.revision));
-        // note: The occurrence rules are the domain's own: identity belongs to this issue, and a
-        // reused key never silently lands another observation on it.
         const authority: readonly Record<string, unknown>[] = (
           observedIssue(observed, issueId)?.mstar?.occurrences ?? []
         ) as readonly Record<string, unknown>[];
@@ -1672,10 +1544,6 @@ export async function appendOccurrence(
         request: { issueId, input, actor: mutation.actor, expectedRevision: mutation.expectedRevision },
       },
       unchanged: (current, observed) => {
-        // invariant: An occurrence key the observed authority already carries with THIS content is
-        // the established observation, exactly as the local domain answers it: no second history row.
-        // The concurrency guard applies before that answer, so a stale caller never receives a
-        // success it did not review.
         const subject = current!;
         requireExpectedRevision(mutation, Number((subject.fields as Record<string, unknown>).revision));
         const occurrences = (subject.occurrences ?? []) as Record<string, unknown>[];
@@ -1688,8 +1556,6 @@ export async function appendOccurrence(
           );
         }
         return {
-          // note: The receipt names the provider identity and the established occurrence, as every
-          // remote issue receipt does.
           issueId: observedIssue(observed, issueId)?.identity.issueId ?? issueId,
           ...(typeof sameKey.eventId === "string" ? { occurrenceId: sameKey.eventId } : {}),
           revision: Number((subject.fields as Record<string, unknown>).revision),
@@ -1784,7 +1650,6 @@ const LAST_ACTIVITY_SQL = `(select max(ts) from (
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
 ))`;
 
-/** note: A required remote read's complete proof; the observation codes map onto the store's own refusal. */
 function requiredObservation(observation: CollaborationObservation, detail: string): CompleteCollaborationObservation {
   if (observation.completeness === "complete") return observation;
   throw new StoreError(
@@ -1797,7 +1662,6 @@ function requiredObservation(observation: CollaborationObservation, detail: stri
   );
 }
 
-/** note: The canonical scope key of one issue page: the filters with the applied bounds. */
 function issuePageScope(filter: IssueFilter, limit: number, offset: number): CollaborationScope {
   return {
     kind: "query",
@@ -1845,8 +1709,6 @@ function bindFilter(filter: IssueFilter): { where: string; params: unknown[] } {
     );
     params.push(filter.query, filter.query);
   }
-  // invariant: A switched record belongs to the destination authority, so this list neither returns
-  // nor counts it: the same rule `assertPresented` states for a detail read.
   clauses.push(SWITCHED_NOT_PRESENTED_SQL);
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
@@ -1860,11 +1722,6 @@ export async function listIssues(
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
     throw new IssueError("issue.scope-refused", "limit must be 1..200 and offset must be nonnegative");
   }
-  // invariant: A remote selection never reads local issue rows: the page over admitted
-  // snapshots refuses unless every project it needs is complete and current.
-  // note: Dynamic on purpose — a static import would close the cycle
-  // collaboration-remote.ts -> issue.ts -> collaboration-remote-read.ts ->
-  // collaboration-remote.ts and read its vocabularies before they initialize.
   if (resolveCollaborationLocation(context).mode === "remote") {
     const { openRemoteReadView, remoteCollaborationObservation, remoteIssuePage, requireRemoteProjects } = await import(
       "./collaboration-remote-read.js"
@@ -1883,13 +1740,8 @@ export async function listIssues(
   try {
     const db = handle.db;
     db.exec("begin");
-    // invariant: The collaboration lane owns issue read authority: a staged or foreign
-    // store never reaches this point, and no legacy schema gate applies — the
-    // lane is created complete.
     assertIssueStoreActive(db);
     const collaboration = readCollaborationObservation(handle, issuePageScope(filter, limit, offset));
-    // note: The page revision is the observation's own counter: no second query of
-    // the same row can disagree with the proof it publishes.
     const storeRevision = collaboration.revision;
     const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
     const spanRow = db
@@ -1942,7 +1794,6 @@ export async function listIssues(
     try {
       handle.db.exec("rollback");
     } catch {
-      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {
@@ -1954,7 +1805,6 @@ export async function getIssue(
   context: StoreContext,
   id: string,
 ): Promise<IssueDetail & { collaboration: CompleteCollaborationObservation }> {
-  // note: Dynamic import: same cycle reason as `listIssues` (remote-read imports this module).
   if (resolveCollaborationLocation(context).mode === "remote") {
     const { openRemoteReadView, remoteCollaborationObservation, remoteIssueRead } = await import("./collaboration-remote-read.js");
     const view = await openRemoteReadView(context);
@@ -1976,8 +1826,6 @@ export async function getIssue(
   try {
     const db = handle.db;
     db.exec("begin");
-    // why: Same authority and same gate as listIssues: the collaboration lane keeps
-    // its complete shape, so no legacy per-table schema probe applies.
     assertIssueStoreActive(db);
     const collaboration = readCollaborationObservation(handle, { kind: "query", key: `issue:${id}` });
     const issue = db
@@ -2010,8 +1858,6 @@ export async function getIssue(
         }
       | undefined;
     if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
-    // invariant: A switched record already belongs to the destination authority, so this one stops
-    // presenting it until the move publishes and deletes it.
     assertPresented(db, id);
 
     const occurrences = (
@@ -2175,7 +2021,6 @@ export async function getIssue(
     try {
       handle.db.exec("rollback");
     } catch {
-      // note: connection-level failure during rollback -- nothing was committed
     }
     throw error;
   } finally {
@@ -2208,14 +2053,10 @@ export async function showIssue(context: StoreContext, id: string, projectId?: s
         "`--project <local-project-id>`. A project is never guessed in remote mode.",
     );
   }
-  // note: Dynamic on purpose: remote-read imports this module, so a static import would close a
-  // module cycle before the issue vocabulary initializes.
   const { openRemoteReadView, remoteCollaborationObservation, remoteIssueRead } = await import("./collaboration-remote-read.js");
-  // note: A stable reference reads every selected project; a native id reads only the project it names.
   const nativeProject = ISSUE_REF_PATTERN.test(target) ? undefined : projectId;
   const view = await openRemoteReadView(context, nativeProject === undefined ? undefined : [nativeProject]);
   const read = remoteIssueRead(view, target, projectId);
-  // note: A stable reference reads every selected project; a native id reads the one it names.
   const projects = nativeProject === undefined ? view.projectIds : [nativeProject];
   const collaboration = remoteCollaborationObservation(view, { kind: "query", key: `issue:${target}` }, projects);
   return { ...read.detail, collaboration };
@@ -2976,9 +2817,6 @@ export async function moveIssue(
   assertIssueWriteSeat(mutation.actor);
   requireNonblank("projectId", input.projectId);
   requireNonblank("reason", input.reason);
-  // invariant: `--to-authority` is the staged route. It carries the record and its history to another
-  // authority, so it is a different verb from a project reassignment inside one lane: the local route
-  // below keeps its own receipt shape and its own refusal precedence.
   if (input.toAuthority !== undefined) {
     if (input.stage !== undefined) {
       throw new IssueError(
@@ -2986,7 +2824,6 @@ export async function moveIssue(
         `--stage is not an operator input; a move runs to completion and resumes from whatever phase its ledger holds.`,
       );
     }
-    // note: Dynamic import: this module is imported BY the move module, so a static edge would close the cycle.
     const { moveAcrossAuthorities } = await import("./cross-authority-move.js");
     return moveAcrossAuthorities(context, {
       operationId: mutation.operationId,
@@ -3000,9 +2837,6 @@ export async function moveIssue(
     });
   }
   if (resolveCollaborationLocation(context).mode === "remote") {
-    // invariant: A project move re-bases the portable identity and clears the project-scoped
-    // milestone, so it is never an ordinary replacement: the remote path is a reviewed
-    // replacement naming the target project, and this local entry does not fabricate one.
     throw new StoreError(
       "collaboration.mode-unavailable",
       "A project move is not an admitted remote rewrite: it re-bases the issue's portable identity and clears its " +
@@ -3045,13 +2879,9 @@ export async function assignIssueMilestone(
         const subject = current!;
         const fields = subject.fields as Record<string, unknown>;
         requireExpectedRevision(mutation, Number(fields.revision));
-        // note: The snapshot's issues ARE this project's scope, so the provider project id is never
-        // compared with the local project key (they are different identifiers).
         if (observedIssue(observed, issueId) === undefined) {
           throw new IssueError("milestone.project-mismatch", "Issue does not belong to the requested project");
         }
-        // invariant: A referenced milestone must exist in the observed project and still accept
-        // assignment; the fresh provider parent alone would only notice this after enqueue.
         if (input.milestoneId !== null) {
           const milestone = observed.project.milestones.find((entry) => entry.milestoneId === input.milestoneId);
           if (milestone === undefined) {
@@ -3070,8 +2900,6 @@ export async function assignIssueMilestone(
         }
         return { ...subject, fields: patchedFields(subject, { milestoneId: input.milestoneId }, at) };
       },
-      // note: The observed base is the store revision in remote mode too, exactly as the local
-      // `withWrite` branch compares it: a stale `--expect-store` refuses before anything freezes.
       guard: ({ observationRevision }) => {
         if (observationRevision === mutation.expectedStoreRevision) return;
         const stale = new IssueError(
@@ -3079,8 +2907,6 @@ export async function assignIssueMilestone(
           `expectedStoreRevision ${mutation.expectedStoreRevision} does not match the observed store revision ` +
             `${observationRevision}; nothing was enqueued.`,
         );
-        // note: A remote write's base IS the observation revision, so the recovery names the command
-        // that reads it instead of the local store's own listing.
         stale.details = {
           observationRevision,
           recovery:
@@ -3222,10 +3048,6 @@ function linkIssueOnWithOrigin(
       recordOperation(db, mutation.operationId, hash, receipt, at);
       return receipt;
     }
-    // invariant: An unresolved edge to this target is the same relation in the other spelling;
-    // resolution on arrival should have localised it, so the verb resolves it itself rather than
-    // writing a second edge to the same record. The stale row is stored from THIS issue — the local
-    // one — whatever the canonical order of the resolved row turns out to be, so the lookup uses it.
     const stale = db
       .prepare("select 1 as ok from relations where from_issue = ? and relation = ? and to_ref = ?")
       .get(issueId, link.relation, otherRow.issue_ref) as { ok: number } | undefined;

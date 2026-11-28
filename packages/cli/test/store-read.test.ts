@@ -26,7 +26,6 @@ import {
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-store-read-cli-"));
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 
-/** note: The user-level collaboration lane is resolved through `homedir`; isolate it. */
 const LANE_HOME = join(ROOT, "lane-home");
 mkdirSync(LANE_HOME, { recursive: true });
 let laneHomeSpy: { mockRestore(): void } | undefined;
@@ -40,10 +39,6 @@ afterAll(() => {
 
 let repoSequence = 0;
 
-/**
- * why: A real checkout: issue and catalog authority is the collaboration lane, so a
- * fixture without a repository identity has no issue store at all.
- */
 async function workspace(name: string, initialize = true, lane = true): Promise<{ dir: string; harness: string; context: StoreContext }> {
   const dir = mkdtempSync(join(ROOT, name));
   execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
@@ -59,7 +54,6 @@ async function workspace(name: string, initialize = true, lane = true): Promise<
   return { dir, harness, context };
 }
 
-/** note: The lane's own revision: the issue/catalog authority the reads report. */
 async function laneRevision(context: StoreContext): Promise<number> {
   const handle = await openCollaborationStore(context, "read");
   try {
@@ -73,7 +67,6 @@ async function laneRevision(context: StoreContext): Promise<number> {
   }
 }
 
-/** note: A conforming installed-consumer attestation: one upgraded CLI on node. */
 function activationAttestation(): ActivationAttestation {
   return {
     version: ACTIVATION_PROTOCOL_VERSION,
@@ -203,15 +196,11 @@ describe("dashboard views over a real store", () => {
 
     const envelope = await readDashboardView({ context, view: "issues" });
     const page = envelope.data as IssuePage;
-    // why: The direct domain read carries its own observation; the page itself keeps
-    // the existing DTO keys the dashboard answers with (asserted against the
-    // lane counters below).
     const direct = await listIssues(context, {});
     const { collaboration: pageEvidence, ...directPage } = direct;
     expect(page).toEqual(directPage);
     expect(pageEvidence).toMatchObject({ completeness: "complete", revision: direct.storeRevision });
     expect(page.items.map((item) => item.id)).toEqual(["I-000001", "I-000002"]);
-    // note: The reported revision is the LANE's: issue/catalog authority lives there.
     expect(envelope.storeRevision).toBe(await laneRevision(context));
     expect(envelope.catalogRevision).toBe(0);
     expect(envelope.projection.freshness).toBe("unavailable");
@@ -243,10 +232,6 @@ describe("dashboard views over a real store", () => {
   });
 
   test("issue-flow returns the dated buckets, the unknown-date counts and the current open total", async () => {
-    // note: Missing capture dates are genuine legacy history, imported by the public
-    // migration boundary rather than forged into an active issue store: a
-    // file-era checkout has no lane, the reviewed apply stages one, and the
-    // activation publishes it.
     const { context, harness } = await workspace("flow-", false, false);
     const projectDir = join(harness, "projects", "proj-a");
     mkdirSync(projectDir, { recursive: true });
@@ -328,13 +313,11 @@ describe("dashboard views over a real store", () => {
   });
 
   test("a missing or staged authority fails with a structured code, never an empty page", async () => {
-    // invariant: No repository identity at all: the scope itself cannot be resolved.
     const identified = await workspace("no-lane-", true);
     await rmSync(resolveCollaborationLocation(identified.context).dbPath, { force: true });
     const uninitialized = await readDashboardView({ context: identified.context, view: "issues" }).catch((error: unknown) => error);
     expect(dashboardFailure(uninitialized)).toMatchObject({ code: "collaboration.not-initialized" });
 
-    // invariant: A lane that exists but was never published serves no issue page either.
     const stagedFixture = await workspace("staged-", true, false);
     await initializeCollaborationStore(resolveCollaborationLocation(stagedFixture.context));
     const staged = await readDashboardView({ context: stagedFixture.context, view: "issue-flow" }).catch((error: unknown) => error);
@@ -399,8 +382,6 @@ describe("dashboard views over a real store", () => {
     await seedIssue(context, "as-of row", "low");
     const realOpen = storeDb.openStore;
     const spy = spyOn(storeDb, "openStore").mockImplementation(async (ctx, mode) => {
-      // invariant: The execution open is slow: the collaboration observation must NOT be
-      // backdated to a shared pre-open instant.
       if (mode === "read") await new Promise((resolve) => setTimeout(resolve, 40));
       return realOpen(ctx, mode);
     });
@@ -413,30 +394,15 @@ describe("dashboard views over a real store", () => {
     }
     const collaborationAsOf = Date.parse(envelope.collaboration!.asOf!);
     const executionAsOf = Date.parse(envelope.execution!.asOf as string);
-    // why: The shared pre-open instant the old read recorded would sit at request time;
-    // each source's own in-transaction stamp lands after its own open, so the
-    // collaboration observation carries the slow execution open's delay.
     expect(collaborationAsOf - startedAt).toBeGreaterThanOrEqual(30);
     expect(executionAsOf).toBeGreaterThanOrEqual(collaborationAsOf);
   });
 });
-// ---------------------------------------------------------------------------
-// note: Remote native issue detail: the transport carries the project it addresses
-// ---------------------------------------------------------------------------
-
 test("dashboard issue-detail accepts the project a remote native record needs", () => {
   const filters = dashboardFilters("issue-detail", { project: "fixture-project" }, "11111111-1111-4111-8111-111111111111");
   expect(filters).toEqual({ id: "11111111-1111-4111-8111-111111111111", projectId: "fixture-project" });
-  // invariant: A local display id keeps its existing filter shape (no project required).
   expect(dashboardFilters("issue-detail", {}, "I-000001")).toEqual({ id: "I-000001" });
 });
-
-// ---------------------------------------------------------------------------
-// note: Remote bootstrap at the CLI boundary: the Q3 sequence
-// (`status` -> `bind` -> `store init` -> `observe`) over the controlled host
-// fixture. Each sandbox is a separate checkout with its own `HOME` and an
-// allowlisted child environment; only public JSON documents cross into the CLI.
-// ---------------------------------------------------------------------------
 
 describe("remote collaboration bootstrap at the CLI boundary", () => {
   const hosts: RemoteCollaborationFixture[] = [];
@@ -456,7 +422,6 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     return row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" ? row.n : -1;
   }
 
-  /** note: A's prior execution lane: one workflow, one coordinator session, one lease. */
   function seedPriorExecutionLane(storePath: string): void {
     const db = new DatabaseSync(storePath);
     const at = "2026-11-21T00:00:00.000Z";
@@ -486,12 +451,9 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     const refused = sandbox.init();
     expect(refused.exitCode).toBe(1);
     expect(refused.code).toBe("collaboration.stale-binding");
-    // invariant: The recovery is the exact bind the parser accepts — target and input — in
-    // bootstrap order, never the verb that just failed.
     expect(refused.recovery).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
     expect(refused.recovery).toContain("mstar store init --harness <abs>");
     expect(existsSync(join(sandbox.harness, "store.db"))).toBe(false);
-    // invariant: The named route is accepted and is what restores the checkout.
     expect(sandbox.bind(fixture.verify()).exitCode).toBe(0);
     expect(sandbox.init().exitCode).toBe(0);
   });
@@ -502,15 +464,12 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     const sandboxA = fixture.sandbox("a");
     const sandboxB = fixture.sandbox("b");
 
-    // note: Sandbox A binds and initializes its execution lane, and records facts there.
     expect(sandboxA.bind(fixture.verify()).ok).toBe(true);
     const aInitialized = sandboxA.init();
     expect(aInitialized.exitCode).toBe(0);
     const aExecutionId = aInitialized.data.storeId;
     seedPriorExecutionLane(join(sandboxA.harness, "store.db"));
 
-    // note: B binds from the fixture's complete host picture; until `observe` runs,
-    // the cache honestly reports an unavailable (partial) picture.
     const bound = sandboxB.bind(fixture.verify());
     expect(bound.exitCode).toBe(0);
     expect(bound.data.binding).toMatchObject({ version: 3, mode: "remote", generation: 1 });
@@ -520,8 +479,6 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
       expect.objectContaining({ projectId: REMOTE_PROJECT.localProjectId, revision: 0, completeness: "unavailable" }),
     ]);
 
-    // invariant: `store init` initializes EXECUTION only, with identifiers of its own;
-    // it never restores, copies or republishes A's execution lane.
     const initialized = sandboxB.init();
     expect(initialized.exitCode).toBe(0);
     expect(initialized.data.collaboration).toMatchObject({ mode: "remote", state: "active" });
@@ -552,8 +509,6 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
       expect.objectContaining({ nativeStatus: "Todo", title: "Observed native issue", kind: "provider-only" }),
     ]);
 
-    // invariant: B's children received only B's own HOME; no path, store or credential
-    // of A was handed over, and the two sandboxes resolve different cache lanes.
     expect(sandboxB.environment.HOME).toBe(sandboxB.home);
     expect(Object.keys(sandboxB.environment).sort()).toEqual(["HOME", "PATH", "TMPDIR", "TZ"]);
     for (const value of Object.values(sandboxB.environment)) {
@@ -571,11 +526,7 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
       execFileSync("git", [...args], { cwd: sandbox.repo, encoding: "utf8" }).trim();
 
     expect(git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe(TRACKED_BRANCH);
-    // note: `remote get-url` expands the fixture's insteadOf mapping; the tracked
-    // origin identity the clone records is the canonical synthetic URL.
     expect(git(["config", "--get", "remote.origin.url"])).toBe(`https://${fixture.repoKey}.git`);
-    // invariant: the collaboration declaration is tracked content obtained from Git,
-    // not a file the fixture wrote into the checkout.
     expect(git(["ls-files", "--error-unmatch", ".mstarc"])).toBe(".mstarc");
   });
 
@@ -586,7 +537,6 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
 
     expect(sandbox.entry.endsWith(join("cli", "dist", "mstar-harness.js"))).toBe(true);
     expect(existsSync(sandbox.entry)).toBe(true);
-    // invariant: the entry the sequence spawns answers from the built artifact itself.
     const help = sandbox.run(["--help"]);
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain("mstar");
@@ -597,7 +547,6 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
     fixture.publish(1);
     const sandbox = fixture.sandbox("moved");
     expect(sandbox.bind(fixture.verify()).ok).toBe(true);
-    // note: A reviewed successor generation supersedes the checked-out binding.
     const successor = fixture.publish(2);
     expect(successor.generation).toBe(2);
 
@@ -620,8 +569,6 @@ describe("remote collaboration bootstrap at the CLI boundary", () => {
 
     const refused = sandbox.init();
     expect(refused.exitCode).toBe(1);
-    // invariant: An absent cache is required data: the bootstrap refuses and rebuilds
-    // nothing, so the operator re-runs the reviewed bind instead of initializing around it.
     expect(refused.code).toBe("remote.unavailable");
     expect(refused.message).toContain("absent");
     expect(refused.recovery).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");

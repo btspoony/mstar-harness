@@ -342,8 +342,6 @@ function WorkflowRowView(props: {
 function MilestoneRowView(props: { row: MilestoneRow; copy: OverviewCopy }) {
   const row = props.row;
   return (
-    // why: as one flex row, a 360px pane broke the effort line and the counts across
-    // lines, so the prototype's two rows (`milestone-top`, `milestone-foot`) stay two.
     <div className="milestone-row" data-ms-milestone-row="">
       <div className="milestone-top">
         {row.status === null ? null : (

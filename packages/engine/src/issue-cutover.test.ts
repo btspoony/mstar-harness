@@ -1,28 +1,3 @@
-/**
- * issue-cutover.test.ts — proof: the engine's issue authority cutover.
- *
- * Spec sources:
- * - the issue-store contract §2/§5/§7 (the collaboration lane is the only
- *   findings authority; `apply ≠ activate`: a staged lane is never an authority,
- *   and a missing or corrupt one is never an empty one) and §6 (capture duty).
- * - The cutover's global constraints (the scoped residual writers and the
- *   `ArtifactStore` residual persist must cut over BEFORE activation) plus the
- *   hard invariants this file proves.
- *
- * What this file proves, and what its neighbours own:
- * - HERE: no RAW write path can recreate a legacy register (the retired kind,
- *   and `json` aliases — direct, symlinked, or inside the protected writer's
- *   authorizing context), the artifact path table has no register mapping, and
- *   the findings gate / observation is a complete plan-local read of the
- *   collaboration lane: it fails closed instead of reading a missing, corrupt or
- *   staged lane as "no findings", and it never counts a foreign mirror row.
- * - `test/coordination.test.ts`: the scoped lifecycle — residual-add/close
- *   against the store, the handoff gate, and a lifecycle step refusing while
- *   the store is unavailable.
- * - `test/project.test.ts`: `validateProjectRegister` as the migration-only
- *   register validator. `test/status.test.ts`: the legacy rollup aggregation
- *   the CLI cutover converts.
- */
 import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -47,10 +22,6 @@ const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-cutover-")));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
-/**
- * invariant: The collaboration store is user-level: `homedir` must resolve into this
- * fixture and never to the operator's real home.
- */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -60,11 +31,6 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/**
- * note: A fresh synthetic checkout: its origin names the collaboration repository the
- * lane is keyed by, and `.mstarc` selects the local mode an operator's clone
- * declares.
- */
 function ctx(name: string): StoreContext {
   const root = realpathSync(mkdtempSync(join(ROOT, `${name}-`)));
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, stdio: "ignore" });
@@ -77,8 +43,6 @@ function ctx(name: string): StoreContext {
     cwd: root,
     stdio: "ignore",
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${basename(root)}.git`], {
     cwd: root,
     stdio: "ignore",
@@ -89,7 +53,6 @@ function ctx(name: string): StoreContext {
   return { harnessDir, checkoutRoot: root };
 }
 
-/** invariant: The fixture's lane path, refused loudly if it escaped the temporary home. */
 function laneLocation(context: StoreContext) {
   const location = resolveCollaborationLocation(context);
   if (!location.dbPath.startsWith(`${ROOT}${sep}`)) {
@@ -98,11 +61,6 @@ function laneLocation(context: StoreContext) {
   return location;
 }
 
-/**
- * invariant: Flip a staged lane record to active: this plan ships no public activator. The
- * fixture also records the checkout binding the real activation writes — an
- * ACTIVE authority is never usable from an unbound checkout.
- */
 function activate(context: StoreContext): void {
   const location = laneLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -130,7 +88,6 @@ function activate(context: StoreContext): void {
   });
 }
 
-/** note: The fixture's collaboration lane, created and activated. */
 async function activeLane(context: StoreContext): Promise<void> {
   await initializeCollaborationStore(laneLocation(context));
   activate(context);
@@ -250,16 +207,6 @@ describe("retired register persist \u2014 the raw store cannot recreate a projec
   });
 });
 
-/* invariant: ------------------------------------------------------------------------ *
- * § Findings gate — the collaboration lane is the authority; a broken lane
- *   fails closed
- * ------------------------------------------------------------------------ */
-
-/**
- * note: Seed a historical scoped plan row by omitting `origin`, as pre-cutover stores
- * did before the column existed. The scoped write path is exercised by the
- * domain verbs (`linkIssueScoped`) below.
- */
 async function linkPlanRow(context: StoreContext, issueId: string, planId: string): Promise<void> {
   await withCollaborationWrite(context, (handle) => {
     handle.db
@@ -268,7 +215,6 @@ async function linkPlanRow(context: StoreContext, issueId: string, planId: strin
   });
 }
 
-/** note: Flip one issue's disposition outside the verbs and advance the lane once. */
 async function setDisposition(context: StoreContext, issueId: string, disposition: string): Promise<void> {
   await withCollaborationWrite(context, (handle) => {
     handle.db.prepare("update issues set disposition = ? where id = ?").run(disposition, issueId);
@@ -276,7 +222,6 @@ async function setDisposition(context: StoreContext, issueId: string, dispositio
   });
 }
 
-/** note: Insert one external mirrored issue linked to a plan: a foreign row, not a finding. */
 async function insertForeignIssue(context: StoreContext, issueId: string, planId: string): Promise<void> {
   await withCollaborationWrite(context, (handle) => {
     handle.db
@@ -321,9 +266,6 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
       "findings.zero-residual-open-issue",
     ]);
 
-    // note: A plan is gated only by its OWN links: `plan-z` holds the third issue and
-    // flags it, while `plan-b`, which links nothing, stays clean even though
-    // open issues exist in the lane.
     const peer = await findingsCleanupGate(context, "plan-z", { mode: "zero-residual" });
     expect(peer.violations.map((violation) => violation.code)).toEqual(["findings.zero-residual-open-issue"]);
     const nobody = await findingsCleanupGate(context, "plan-b", { mode: "zero-residual" });
@@ -371,7 +313,6 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
     await linkPlanRow(context, captured.issueId, "plan-a");
     expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(false);
 
-    // note: The read gate's input is the issue row's disposition.
     await setDisposition(context, captured.issueId, "resolved");
     expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(true);
   });
@@ -380,23 +321,16 @@ describe("findingsCleanupGate \u2014 authoritative linked open issues (G2a)", ()
     const missing = ctx("gate-missing");
     await expect(findingsCleanupGate(missing, "plan-a")).rejects.toThrow(/collaboration\.not-initialized/);
 
-    // invariant: A present but broken lane is never "no findings".
     const corrupt = ctx("gate-corrupt");
     await activeLane(corrupt);
     writeFileSync(laneLocation(corrupt).dbPath, "not a sqlite database\n", "utf8");
     await expect(findingsCleanupGate(corrupt, "plan-a")).rejects.toThrow(/collaboration\.unreadable/);
 
-    // Pre-activation window (contract §7): the staged lane is not an authority,
-    // so the gate must refuse rather than report an empty plan.
     const staged = ctx("gate-staged");
     await initializeCollaborationStore(laneLocation(staged));
     await expect(findingsCleanupGate(staged, "plan-a")).rejects.toThrow(/collaboration\.not-active/);
   });
 });
-
-/* note: ------------------------------------------------------------------------ *
- * § Collaboration findings observation — complete scoped evidence
- * ------------------------------------------------------------------------ */
 
 describe("collaboration findings observation \u2014 complete scoped evidence", () => {
   test("collaboration findings observation: a missing or staged authority refuses with its own named code", async () => {
@@ -417,7 +351,6 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
     expect(foreign.open).toEqual([]);
     expect((await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" })).ok).toBe(true);
 
-    // why: Historical scoped provenance (no explicit origin) keeps counting.
     const local = await captureIssue(context, finding("legacy-provenance", { severity: "critical" }), {
       operationId: "cap-legacy-provenance",
       actor: "project-manager",
@@ -458,8 +391,6 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
     expect(Number.isInteger(first.revision)).toBe(true);
     expect(Number.isInteger(first.catalogRevision)).toBe(true);
 
-    // invariant: A new linked issue advances the lane revision; the next observation is a
-    // NEW snapshot, never a reuse of the first one's stamped rows.
     const issue = await captureIssue(context, finding("observe-later"), {
       operationId: "cap-observe-later",
       actor: "project-manager",
@@ -473,10 +404,6 @@ describe("collaboration findings observation \u2014 complete scoped evidence", (
     expect(second.authority).toEqual(first.authority);
   });
 });
-
-/* note: ------------------------------------------------------------------------ *
- * § Collaboration gate evidence — one complete observation, re-checked
- * ------------------------------------------------------------------------ */
 
 describe("collaboration gate evidence", () => {
   test("collaboration gate evidence: the decision names one complete plan-scoped observation", async () => {
@@ -504,8 +431,6 @@ describe("collaboration gate evidence", () => {
     expect(allow.collaboration.authority.storeId).toBe((await readCollaborationAuthority(context)).storeId);
     expect(allow.violations.map((violation) => violation.code)).toEqual(["findings.allow-residual-critical"]);
 
-    // note: No new threshold: zero-residual blocks every open row of THIS scope, and a
-    // peer plan that links nothing is still a complete clean decision.
     const zero = await findingsCleanupGate(context, "plan-a", { mode: "zero-residual" });
     expect(zero.violations.map((violation) => violation.code).sort()).toEqual([
       "findings.zero-residual-critical",
@@ -515,7 +440,6 @@ describe("collaboration gate evidence", () => {
     expect(peer.ok).toBe(true);
     expect(peer.collaboration.open).toEqual([]);
 
-    // note: The accepted observation is still applicable: no drift, no refusal.
     await assertPlanFindingsCurrent(context, allow.collaboration);
   });
 
@@ -524,11 +448,9 @@ describe("collaboration gate evidence", () => {
     await activeLane(context);
     const observed = await observePlanFindings(context, "plan-a");
 
-    // invariant: Evidence whose scope cannot be re-observed is not a clean gate.
     await expect(assertPlanFindingsCurrent(context, { ...observed, scope: { kind: "project", key: "plan-a" } }))
       .rejects.toMatchObject({ code: "collaboration.observation-incomplete" });
 
-    // note: A collaboration write in the preflight gap moves the lane revision.
     const issue = await captureIssue(context, finding("gate-evidence-drift"), {
       operationId: "cap-gate-evidence-drift",
       actor: "project-manager",
@@ -540,22 +462,14 @@ describe("collaboration gate evidence", () => {
       code: "collaboration.observation-stale",
       details: { plan_id: "plan-a", observed: { revision: observed.revision } },
     });
-    // note: The stale refusal judges the evidence without rewriting it.
     expect(observed.open).toEqual([]);
   });
 });
-
-/* note: ------------------------------------------------------------------------ *
- * § Domain read verbs vs a staged lane (plan QC fix wave FW-6)
- * ------------------------------------------------------------------------ */
 
 describe("listIssues / getIssue \u2014 a staged lane is not queryable as read authority (FW-6)", () => {
   test("both read verbs refuse collaboration.not-active even when staged rows exist", async () => {
     const context = ctx("read-staged");
     await activeLane(context);
-    // invariant: Seed a real row through the domain verb while the lane is active, THEN
-    // demote: the refusal must hold with data present, not only on an empty
-    // staged lane (the staged-import inspection case from QC seat 1 F-003).
     const captured = await captureIssue(context, finding("occ-staged-read"), {
       operationId: "cap-staged-read",
       actor: "project-manager",
@@ -564,9 +478,6 @@ describe("listIssues / getIssue \u2014 a staged lane is not queryable as read au
       handle.db.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run();
     });
 
-    // Pre-activation window (contract §7): a staged lane refuses ordinary
-    // domain verbs — reads included. Staged data stays inspectable through the
-    // migration surface (manifest/receipt), never as queryable issues.
     await expect(listIssues(context, {})).rejects.toThrow(/collaboration\.not-active/);
     await expect(getIssue(context, captured.issueId)).rejects.toThrow(/collaboration\.not-active/);
   });

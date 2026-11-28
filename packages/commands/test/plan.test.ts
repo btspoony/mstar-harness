@@ -6,7 +6,6 @@ import * as nodeOs from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import {
-
   createExecutionWorkflow,
   executionContextFor,
   getIssue,
@@ -28,10 +27,6 @@ afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
-/**
- * invariant: The collaboration lane is user-level, so every residual case must resolve its
- * home to this fixture and never to the operator's real one.
- */
 const HOME_ROOT = mkdtempSync(path.join(os.tmpdir(), "plan-command-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -160,14 +155,12 @@ describe("plan command family", () => {
     }
   });
 
-
   test("plan family payload decode rejects malformed fields with accurate paths", () => {
     const planProgress = definition("plan.progress");
     const malformed = planProgress.input.safeParse({ progress: "not-an-object" });
     expect(malformed.success).toBe(false);
     if (!malformed.success) expect(malformed.error.issues[0]?.path).toEqual(["progress"]);
   });
-
 
   test("bind requires runtime identity; the active route binds, reports progress and cannot bypass completion", async () => {
     const data = activeFixture();
@@ -224,7 +217,6 @@ describe("plan command family", () => {
     const denied = await definition("plan.progress").execute({ workflow: data.workflow, plan: data.plan, progress: { status: "Done", summary: "x", evidence_paths: [] } } as never, ctx);
     expect(denied).toMatchObject({ status: "refused", exitCode: 1 });
   });
-
 
   test("plan bind without the execution route refuses, and its recovery names a working invocation", async () => {
     const data = activeFixture();
@@ -317,11 +309,6 @@ describe("plan command family", () => {
   });
 });
 
-/**
- * note: One residual-bearing checkout: a synthetic origin (the collaboration identity),
- * an active combined store and — unless `collaboration: "absent"` — an ACTIVE
- * collaboration authority, plus a running workflow whose coordinator is bound.
- */
 async function residualFixture(
   name: string,
   options: { collaboration?: "active" | "absent"; earlierPlans?: readonly string[] } = {},
@@ -331,8 +318,6 @@ async function residualFixture(
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name}.git`], { cwd: root });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync("git", ["config", `url.${root}.insteadOf`, `https://github.com/acme/${name}.git`], { cwd: root });
   writeFileSync(path.join(root, ".mstarc"), "[collaboration]\nmode=local\n");
   const harness = path.join(root, ".mstar");
@@ -383,7 +368,6 @@ async function residualFixture(
   return { root, harness, workflow, plan, ctx };
 }
 
-/** note: The plan CAS token `plan.show` reports, or a fixture failure. */
 function planTokenOf(envelope: { status: string; data: unknown }): string {
   if (envelope.status !== "ok" || envelope.data === null || typeof envelope.data !== "object" || !("token" in envelope.data)) {
     throw new Error(`plan.show returned no execution token: ${JSON.stringify(envelope)}`);
@@ -430,8 +414,6 @@ describe("plan residual-add / residual-close composite commands", () => {
     const receipt = added.data as { replayed: boolean; token: string };
     expect(receipt.replayed).toBe(false);
 
-    // why: The same operation id and payload replay the recorded receipt instead of
-    // capturing a second issue.
     const replayed = await definition("plan.issue-add").execute(request as never, data.ctx);
     expect(replayed.status).toBe("ok");
     if (replayed.status !== "ok") throw new Error(`plan.issue-add replay failed: ${JSON.stringify(replayed)}`);

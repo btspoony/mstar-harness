@@ -62,10 +62,6 @@ const bunGlobal = (globalThis as unknown as { Bun?: { version: string } }).Bun;
 const realHookProbeInfo = hookRuntimeProbe.info;
 const roots: string[] = [];
 
-/**
- * note: Isolated user home for the collaboration lane (its store lives under
- * `<home>/.mstar/repos/...`); one per test process, restored on exit.
- */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "omp-g4b-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -77,8 +73,6 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  // why: Restore before removing the directory: a leaked spy would redirect every
-  // later test file at a deleted temp home.
   homeSpy?.mockRestore();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
   rmSync(FIXTURE_HOME, { recursive: true, force: true });
@@ -104,8 +98,6 @@ function makeHarness(id: string, enforcement?: "hard" | "soft"): Fixture {
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   writeFileSync(join(harness, "status.json"), VALID_STATUS);
-  // why: A configurable collaboration identity: the register route reads that lane,
-  // and the fixture home keeps the store out of the real home.
   writeFileSync(
     join(root, ".mstarc"),
     `${enforcement === undefined ? "" : `[config]\nenforcement=${enforcement}\n\n`}[collaboration]\nmode=local\nrepo_id=omp-${id}\n`,
@@ -119,20 +111,16 @@ function makeHarness(id: string, enforcement?: "hard" | "soft"): Fixture {
   };
 }
 
-/** note: REAL ACTIVE authorities (the `store init` pair): the repository's
- * collaboration lane, then this checkout's execution store. */
 async function seedActiveStore(harnessDir: string): Promise<void> {
   await ensureCollaborationAuthority({ harnessDir });
   const handle = await initializeStore({ harnessDir });
   handle.close();
 }
 
-/** invariant: REAL staged-only collaboration lane (built, never activated). */
 async function seedStagedStore(harnessDir: string): Promise<void> {
   await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir }));
 }
 
-/** note: Unreadable COLLABORATION authority through the REAL engine channel. */
 async function corruptCollaboration(harnessDir: string): Promise<void> {
   const dbPath = resolveCollaborationLocation({ harnessDir }).dbPath;
   rmSync(dbPath, { force: true });
@@ -161,8 +149,6 @@ async function seedActiveExecutionStore(harnessDir: string, statusPath: string):
     // `initializeExecutionAuthority` refuses `execution.not-empty`.
     const handle = await initializeStore({ harnessDir });
     handle.close();
-    // note: The catalog registration writes the collaboration lane, so this fixture
-    // needs the `store init` pair, not the execution half alone.
     await ensureCollaborationAuthority({ harnessDir });
     const initialized = await readExecutionAuthority({ harnessDir });
     await registerCatalogEntity(
@@ -529,8 +515,6 @@ describe("omp write gate — authority paths refuse, documents keep their valida
 describe("collaboration host authority — source combinations and parity", () => {
   test("execution-only: the register is refused by the collaboration lane, never a legacy permission", async () => {
     const fixture = makeHarness("host-execution-only", "soft");
-    // invariant: The execution authority alone (`initializeStore`), exactly a cutover
-    // clone that has not yet created its collaboration lane.
     const handle = await initializeStore({ harnessDir: fixture.harness });
     handle.close();
     expect(await probeCollaborationAuthority({ harnessDir: fixture.harness })).toMatchObject({

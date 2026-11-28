@@ -232,9 +232,6 @@ export function ingestRecords(
       }
       report.associated.push({ ...entry, localId: marker.localId });
     } catch (error) {
-      // why: Only a ledger refusal is this record's own answer. A storage failure may
-      // have written the association before its receipt failed, so it must abort the
-      // batch and roll back, never be reported as a drifted record.
       if (!(error instanceof SyncError)) throw error;
       const cause = error.message;
       throw new SyncError(

@@ -307,11 +307,6 @@ describe("generated CLI adapter", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
     const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
     const details = envelope?.details;
-    // why: the offending positional is attributed by argv position and token — the facts a
-    // three-call recovery needs — alongside the command's own usage, and the issue family
-    // publishes its shared input surface on every verb, so `move`'s lane and cross-authority
-    // flags join `--expect <n>` here as they do for the rest of the family; `--expect-store`
-    // stays listed although only the non-`--discard` move route requires it.
     expect(details).toMatchObject({
       diagnostics: [{
         path: "argv[4]",

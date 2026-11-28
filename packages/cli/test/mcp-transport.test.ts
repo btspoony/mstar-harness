@@ -17,8 +17,6 @@ async function withClient(
   run: (client: Client, cwd: string) => Promise<void>,
   options: { controlRoot?: string; cwd?: string } = {},
 ) {
-  // invariant: A caller-provided cwd is the caller's fixture (e.g. its Git checkout): the
-  // server only points the invocation context at it and never cleans it up.
   const owned = options.cwd === undefined;
   const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
   const server = new McpServer({ name: "isolated-command-server", version: "1.0.0" });
@@ -169,7 +167,6 @@ generated_at: 2026-01-02
       expect(envelope(valid)).toMatchObject({ status: "ok", code: "qc.validate-report.ok", data: { ok: true, violations: [] } });
     });
   });
-
 
   test("defaulted conditional payloads and optional identity survive real publication and admission", async () => {
     await withClient([evaluate], async (client) => {
@@ -420,13 +417,6 @@ generated_at: 2026-01-02
     });
   });
 
-  /**
-   * invariant: The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
-   * README index read. The dsh-native tool that used to carry it is gone, so
-   * these are the product regressions on the SURVIVING route: the folded MCP
-   * action. A missing authority refuses with the lane's own code, a complete
-   * catalog passes, and an unregistered knowledge body fails with its path.
-   */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
@@ -441,13 +431,7 @@ generated_at: 2026-01-02
       arguments: { action: "validate", docPath: join(knowledgeDir, "good.md"), knowledgeDir },
     }));
     try {
-      // note: The invocation cwd IS the fixture's Git checkout: the completeness
-      // verdict is the checkout's configured knowledge root, while the store
-      // root stays pinned to its `.mstar`.
       await withClient([definition("compound.validate")], async (client) => {
-        // invariant: No authority yet: the completeness gate refuses with the missing
-        // lane's own code — never a directory mismatch or a content gap
-        // standing in for the absent authority.
         const missing = await validate(client);
         expect(missing).toMatchObject({ command: "compound.validate", status: "refused", exitCode: 1 });
         expect(catalogCodes(missing)).toContain("collaboration.not-initialized");
@@ -459,8 +443,6 @@ generated_at: 2026-01-02
         expect(catalogCodes(missing)).not.toContain("compound.scope.outside");
       }, { controlRoot: harness, cwd: root });
 
-      // invariant: Both authorities, exactly as `store init` leaves them, then the one
-      // body the knowledge root carries is registered.
       const context = { harnessDir: harness };
       (await initializeStore(context)).close();
       await ensureCollaborationAuthority(context);

@@ -51,11 +51,6 @@ export const DEFAULT_CATALOG_TTL_MS = 60_000
  */
 const ISSUE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
 
-/**
- * One issue page's row cap (issue contract §5: `limit` max 200) — the
- * knowledge-digest page size. The open-issue rollup itself is ONE scoped SQL
- * aggregate (`queryOpenIssueRollup`), never a page walk.
- */
 const ISSUE_PAGE_LIMIT = 200
 
 /** The plugin's own manifest version (single-version invariant; own manifest first). */
@@ -170,7 +165,6 @@ function engineStatusPayload(harnessDir: string | null, hint?: SessionHint, fact
       : null,
   }
 }
-
 
 // Keep generation metadata off the model-facing, JSON-serialized catalog payload.
 const authorityGenerationByPayload = new WeakMap<MstarEngineStatusPayload, DshSelectedGeneration>()
@@ -941,9 +935,6 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
   const milestones = await readProjectMilestoneFacts(context)
   try {
-    // why: ONE scoped collaboration snapshot: totals, grouping and the bounded
-    // preview come from the same read, so no offset page from a different
-    // generation can be added to this one.
     const envelope = await withStoreRead(context, queryOpenIssueRollup())
     const observation = envelope.collaboration
     if (observation === null || observation.completeness === 'unavailable') {
@@ -968,9 +959,6 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
       const count = rollup.bySeverity[severity]
       if (count !== undefined && count > 0) residuals.push({ severity, count })
     }
-    // The preview keeps the authority's own order; `planId` stays empty — an
-    // issue is plan-independent, and its plan/iteration links are provenance,
-    // not a column of a summary row.
     const residualFindings: ResidualFindingView[] = rollup.recent.map((item) => ({
       planId: '',
       id: item.id,
@@ -1009,13 +997,6 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   }
 }
 
-/**
- * invariant: The disclosure text of ONE store-backed read: `null` while the projection is
- * current and the collaboration observation is complete, otherwise the named
- * reason — a STALE or UNAVAILABLE projection (execution views may lag; the
- * issue rows read here are authoritative either way) and/or a scoped
- * collaboration gap. Projection health never stands in for authority.
- */
 function storeProjectionDiagnostic(
   projection: ReadProjection,
   observation: { completeness: 'complete' | 'partial'; code?: string },

@@ -97,9 +97,6 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === '' ? 'store.authority-unreadable' : code, message }
 }
 
-/** invariant: A staged, absent or unreadable collaboration lane never authorizes a
- * register write: `legacy` is no longer a verdict (the collaboration authority
- * is the only findings authority since cutover). */
 type AuthorityRoute =
   | { kind: 'retired'; storeRevision: number | null }
   | { kind: 'unavailable'; code: string; message: string }
@@ -137,12 +134,6 @@ async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWri
   }
 }
 
-/** note: The harness root of the register a write LANDS on through a symlink alias
- * (stricter-wins veto): the landed destination is the authority the bytes
- * belong to even when the caller's own path already classified as a register
- * elsewhere — classified by the exact-case marker probe first, then the FW-3
- * folded shape walk. `null` when the write is not an alias or does not land on
- * a register. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {
   if (landed === resolved) return null
   const aliased = harnessDocKindOfTarget(landed)
