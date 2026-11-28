@@ -759,11 +759,13 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("// scripts/comment-gate-select.sh\n")).toEqual([]);
   });
 
-  test("the hash-gate marker is a shape only with its em-dash and a reason", () => {
+  test("the hash-gate marker is a shape only as an anchored single-line marker with a reason", () => {
     expect(findUnclassifiedComments("// hash-gate: authorized \u2014 a staged digest proves the reviewed rows\n")).toEqual([]);
     expect(findUnclassifiedComments("// hash-gate: authorized - a staged digest proves the reviewed rows\n")).toHaveLength(1);
     expect(findUnclassifiedComments("// hash-gate: authorized \u2014   \n")).toHaveLength(1);
     expect(findUnclassifiedComments("// hash-gate: authorized\n")).toHaveLength(1);
+    expect(findUnclassifiedComments("// note: hash-gate: authorized \u2014 a mention, not the marker\n")).toHaveLength(1);
+    expect(findUnclassifiedComments("/**\n * hash-gate: authorized \u2014 a block form the owner never reads\n */\n")).toHaveLength(1);
   });
 
   test("rejects pointer forms the linter cannot resolve", () => {
