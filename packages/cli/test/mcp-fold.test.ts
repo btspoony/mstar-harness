@@ -10,7 +10,6 @@ import { inputFields } from "../src/schema-branches";
 import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } from "../src/mcp/fold";
 
 /**
- * see docs/knowledge/best-practices/mcp-published-surface-measurement.md
  * why: the folded published surface — every folded tool's description plus its
  * input JSON schema, read back from `tools/list` — is a deliberate product
  * budget, not a measurement to re-pin: `tools/list` is paid on every request of
@@ -25,15 +24,38 @@ import { FAMILY_PURPOSE, actionOf, familyOf, familyToolName, foldFamilyTools } f
  *
  * Re-taken once for the `pr` family: the §5.3a review-thread gate publishes as
  * its own tool rather than folding into `mstar_pr_review`, so a pre-merge check
- * does not read as a review action (measured 33_935).
- * Re-taken again for `pr.merge-gate`: routing the gate through a named provider
- * adapter adds one option field, `--provider <id>` (measured 33_962; later prose
- * stays inside this budget rather than re-taking it).
- * Re-taken again for `pr-review.post`: posting through a named publisher
- * adapter adds one option field, `--provider <id>` (measured 33_991; later
- * prose stays inside this budget rather than re-taking it).
+ * does not read as a review action (measured 33_935; later prose stays inside
+ * this budget rather than re-taking it).
+ *
+ * Re-taken after the 5.0 merge: compared in one measurement against
+ * main@7fd419fbe, every family is byte-identical except `mstar_issue_sync`
+ * (972 → 996 chars), whose collaboration-lane contract grew in 5.0. The fold's
+ * own source is unchanged, so the published surface measures 33_957 and this is
+ * command-contract text, not a publication-rule change.
+ *
+ * Re-taken for the cross-authority move: `mstar_issue` alone grows 1_788 → 1_878,
+ * because `issue move` publishes four new fields (`toAuthority`, `discard`,
+ * `input`, `out`) for its staged move and the two-checkout exchange. Every other
+ * family is byte-identical, the fold's own source is untouched, and the growth
+ * is the shipped command contract, so the surface measures 34_047. The ceiling
+ * is an upper bound: a later contract shrinkage does not re-take it.
+ *
+ * Re-taken for the milestone effort contract: `mstar_milestone` grows 14 chars, because
+ * `milestone add` and `milestone update` publish `--effort-sessions` in place of the retired date
+ * flags and `milestone update` publishes `--clear-effort-sessions`. The fold's own source is
+ * untouched and every other family is unchanged, so the growth is the shipped command contract and
+ * the surface measures 34_061.
+ *
+ * Re-taken after merging the two-checkout move exchange into the milestone-effort branch: the
+ * exchange widened the `issue move` contract further (the `input`/`out` payload pair of the
+ * staged move), so the surface measures 34_103 against the same unchanged fold source. The growth
+ * is the shipped command contract, not a publication-rule change.
+ *
+ * Re-taken after merging main into 5.0: main's named provider adapters publish `--provider` on
+ * `pr.merge-gate` and `pr-review.post`, and that option text merges in here; the fold source is
+ * still unchanged, so the surface measures 34_161 and the growth is the shipped command contract.
  */
-const PUBLISHED_SURFACE_CEILING_CHARS = 33_991;
+const PUBLISHED_SURFACE_CEILING_CHARS = 34_161;
 
 type PublishedTool = Readonly<{
   name: string;

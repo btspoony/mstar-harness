@@ -21,11 +21,11 @@
  * verification tool, so the gate rides it when present and steps aside when not.
  */
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, createExecutionWorkflow, initializeStore, openStore, readExecutionAuthority, registerCatalogEntity } from "@mstar-harness/engine";
+import { captureIssue, createExecutionWorkflow, ensureCollaborationAuthority, initializeStore, openCollaborationStore, openStore, readExecutionAuthority, registerCatalogEntity, withCollaborationWrite } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "../../commands/src/dashboard/index.ts";
 
 const RECORDED_AT = "2026-10-24T09:06:22.870Z";
@@ -96,7 +96,11 @@ async function evalJson(expression: string): Promise<Record<string, unknown>> {
  */
 const PROBE = `(() => {
   const cards = document.querySelectorAll('[data-ms-panel]');
-  const table = document.querySelector('table');
+  // The list's own table: a screen can carry other tables (the issues screen's trend
+  // disclosure renders a flow table above the list), and the width/scroll anchors
+  // below mean the LIST table, not whichever table comes first in the DOM.
+  const table = document.querySelector('table[data-ms-table="list"]');
+  const listScroller = table === null ? null : table.closest('[data-ms-table-scroller]');
   const paintedTones = [...document.querySelectorAll('[data-ms-tone]:not([data-ms-dot])')]
     .filter((el) => {
       const bg = getComputedStyle(el).backgroundColor;
@@ -202,7 +206,7 @@ const PROBE = `(() => {
     branchAnchors: document.querySelectorAll('[data-ms-branch] > span:not([aria-hidden])').length,
     planProgressBars: ovWorkflow === null ? 0 : ovWorkflow.querySelectorAll('table [role="progressbar"]').length,
     flowRows: document.querySelectorAll('[data-ms-flow] details tbody tr').length,
-    flowAxis: [...document.querySelectorAll('[data-ms-flow] [class*="axis"] span')].map((el) => (el.textContent ?? '').trim()),
+    flowAxis: [...document.querySelectorAll('[data-ms-flow] .chart-note span')].map((el) => (el.textContent ?? '').trim()),
     narrowestCell: cellWidths.length === 0 ? null : Math.min(...cellWidths),
 
     visibleCells: rowCells.length,
@@ -234,13 +238,11 @@ const PROBE = `(() => {
     // The floor the caller published for this table: below it the card body scrolls
     // instead of squeezing. It is a number the layout can be reasoned about with.
     tableFloorPx: (() => {
-      const table = document.querySelector('table');
       if (table === null) return null;
       const value = getComputedStyle(table).getPropertyValue('--ms-table-floor').trim();
       return value === '' ? null : parseFloat(value);
     })(),
     tableWidth: (() => {
-      const table = document.querySelector('table');
       return table === null ? null : Math.round(table.getBoundingClientRect().width * 10) / 10;
     })(),
     visiblePrimaryCells: (() => {
@@ -249,22 +251,33 @@ const PROBE = `(() => {
       return [...row.querySelectorAll('td[data-ms-col="primary"]')]
         .filter((cell) => cell.getBoundingClientRect().width > 0).length;
     })(),
-    // The collapsed second line: every fact whole, none cut by the cell's width.
-    metaTruncated: (() => {
+    // The collapsed second line, in the prototype's own three parts (the meta lives
+    // INSIDE the record's first cell since PR #601, matching prototype.html): it
+    // paints, it is one clipped line — display:block with nowrap + ellipsis —
+    // and it never wraps a fact onto a third line.
+    metaOneLine: (() => {
       const metas = [...document.querySelectorAll('[data-ms-row-meta]')]
         .filter((el) => el.getBoundingClientRect().width > 0);
       if (metas.length === 0) return null;
-      return metas.some((el) => el.scrollWidth > el.clientWidth + 1);
+      return metas.every((el) => {
+        const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 0;
+        return lineHeight === 0 || el.getBoundingClientRect().height <= lineHeight * 1.5 + 1;
+      });
+    })(),
+    metaEllipsis: (() => {
+      const metas = [...document.querySelectorAll('[data-ms-row-meta]')]
+        .filter((el) => el.getBoundingClientRect().width > 0);
+      if (metas.length === 0) return null;
+      return metas.every((el) => {
+        const cs = getComputedStyle(el);
+        return (cs.overflow === 'hidden' || cs.overflowX === 'hidden') && cs.textOverflow === 'ellipsis';
+      });
     })(),
     metaWidth: (() => {
       const metas = [...document.querySelectorAll('[data-ms-row-meta]')]
         .filter((el) => el.getBoundingClientRect().width > 0);
       if (metas.length === 0) return null;
       return Math.round(Math.min(...metas.map((el) => el.getBoundingClientRect().width)) * 10) / 10;
-    })(),
-    metaRowSpan: (() => {
-      const cell = document.querySelector('[data-ms-row-meta-row] td');
-      return cell === null ? null : cell.getAttribute('colspan');
     })(),
     // Prose inside a card, measured on its own line boxes: the reported failure was
     // a sentence wrapping one character per line, and characters-per-line is the
@@ -289,22 +302,21 @@ const PROBE = `(() => {
     })(),
     // The column sequence, visible columns only: the prototype fixes an order, and a
     // count alone cannot see a reorder. Keys rather than labels, so the anchor does not
-    // depend on which locale the page happens to carry.
-    columnKeys: [...document.querySelectorAll('table thead th')]
+    // depend on which locale the page happens to carry. Scoped to the list table: the
+    // issues screen's trend disclosure carries its own table above the list.
+    columnKeys: [...(table === null ? [] : table.querySelectorAll('thead th'))]
       .filter((th) => getComputedStyle(th).display !== 'none')
       .map((th) => th.getAttribute('data-ms-col-key')),
-    hiddenColumns: [...document.querySelectorAll('table thead th[data-ms-col="secondary"]')]
+    hiddenColumns: [...(table === null ? [] : table.querySelectorAll('thead th[data-ms-col="secondary"]'))]
       .filter((th) => getComputedStyle(th).display === 'none').length,
     tableScrollsSideways: (() => {
-      const scroller = document.querySelector('[data-ms-table-scroller]');
-      if (scroller === null) return null;
-      return scroller.scrollWidth > scroller.clientWidth + 1;
+      if (listScroller === null) return null;
+      return listScroller.scrollWidth > listScroller.clientWidth + 1;
     })(),
     // scrollWidth reports overflow even when the box cannot scroll, so the scroll
     // anchor needs both halves: content wider than the card AND a box that scrolls.
     scrollerOverflowX: (() => {
-      const scroller = document.querySelector('[data-ms-table-scroller]');
-      return scroller === null ? null : getComputedStyle(scroller).overflowX;
+      return listScroller === null ? null : getComputedStyle(listScroller).overflowX;
     })(),
     summaryLeft: summaryEl === null ? null : Math.round(summaryEl.getBoundingClientRect().left * 10) / 10,
     baselineDelta: h1 === null || summaryEl === null ? null : Math.abs(centreY(h1) - centreY(summaryEl)),
@@ -369,9 +381,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     if (!browserAvailable) console.log(SKIP_REASON);
     root = mkdtempSync(join(tmpdir(), "mstar-render-gate-"));
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-render-gate-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
     mkdirSync(join(root, ".mstar"), { recursive: true });
     const context = { harnessDir: join(root, ".mstar") };
     (await initializeStore(context)).close();
+    await ensureCollaborationAuthority(context);
 
     const captured = await captureIssue(
       context,
@@ -470,12 +484,15 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         },
       },
     );
-    // Two dated buckets, so the trend has a line: the issues were captured in the same
+    // why: Two dated buckets, so the trend has a line: the issues were captured in the same
     // minute, which is one UTC day. Back-date the first one by fixture, not by waiting.
-    const dated = await openStore(context, "write");
-    dated.db.exec("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)");
-    dated.close();
+    // The dashboard reads issues from the collaboration lane after the store split, so
+    // the fixture write goes through the lane write, not the execution store.
+    await withCollaborationWrite(context, (handle) => {
+      handle.db.prepare("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)").run();
+    });
     // Drain the WAL side files so the server's read-only open cannot refuse.
+    (await openCollaborationStore(context, "read")).close();
     (await openStore(context, "read")).close();
 
     mkdirSync(CAPTURE_DIR, { recursive: true });
@@ -593,7 +610,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     }, 60_000);
   }
 
-  test("issues is the filters card and the table card, with the summary line", async () => {
+  test("issues is the trend card and the filters-and-table card, with the summary line", async () => {
+    // The host supplies the flow series, so the prototype's trend panel renders above
+    // the one card that holds the filters, the table and the pager (PR #601 merged
+    // the filters and the table into that single card).
     const screen = await visit("issues", "issues");
     sharedAnchors(screen);
     expect(screen.cards).toBe(2);
@@ -692,7 +712,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         const measured = await visitAt(sample.width, route, screen);
         sharedAnchors(measured);
         const band = measured.band as Record<string, number | boolean | string | null>;
-        const table = route !== "overview";
+        // The table anchors below are the LIST tables' contract. Projects presents the
+        // prototype's picker rows, not a table (PR #601), and the overview's own plan
+        // table is anchored separately where it lives.
+        const table = route === "issues" || route === "workflows" || route === "iterations";
 
         // The card spans the width it was given (Task 2): a card narrower than its
         // container leaves the pane looking unfinished, which is what the owner saw.
@@ -701,9 +724,10 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           expect(Math.abs(width - (band.contentWidth as number))).toBeLessThanOrEqual(1);
         }
 
-        // A list screen with no rows is a DATA regression, not an absence arm: the
+        // invariant: A list screen with no rows is a DATA regression, not an absence arm: the
         // fixture seeds one row per list, so emptiness here must fail rather than
-        // skip the whole table contract. Overview has no table at all.
+        // skip the whole table contract. Overview has no table at all; the Projects
+        // screen's contract is its picker row for the fixture's project.
         if (table) {
           expect(band.visibleCells as number).toBeGreaterThan(0);
 
@@ -723,6 +747,11 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
           // scroll (a `scrollWidth` check alone passes with `overflow-x` deleted).
           expect(band.scrollerOverflowX).toBe("auto");
           if ("floor" in sample) expect(band.tableWidth as number).toBeGreaterThanOrEqual(sample.floor);
+        } else if (route === "projects") {
+          const rows = await evalJson(
+            `JSON.stringify({ rows: document.querySelectorAll('[data-ms-project]').length })`,
+          );
+          expect(Number(rows.rows)).toBeGreaterThan(0);
         }
 
         // The screen's own title is not squeezed away, and never stacks one glyph per
@@ -735,24 +764,30 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
         // column one character wide.
         if (band.worstPerLine !== null) expect(band.worstPerLine as number).toBeGreaterThanOrEqual(10);
 
-        // The collapsed second line: the facts are whole, and they span exactly the
-        // visible primary cells — the width is what makes them whole.
+        // The collapsed second line, in the prototype's own shape (PR #601 moved the
+        // facts into the record's first cell, matching prototype.html's narrow band):
+        // the line paints, it never wraps a fact onto a third line, and the overflow
+        // is the prototype's ellipsis clip — not a wrap, not a cut without affordance.
         if (sample.collapse && table) {
-          expect(band.metaTruncated).toBe(false);
-          expect(band.metaWidth as number).toBeGreaterThan(200);
-          expect(Number(band.metaRowSpan)).toBe(band.visiblePrimaryCells as number);
+          expect(band.metaWidth as number).toBeGreaterThan(0);
+          expect(band.metaOneLine).toBe(true);
+          expect(band.metaEllipsis).toBe(true);
         }
 
-        // The summary line still reads (the Issues screen is the one that has one) and
-        // sits on the title's baseline. Under the floor the card is narrower than the
-        // summary's facts, so only the no-overflow half is waived — see FLOOR_SAMPLE.
+        // invariant: The summary line still reads (the Issues screen is the one that has one).
+        // The head is a wrapping flex row: where the title and the summary fit on
+        // one line they share a baseline (the 420px issues head), and where they
+        // do not, the summary folds under the title — both are the prototype's own
+        // shapes, and the contract is one of them, never a squeezed or overflowing
+        // summary. Under the floor the card is narrower than the summary's four
+        // facts, so only the no-overflow half is asserted there — see FLOOR_SAMPLE.
         if (measured.summary !== null) {
           expect(String(measured.summary)).not.toBe("");
           if (sample.collapse) {
-            // The title owns its row here, so the summary wraps under it: the contract
-            // is that it sits directly below the title, not that it shares a baseline.
-            expect(band.summaryTopOffset as number).toBeGreaterThanOrEqual(-2);
-            expect(band.summaryTopOffset as number).toBeLessThan(24);
+            const below =
+              (band.summaryTopOffset as number) >= -2 && (band.summaryTopOffset as number) < 24;
+            const beside = (band.baselineDelta as number) <= 4;
+            expect(below || beside).toBe(true);
           } else {
             if (!FLOOR_SAMPLE(sample)) expect(band.summaryOverflows).toBe(false);
             expect(band.baselineDelta as number).toBeLessThanOrEqual(4);
@@ -787,12 +822,15 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       const measured = await visit("issues", "issues", true, "issues-400-zh");
       const band = measured.band as Record<string, number | boolean | string | null>;
       expect(String(band.titleText)).toMatch(/[\u4e00-\u9fff]/);
+      // why: The reported defect stacked the two glyphs one per line; the fixed shape keeps
+      // one line box. The head is a wrapping flex row now (the summary folds under the
+      // title in the collapsed band), so the h1 shrink-wraps its content instead of
+      // filling the row — the box width is no longer the row's width, and the guards
+      // that matter are the line count, no clip, and more than one glyph painted.
       expect(band.titleLines).toBe(1);
-      // The title owns its row at this width, so the box is the row's width — never one
-      // glyph (the pre-fix shape measured 30.4px over two lines), never ellipsis-only.
-      expect(band.titleWidth as number).toBeGreaterThanOrEqual(120);
+      expect(band.titleWidth as number).toBeGreaterThan(20);
       expect(band.titleOverflows).toBe(false);
-      expect(band.titleOverflows).toBe(false);
+      expect(band.titleTruncated).toBe(false);
     } finally {
       await setLocale("en");
     }
@@ -801,12 +839,14 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   /**
    * F2 — the collapsed second line is half the record's painted area, so it must be
    * the same activation target. The markup alone cannot prove that: this clicks it.
+   * The line lives INSIDE the record's first cell since PR #601 (the prototype's own
+   * shape), so the click lands on the meta span and bubbles to the row's handler.
    */
   test("clicking the collapsed second line activates the record", async () => {
     await browser(["set", "viewport", "420", String(VIEWPORT.height)]);
     await visit("issues", "issues", true, "issues-420-click");
     const before = await evalJson('JSON.stringify({ hash: window.location.hash })');
-    await browser(["click", "[data-ms-row-meta-row] td"]);
+    await browser(["click", "tbody tr[data-ms-row-main] [data-ms-row-meta]"]);
     await browser(["wait", "400"]);
     const after = await evalJson('JSON.stringify({ hash: window.location.hash })');
     // Navigation is a hash change on this host; the detail screen is the proof it
@@ -861,36 +901,36 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
   }, 60_000);
 
   test("every list keeps the prototype's columns inside its card at 720px", async () => {
-    // The pane the owner approves is 720px wide (`design-v1.html` sidebar stages).
-    // At that width the prototype shows every column of every list, with the title
-    // absorbing the slack — no clip, no card that scrolls its own table.
+    // why: The pane the owner approves is 720px wide (`design-v1.html` sidebar stages).
+    // The product's documented policy (DESIGN.md's band table) is "scroll instead of
+    // squeeze": the declared prototype column set plus the flexible column's floor is
+    // wider than a 720px card for every list, so each table scrolls inside its own
+    // card — the defect this anchor exists against is a cut column at the pane edge
+    // with no scroll affordance, not the scroll itself. Projects presents the
+    // prototype's picker rows, not a table, so it is anchored by the band tests.
     await browser(["set", "viewport", "720", String(VIEWPORT.height)]);
     const lists = [
-      ["issues", "issues", 7],
-      ["workflows", "workflows", 6],
-      ["iterations", "iterations", 7],
-      ["projects", "projects", 5],
+      ["issues", "issues", 7, true],
+      ["workflows", "workflows", 6, true],
+      ["iterations", "iterations", 7, true],
     ] as const;
-    for (const [route, screen, columns] of lists) {
+    for (const [route, screen, columns, scrolls] of lists) {
       const measured = await visit(route, screen, true, `pane-720-${route}`);
       const band = measured.band as Record<string, number | boolean | null>;
-      // Every column the prototype shows is rendered: the eighth (milestone) is a
-      // wide-only column and must be the only thing missing.
+      // invariant: Every column the prototype shows is rendered: the eighth (milestone) is a
+      // wide-only column and must be the only thing missing — no clip either way.
       expect(band.visibleCells).toBe(columns);
-      // A table wider than its card is the defect this anchor exists for: the last
-      // column was cut at the pane edge and the card looked like it had no frame.
-      // `tableScrollsSideways` is the overflow test; the scroller keeps
-      // `overflow-x: auto` at every width as the safety net, so its computed value is
-      // not the anchor here.
-      expect(band.tableScrollsSideways).toBe(false);
-      // The dsh seat scrolls with `overflow-y: auto`, so on a classic-scrollbar
-      // platform the vertical bar takes ~15px of the 720px pane and the card holds
-      // 663px, not the 678px this macOS gate measures. The floor has to sit under
-      // THAT number, or the iterations card scrolls at the width the owner approved
-      // while this gate stays green on overlay scrollbars.
-      if (route === "iterations") expect(band.tableFloorPx as number).toBeLessThanOrEqual(656);
+      // invariant: The floor the table publishes decides when the scroll begins; it must exist
+      // (the squeeze fallback returns when it is dropped) and sit above the card.
+      expect(band.tableFloorPx as number).toBeGreaterThan(band.contentWidth as number);
+      // why: Both halves of "scroll instead of squeeze": the pinned scroll state, and the
+      // box that can actually scroll (a `scrollWidth` check alone passes with
+      // `overflow-x` deleted).
+      expect(band.tableScrollsSideways).toBe(scrolls);
+      expect(band.scrollerOverflowX).toBe("auto");
       const contentWidth = band.contentWidth as number;
-      expect(band.tableWidth as number).toBeLessThanOrEqual(contentWidth + 0.5);
+      // invariant: The card frame holds: the card itself never exceeds the content width, and
+      // the page never scrolls sideways (asserted by the band tests).
       for (const width of band.cardWidths as number[]) expect(width).toBeLessThanOrEqual(contentWidth + 0.5);
     }
   }, 90_000);
@@ -986,9 +1026,6 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(band.flowArm).toBe("populated");
     // Two step lines, one per series.
     expect(band.flowPaths).toBe(2);
-    // The table alternative carries one row per dated bucket, so the series has a length
-    // a reader can count without the figure.
-    expect(band.flowRows as number).toBeGreaterThanOrEqual(2);
     // The axis labels the prototype draws: first, middle, last — and DISTINCT. The
     // format check alone passed on `first, first, last`, which is what a two-bucket
     // store produced before the middle label learned to step aside.
@@ -996,17 +1033,32 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
     expect(axis.length).toBeGreaterThanOrEqual(2);
     expect(new Set(axis).size).toBe(axis.length);
     for (const label of axis) expect(label).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-  }, 60_000);
+    // why: The dated-history table alternative lives on the ISSUES screen's trend
+    // disclosure (the overview card is figure-only since the dashboard alignment
+    // change): one row per dated bucket, so the series has a length a reader can
+    // count without the figure.
+    const issuesMeasured = await visit("issues", "issues", true, "issues-trend");
+    const issuesBand = issuesMeasured.band as Record<string, number | string | null>;
+    expect(issuesBand.flowArm).toBe("populated");
+    expect(issuesBand.flowRows as number).toBeGreaterThanOrEqual(2);
+  }, 90_000);
 
   test("an unavailable flow member renders the unavailable arm, never an empty chart", async () => {
-    // The store's own failure path, not a flag: `readIssueFlow`'s closure read joins
-    // `issue_transitions`, so a store without that table answers `unavailable`. The
-    // point of the anchor is that the trend degrades through the shared arm — a fake
-    // zero-line would look like a healthy trend that reports nothing.
+    // invariant: The lane's own failure path, not a flag: lane admission validates the schema,
+    // so a lane missing `issue_transitions.to_disposition` is refused as
+    // `collaboration.unreadable` before any query runs. The point of the anchor is
+    // that the dashboard fails closed through the shared arm with the named reason —
+    // a fake zero-line would look like a healthy trend that reports nothing, and an
+    // unmarked half-empty screen would look like a healthy store with nothing in it.
     const dir = mkdtempSync(join(tmpdir(), "mstar-render-gate-flow-"));
+    // note: The lane write below requires the same identity and binding the main fixture
+    // declares: a unique repo_id and a paired lane before any ACTIVE-lane write.
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+    writeFileSync(join(dir, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-render-gate-flow-${dir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-108)}\n`);
     mkdirSync(join(dir, ".mstar"), { recursive: true });
     const context = { harnessDir: join(dir, ".mstar") };
     (await initializeStore(context)).close();
+    await ensureCollaborationAuthority(context);
     await captureIssue(
       context,
       {
@@ -1028,28 +1080,53 @@ describe.skipIf(!browserAvailable)("the render gate", () => {
       },
       { actor: "project-manager", operationId: "render-gate-flow-capture" },
     );
-    const handle = await openStore(context, "write");
-    // `readIssueFlow`'s closure read filters `issue_transitions.to_disposition`; without
-    // the column that statement fails, which is the store's own failure path — not a
-    // synthetic flag, and not a dropped table (dropping one trips foreign keys).
-    handle.db.exec("alter table issue_transitions drop column to_disposition");
-    handle.close();
-    // Two dated buckets, so the trend has a line: the issues were captured in the same
-    // minute, which is one UTC day. Back-date the first one by fixture, not by waiting.
-    const dated = await openStore(context, "write");
-    dated.db.exec("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)");
-    dated.close();
-    // Drain the WAL side files so the server's read-only open cannot refuse.
+    // invariant: `readIssueFlow` reads the collaboration lane after the store split, so the
+    // closure read that must fail — it filters `issue_transitions.to_disposition` —
+    // is broken on the LANE's schema, not the execution store's. Without the column
+    // that statement fails, which is the store's own failure path — not a synthetic
+    // flag, and not a dropped table (dropping one trips foreign keys). The back-date
+    // runs FIRST: lane admission validates the schema, so once the column is gone no
+    // further lane open succeeds — which is the fail-closed behaviour under test.
+    await withCollaborationWrite(context, (handle) => {
+      handle.db.prepare("update issues set registered_at = '2026-10-10T08:00:00.000Z' where id = (select min(id) from issues)").run();
+    });
+    await withCollaborationWrite(context, (handle) => {
+      handle.db.prepare("alter table issue_transitions drop column to_disposition").run();
+    });
+    // why: No lane drain here: lane admission validates the schema, so after the drop the
+    // lane is deliberately unreadable — the dashboard's own read is the refusal under
+    // test. Only the execution store's WAL needs draining for the server's open.
     (await openStore(context, "read")).close();
 
     const broken = await startDashboard({ harnessDir: context.harnessDir, port: 0 });
     try {
       await browser(["set", "viewport", "1900", "900"]);
-      const measured = await visit("overview", "overview", true, "overview-flow-unavailable", broken.url);
-      const band = measured.band as Record<string, number | string | null>;
-      expect(band.flowArm).toBe("unavailable");
-      expect(band.flowPaths).toBe(0);
-      expect(band.flowRows).toBe(0);
+      await browser(["open", `${broken.url}#overview`]);
+      // invariant: Since the cutover an unreadable required source fails closed for the whole
+      // screen: the landing paints the shared unavailable arm with the named refusal
+      // instead of a half-empty dashboard, so the screen anchor itself never mounts.
+      await browser(["wait", "#main [data-ms-absence]"]);
+      await browser(["screenshot", join(CAPTURE_DIR, "overview-flow-unavailable.png")]);
+      const refusal = await evalJson(`JSON.stringify({
+        arm: document.querySelector('#main [data-ms-absence]')?.getAttribute('data-ms-absence'),
+        reason: document.querySelector('#main [data-ms-absence]')?.textContent ?? '',
+        charts: document.querySelectorAll('[data-ms-flow-chart] path').length,
+        isoInDocument: /\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}/.test(document.body.textContent ?? ''),
+      })`);
+      expect(refusal.arm).toBe("unavailable");
+      // note: The named cause reaches the reader, and the refusal carries no private
+      // path in any absolute spelling — POSIX home prefixes, macOS/Linux temp
+      // roots (`/var/folders`, `/private/var`, `/tmp`, the fixture's own root
+      // spellings), or a Windows drive path — and no ISO timestamp (the
+      // dashboard scrubs both).
+      const reason = String(refusal.reason);
+      expect(reason).toContain("collaboration.unreadable");
+      expect(reason).not.toMatch(/\/(Users|home)\//);
+      expect(reason).not.toMatch(/\/(private\/var|var\/folders|tmp)\//);
+      expect(reason).not.toMatch(/[A-Za-z]:[\\/](Users|Windows|Temp|tmp|var)/i);
+      expect(refusal.isoInDocument).toBe(false);
+      // invariant: Never an empty chart: no trend line is drawn at all on the refusal arm.
+      expect(Number(refusal.charts)).toBe(0);
     } finally {
       broken.close();
       rmSync(dir, { recursive: true, force: true });

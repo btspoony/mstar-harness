@@ -21,7 +21,9 @@ import { isPlainObject } from "./coordination-write.js";
 import { assertSafePathComponent, canonicalizeNearestExisting } from "./path.js";
 import { parseCompassFrontmatter, validateCompassFrontmatter } from "./iteration.js";
 import { canonicalRegisteredPlanPath, resolveRegisteredPlanFile } from "./plan-path.js";
-import { openStore, readStoreAuthority, type StoreContext, type StoreDb } from "./store-db.js";
+import { openStore, readStoreAuthority, StoreError, tableNamesOn, type StoreContext, type StoreDb, type StoreErrorCode } from "./store-db.js";
+import { openCollaborationStore, openRemoteCache, withCollaborationWrite, withRemoteCacheWrite } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { validateWorkflowEntry, type WorkflowEntry } from "./status.js";
 import {
   assertDeliveryRegistrationCoherence,
@@ -106,6 +108,12 @@ export type CatalogExecutionReceipt = {
   catalogRevision: number;
   /** Retained on historical journal receipts; ACTIVE registration returns false. */
   recovered: boolean;
+  /**
+   * invariant: Scoped warnings of a REPLAY, when the committed collaboration effect's
+   * acknowledgement could not be confirmed. Both business effects are committed
+   * either way; the warning names what a replay can (or cannot) repair.
+   */
+  recovery?: { warnings: Array<{ code: string; message: string }> };
 };
 
 
@@ -171,7 +179,6 @@ const DOCUMENT_KINDS: Record<string, true> = {
   guide: true,
   compass: true,
   plan: true,
-  roadmap: true,
   review: true,
   other: true,
 };
@@ -724,16 +731,196 @@ function nowRfc3339(): string {
 
 
 /**
- * Catalog registration recovery shares the native execution transaction:
- * authority identity, epoch, CAS and domain guards are read on its handle.
+ * The store that owns the catalog journal: the reviewed cutover moves
+ * `catalog_operations` into the collaboration lane and drops it from the
+ * execution store, so the journal's owner is decided by which file HOLDS the
+ * table - never by a schema version, which a fenced store keeps advancing.
+ *
+ * shortcut: this probe is a plain read, not serialized against a concurrent
+ * fence; a reader holding the execution handle while a fence commits would see
+ * the pre-fence owner and read a journal the lane now owns. The reviewed cutover
+ * requires every other handle stopped before it fences the source, so no fence
+ * can commit under a live reader. Upgrade: if a fence ever runs beside live
+ * readers, prove the owner under the same lock as the fence.
  */
-async function withJournalWrite<T>(context: StoreContext, fn: (db: StoreDb, generation: { storeId: string; epoch: number }) => T): Promise<T> {
-  // Avoid the execution-store → coordination → catalog-registration cycle.
-  const { withExecutionTransaction } = await import("./execution-store.js");
-  return await withExecutionTransaction(context, (tx) => {
-    assertStoreActive(tx.db);
-    return fn(tx.db, { storeId: tx.storeId, epoch: tx.epoch });
-  });
+function executionOwnsJournal(db: StoreDb): boolean {
+  return tableNamesOn(db).has("catalog_operations");
+}
+
+/**
+ * invariant: The journal's ONE owner. A combined source still holds
+ * `catalog_operations` (execution); a split source names the lane this checkout
+ * resolves — its private remote cache, or the local/mirror domain lane. Read and
+ * write paths take this same verdict, so a row is never written on a file its
+ * readers do not read.
+ */
+type JournalOwner = "combined" | "domain" | "remote-cache";
+
+function journalOwnerOf(context: StoreContext, execution: StoreDb): JournalOwner {
+  if (executionOwnsJournal(execution)) return "combined";
+  return resolveCollaborationLocation(context).mode === "remote" ? "remote-cache" : "domain";
+}
+
+/**
+ * invariant: A bound split checkout that reaches the journal through its private remote cache
+ * must not be told to run `store init`: that verb never creates a remote cache, and the only
+ * supported route to one is the reviewed `remote bind`. The code and the lane's own words stay;
+ * only the recovery this path publishes changes.
+ */
+const REMOTE_CACHE_RECOVERY =
+  "This checkout's remote cache does not exist, and a remote checkout never creates one locally: " +
+  "re-establish it with the reviewed mstar store collaboration remote bind --harness <abs> --input <file|->, then retry.";
+
+/** note: Mark a cache-lane refusal with the remote-specific recovery, preserving its code and message. */
+function withRemoteCacheRecovery(error: unknown): unknown {
+  if (!(error instanceof StoreError) || error.code !== "collaboration.not-initialized") return error;
+  return Object.assign(error, { recovery: REMOTE_CACHE_RECOVERY });
+}
+
+/** note: The remote cache's read handle, with the missing-lane refusal mapped for this path. */
+async function openRemoteJournalLane(context: StoreContext): Promise<{ db: StoreDb; close(): void }> {
+  try {
+    return await openRemoteCache(context, "read");
+  } catch (error) {
+    throw withRemoteCacheRecovery(error);
+  }
+}
+
+/** note: The split owner's read connection; a remote selection never opens the domain lane. */
+async function openJournalLane(
+  context: StoreContext,
+  owner: "domain" | "remote-cache",
+): Promise<{ db: StoreDb; close(): void }> {
+  return owner === "remote-cache"
+    ? await openRemoteJournalLane(context)
+    : await openCollaborationStore(context, "read");
+}
+
+/**
+ * why: A verdict is never a mutation, so the journal read takes no write lock.
+ * `executionDb` stays open (read-only) for the facts execution still owns.
+ */
+async function withJournalRead<T>(
+  context: StoreContext,
+  fn: (db: StoreDb, executionDb: StoreDb) => T,
+): Promise<T> {
+  const execution = await openStore(context, "read");
+  try {
+    const owner = journalOwnerOf(context, execution.db);
+    if (owner === "combined") return fn(execution.db, execution.db);
+    const lane = await openJournalLane(context, owner);
+    try {
+      return fn(lane.db, execution.db);
+    } finally {
+      lane.close();
+    }
+  } finally {
+    execution.close();
+  }
+}
+
+/**
+ * The pending journal row for one workflow on whichever file owns it. Async
+ * because the lane owner is opened through its own admission; a caller outside
+ * an execution transaction resolves it before entering one (the journal is a
+ * cross-file read, never a row of the transaction's own connection).
+ */
+export async function readPendingRegistration(
+  context: StoreContext,
+  workflowId: string,
+): Promise<{ operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null> {
+  return await withJournalRead(context, (db) => pendingRegistrationOf(db, workflowId));
+}
+
+/**
+ * A SPLIT owner's journal connection, held open across ONE execution
+ * transaction so the verdict is re-read under that transaction's lock; `null`
+ * means the execution store owns the journal (a combined source), whose row the
+ * transaction reads itself.
+ *
+ * shortcut: the lane is another database, so the window cannot be closed
+ * completely without a cross-store lock this design refuses; a row committed to
+ * the lane after its in-transaction read and before the execution commit is
+ * still missed. Upgrade: if such a row is ever observed, serialize the two
+ * stores instead of widening this read.
+ */
+export type SplitJournal = {
+  read(workflowId: string): { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null;
+  close(): void;
+};
+
+/** note: The owner verdict is taken once; a split lane then stays open for the caller. */
+export async function openSplitJournal(context: StoreContext): Promise<SplitJournal | null> {
+  const execution = await openStore(context, "read");
+  let owner: JournalOwner;
+  try {
+    owner = journalOwnerOf(context, execution.db);
+  } finally {
+    execution.close();
+  }
+  if (owner === "combined") return null;
+  const lane = await openJournalLane(context, owner);
+  return { read: (workflowId) => pendingRegistrationOf(lane.db, workflowId), close: () => lane.close() };
+}
+
+/**
+ * The pending verdict a transaction may act on: a combined source's row is the
+ * transaction's own connection, a split source's row comes from its held lane.
+ * Both are read at the caller's in-transaction position, never before it.
+ */
+export function pendingRegistrationInTransaction(
+  journal: SplitJournal | null,
+  db: StoreDb,
+  workflowId: string,
+): { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null {
+  return journal === null ? pendingRegistrationOf(db, workflowId) : journal.read(workflowId);
+}
+
+/** note: Release a held split lane whether the transaction it fed committed or refused. */
+export async function withSplitJournal<T>(journal: SplitJournal | null, run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } finally {
+    journal?.close();
+  }
+}
+
+/**
+ * invariant: One journal write lands on the file `journalOwnerOf` names, the
+ * same verdict every reader takes. A combined source transacts on its execution
+ * store exactly as before; a split source writes the lane that owns the journal
+ * (the remote checkout's cache included), while the execution handle only
+ * supplies the facts execution still owns (authority state, registry
+ * membership). The callback stays synchronous: every lane refuses a thenable
+ * before commit.
+ */
+async function withJournalWrite<T>(
+  context: StoreContext,
+  fn: (db: StoreDb, generation: { storeId: string; epoch: number }, executionDb: StoreDb) => T,
+): Promise<T> {
+  const execution = await openStore(context, "read");
+  try {
+    assertStoreActive(execution.db);
+    const owner = journalOwnerOf(context, execution.db);
+    if (owner === "combined") {
+      // why: execution-store imports this module, so a static import would close the
+      // execution-store → coordination → catalog-registration cycle; nothing but the
+      // combined lane's transaction needs it.
+      const { withExecutionTransaction } = await import("./execution-store.js");
+      return await withExecutionTransaction(context, (tx) =>
+        fn(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.db),
+      );
+    }
+    const apply = (handle: { db: StoreDb; authority: { storeId: string; epoch: number } }) =>
+      fn(handle.db, { storeId: handle.authority.storeId, epoch: handle.authority.epoch }, execution.db);
+    return owner === "remote-cache"
+      ? await withRemoteCacheWrite(context, apply).catch((error: unknown) => {
+          throw withRemoteCacheRecovery(error);
+        })
+      : await withCollaborationWrite(context, apply);
+  } finally {
+    execution.close();
+  }
 }
 function refuseActiveCatalogRecovery(db: StoreDb, workflowId: string, recoveryCommand: string): void {
   const active = db.prepare("select 1 from execution_registry where workflow_id = ?").get(workflowId) !== undefined;
@@ -764,14 +951,27 @@ function assertStoreActive(db: StoreDb): void {
   }
 }
 
+/**
+ * why: The shared revisions live on the JOURNAL OWNER's meta singleton — a
+ * combined source keeps them in `store_meta` (execution), while the reviewed
+ * cutover moves them into the lane's `collaboration_meta` together with the
+ * journal (the same table `catalog.ts` reads after the cutover).
+ */
 function readJournalVersions(db: StoreDb): { storeRevision: number; catalogRevision: number } {
-  const row = db.prepare("select revision, catalog_revision from store_meta where id = 1").get() as
-    | { revision?: unknown; catalog_revision?: unknown }
-    | undefined;
+  const metaTable = tableNamesOn(db).has("store_meta") ? "store_meta" : "collaboration_meta";
+  const row = db
+    .prepare(`select revision, catalog_revision from ${metaTable} where id = 1`)
+    .get() as { revision?: unknown; catalog_revision?: unknown } | undefined;
   if (!row || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept an execution registration. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
+    throw new CatalogError("store.not-active", `${metaTable} is missing; the store cannot accept an execution registration. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.`);
   }
   return { storeRevision: row.revision, catalogRevision: row.catalog_revision };
+}
+
+/** note: Advance the shared store revision on the journal owner's own meta singleton. */
+function bumpSharedRevision(db: StoreDb): void {
+  const metaTable = tableNamesOn(db).has("store_meta") ? "store_meta" : "collaboration_meta";
+  db.prepare(`update ${metaTable} set revision = revision + 1 where id = 1`).run();
 }
 
 function readRow(db: StoreDb, operationId: string): JournalRow | undefined {
@@ -791,23 +991,60 @@ function pendingRows(db: StoreDb): JournalRow[] {
  * registration guard and recovery surface. `execution-written` is reported as
  * itself and every other non-committed row as `prepared`; committed or aborted
  * rows are not pending.
+ *
+ * `hasIdentityFailure` is the fact `purge-registration` requires
+ * (`after_versions_json.failure` with the four identity fields): a caller that
+ * offers purge must KNOW the journal carries one, because purge refuses a plain
+ * pending row with `catalog.purge-not-found`.
  */
 export function pendingRegistrationOf(
   db: StoreDb,
   workflowId: string,
-): { operationId: string; phase: "prepared" | "execution-written" } | null {
+): { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null {
   const row = pendingRows(db).find((candidate) => parseJournalWorkflowId(candidate) === workflowId);
   if (row === undefined) return null;
-  return { operationId: row.operation_id, phase: row.phase === "execution-written" ? "execution-written" : "prepared" };
+  return {
+    operationId: row.operation_id,
+    phase: row.phase === "execution-written" ? "execution-written" : "prepared",
+    hasIdentityFailure: identityFailureOf(row) !== undefined,
+  };
 }
 
+/** note: The recorded identity failure of one journal row, or undefined when it holds none. */
+function identityFailureOf(row: JournalRow): {
+  workflow_id: string;
+  snapshot_path: string;
+  snapshot_content_sha256: string;
+  reviewed_identity: string;
+} | undefined {
+  let after: unknown;
+  try { after = JSON.parse(row.after_versions_json); } catch { return undefined; }
+  const failure = isPlainObject(after) ? after.failure : undefined;
+  return isPlainObject(failure)
+    && typeof failure.workflow_id === "string"
+    && typeof failure.snapshot_path === "string"
+    && typeof failure.snapshot_content_sha256 === "string"
+    && typeof failure.reviewed_identity === "string"
+    ? {
+        workflow_id: failure.workflow_id,
+        snapshot_path: failure.snapshot_path,
+        snapshot_content_sha256: failure.snapshot_content_sha256,
+        reviewed_identity: failure.reviewed_identity,
+      }
+    : undefined;
+}
+
+/**
+ * invariant: The aborted row and the owner's shared revision advance on the one
+ * connection that owns both, so abort never leaves the counter behind the row.
+ */
 function recordAborted(db: StoreDb, operationId: string, reason: string): void {
   db.prepare("update catalog_operations set phase = 'aborted', result_json = ?, updated_at = ? where operation_id = ?").run(
     JSON.stringify({ aborted: true, reason, sourceBytesRetained: true }),
     nowRfc3339(),
     operationId,
   );
-  db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+  bumpSharedRevision(db);
 }
 
 
@@ -858,17 +1095,23 @@ export function bindingInputOf(plan: CatalogExecutionPlan): CatalogExecutionBind
  * The committed `catalog_execution_bindings` row records the workflow's
  * association against the revision the ACTIVE transaction published. A
  * different operation cannot replace an existing binding.
+ *
+ * `catalogId` is the id the catalog effect COMMITTED for the binding entity, not
+ * the reviewed delta's spelling: a registration may attach to an existing row at
+ * the reviewed location (whose id differs), and the pin must name the row that
+ * holds it.
  */
 export function writeBinding(
   db: StoreDb,
   plan: CatalogExecutionPlan,
+  catalogId: string,
   bindingInput: CatalogExecutionBindingInput,
   catalogRevision: number,
 ): void {
   const binding = plan.request.delta.binding;
   const row = db
     .prepare("select operation_id, catalog_revision, input_hash from catalog_execution_bindings where workflow_id = ? and catalog_kind = ? and catalog_id = ?")
-    .get(plan.workflowId, binding.catalogKind, binding.catalogId) as
+    .get(plan.workflowId, binding.catalogKind, catalogId) as
     | { operation_id?: unknown; catalog_revision?: unknown; input_hash?: unknown }
     | undefined;
   const pin = stableJson(bindingInput);
@@ -877,14 +1120,14 @@ export function writeBinding(
     if (row.operation_id !== plan.request.operationId) {
       throw new CatalogRegistrationError(
         "catalog.reconcile-conflict",
-        `workflow ${JSON.stringify(plan.workflowId)} is already bound to ${binding.catalogKind} ${JSON.stringify(binding.catalogId)} ` +
+        `workflow ${JSON.stringify(plan.workflowId)} is already bound to ${binding.catalogKind} ${JSON.stringify(catalogId)} ` +
           `by operation ${JSON.stringify(String(row.operation_id))}; this operation cannot replace that binding. Inspect the existing workflow and catalog binding, and use a new workflow id for a distinct registration.`,
       );
     }
     // Idempotent replay of this operation's own binding.
     db.prepare(
       "update catalog_execution_bindings set catalog_revision = ?, input_hash = ?, pin_json = ? where workflow_id = ? and catalog_kind = ? and catalog_id = ?",
-    ).run(catalogRevision, inputHash, pin, plan.workflowId, binding.catalogKind, binding.catalogId);
+    ).run(catalogRevision, inputHash, pin, plan.workflowId, binding.catalogKind, catalogId);
     return;
   }
   db.prepare(
@@ -893,7 +1136,7 @@ export function writeBinding(
   ).run(
     plan.workflowId,
     binding.catalogKind,
-    binding.catalogId,
+    catalogId,
     `workflows/${plan.workflowId}`,
     catalogRevision,
     inputHash,
@@ -925,7 +1168,7 @@ export async function abortCatalogExecution(
   reason?: string,
 ): Promise<CatalogExecutionAbort> {
   const id = requireText(operationId, "operationId");
-  return await withJournalWrite(context, (db) => {
+  return await withJournalWrite(context, (db, _generation, executionDb) => {
     const row = readRow(db, id);
     if (row === undefined) {
       throw new CatalogError("catalog.not-found", `No catalog registration operation ${JSON.stringify(id)} is recorded in this store.`);
@@ -936,7 +1179,7 @@ export async function abortCatalogExecution(
       failReconcile(`operation ${JSON.stringify(id)} is committed (workflow ${JSON.stringify(journal.workflow.workflowId)} is registered); a completed registration is never aborted \u2014 remove that workflow through its own lifecycle instead`);
     }
     refuseActiveCatalogRecovery(
-      db,
+      executionDb,
       journal.workflow.workflowId,
       `mstar catalog reconcile --abort --operation-id ${id}`,
     );
@@ -948,60 +1191,133 @@ export async function abortCatalogExecution(
 
 /** The current store/catalog revisions: what a caller records as the expectation. */
 export async function readCatalogRevisions(context: StoreContext): Promise<CatalogRevisions> {
-  return await withJournalWrite(context, (db) => readJournalVersions(db));
+  // note: The shared revisions live on the JOURNAL OWNER's meta singleton — the lane's
+  // `collaboration_meta` after the fence — never on the execution store the fence left behind.
+  return await withJournalRead(context, (db, executionDb) => {
+    // note: The staged-store refusal stays on the execution handle, exactly as before;
+    // only the revision SOURCE moved to the journal owner.
+    assertStoreActive(executionDb);
+    return readJournalVersions(db);
+  });
 }
 
 
 /**
  * The ONE refusal a pending registration produces, verbatim for the dispatch
- * gate, the handle-taking gate and the active DB registration route.
+ * gate, the handle-taking gate and the active DB registration route. It states
+ * only what is known — the pending phase — because the registration entry
+ * reaches it without a registry row; the caller names root visibility when its
+ * own read proved one.
+ *
+ * invariant: A root-visible workflow's journal settlement is NOT reachable by itself. Both
+ * settlements refuse while the workflow stays registered (`refuseActiveCatalogRecovery`), so the
+ * refusal must name the mandatory lifecycle close FIRST — with the coordinator identity that
+ * alone can perform it — and only then the journal route. Naming a command that refuses is not a
+ * recovery. `reconcile --abort` is the route that always applies to a plain pending journal;
+ * `purge-registration` is offered only where the caller PROVED the journal carries an
+ * identity-failure record, because it refuses one that does not.
  */
 export function refusePendingRegistration(
   workflowId: string,
-  pending: { operationId: string; phase: "prepared" | "execution-written" },
+  pending: { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure?: boolean },
+  rootVisible = false,
 ): never {
+  const closeFirst = rootVisible
+    ? `First stop the active lifecycle with "mstar workflow lifecycle --workflow ${workflowId} --status <completed|stopped|failed> --reason <text>" as its bound coordinator (a registered workflow's journal cannot be settled while it stays active); then `
+    : "Then ";
+  const settle = pending.hasIdentityFailure === true
+    ? `use "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its recorded identity failure in the native store (if the revision is stale, retry with the current revision printed in the refusal)`
+    : `use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon the unregistered journal`;
   throw new CatalogRegistrationError(
     "catalog.registration-pending",
-    `workflow ${JSON.stringify(workflowId)} is root-visible but its catalog registration is ${pending.phase}, not committed ` +
-      `(operation ${JSON.stringify(pending.operationId)}); registration must refuse until the legacy journal is settled. ` +
-      `Use "mstar catalog reconcile --abort --operation-id ${pending.operationId}" to abandon an unregistered journal, or "mstar catalog purge-registration --workflow ${workflowId} --operation ${pending.operationId} --expect <catalog-revision> --actor <role>" to settle its failed registration journal in the native store. If the revision is stale, retry with the current revision printed in the refusal. Both routes retain source bytes.`,
+    `workflow ${JSON.stringify(workflowId)}'s catalog registration is ${pending.phase}, not committed ` +
+      `(operation ${JSON.stringify(pending.operationId)})${rootVisible ? " while the workflow is root-visible" : ""}; registration must refuse until the legacy journal is settled. ` +
+      `${closeFirst}${settle}. Source bytes are retained.`,
   );
 }
 
 /**
- * The registration gate for an ACTIVE execution transaction through its own
- * handle: registry visibility and pending catalog operations are read from the
- * same store.db under the caller's lock. A registered workflow whose catalog
- * operation is not committed refuses `catalog.registration-pending`; no file
- * registration route is consulted.
- * The pending verdict stays defined once, by `pendingRegistrationOf`.
+ * The registration gate for an ACTIVE execution transaction, from facts
+ * resolved OUTSIDE it: registry visibility is the execution store's own row,
+ * while `pending` is the journal verdict read from whichever file OWNS
+ * `catalog_operations` (the reviewed cutover moves it into the collaboration
+ * lane, and a transaction body cannot open that lane).
  *
  * Store-state tolerances stay with the handle owner: a missing store never gets
  * here (the opener refuses `store.not-initialized`), and a `store_meta` that is
  * not ACTIVE keeps the pre-activation exclusion (§7) — a staged store is not a
  * catalog verdict, so it passes through and is never retro-refused here.
  */
-export function assertCatalogExecutionCommittedOn(db: StoreDb, workflowId: string): void {
+export function assertCatalogExecutionCommittedOn(
+  db: StoreDb,
+  workflowId: string,
+  pending: { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null,
+): void {
   const id = requireText(workflowId, "workflowId");
-  if (readStoreAuthority(db).authorityState !== "active") return;
-  if (db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(id) === undefined) return;
-  const pending = pendingRegistrationOf(db, id);
+  if (!catalogVerdictApplies(db, id)) return;
   if (pending === null) return;
-  refusePendingRegistration(id, pending);
+  // note: This caller READ the registry row above, so the refusal may say so.
+  refusePendingRegistration(id, pending, true);
 }
 
 /**
- * Async handle-taking gate. Its remaining callers are OUTSIDE this change's
- * Files list — `coordination.ts:871` (the retained prepare/bind registration
- * gate) and `packages/dsh/src/gates/workflow-selection.ts:869` — so the wrapper
- * and those callers are handed to T21 with the terminal veto sweep rather than
- * cut here (T6 owns only this module's own fixtures).
+ * note: Whether the gate has any verdict to give: ACTIVE authority AND a row in the
+ * execution store's own registry. Both facts are that handle's, so every caller reads
+ * them before it pays for the journal's cross-file read.
  */
-// T21: coordination.ts prepare/bind gate + dsh workflow-selection gate still call this wrapper.
+function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
+  if (readStoreAuthority(db).authorityState !== "active") return false;
+  return db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(workflowId) !== undefined;
+}
+
+/**
+ * invariant: The journal lane this workspace does not hold — a bound remote checkout
+ * whose cache is absent, or a scope with no collaboration store yet. A missing or
+ * staged lane carries no journal row, so it is the same pre-activation exclusion
+ * `store.not-active` already gets: never a catalog verdict, and it never retro-refuses a
+ * selection. A stale binding or unreadable lane is a real misconfiguration and still
+ * propagates.
+ */
+const NO_JOURNAL_LANE: readonly StoreErrorCode[] = ["collaboration.not-initialized", "collaboration.not-active"];
+
+/**
+ * why: Async gate over an already-open execution handle. Registry visibility is
+ * THIS store's own row, while the journal verdict comes from whichever file owns
+ * `catalog_operations` — so the registry is decided first and a workflow this
+ * store does not hold never pays for the cross-file read, nor can a lane it does
+ * not hold refuse it.
+ *
+ * The gate is ADVISORY here: these are two independent reads, never a snapshot
+ * across the databases, so a row committed after either read is not seen by this
+ * call. The authoritative refusal is the in-transaction one
+ * (`pendingRegistrationInTransaction`), which re-reads the verdict under the
+ * committing transaction's own lock.
+ */
+export async function assertCatalogExecutionCommittedWith(
+  context: StoreContext,
+  db: StoreDb,
+  workflowId: string,
+): Promise<void> {
+  const id = requireText(workflowId, "workflowId");
+  if (!catalogVerdictApplies(db, id)) return;
+  let pending: { operationId: string; phase: "prepared" | "execution-written"; hasIdentityFailure: boolean } | null;
+  try {
+    pending = await readPendingRegistration(context, id);
+  } catch (error) {
+    if (error instanceof StoreError && NO_JOURNAL_LANE.includes(error.code)) return;
+    throw error;
+  }
+  assertCatalogExecutionCommittedOn(db, id, pending);
+}
+
+/**
+ * why: Async handle-taking gate for callers outside an execution transaction
+ * (`packages/dsh/src/gates/workflow-selection.ts`, `coordination.ts`).
+ */
 export async function assertCatalogExecutionCommitted(context: StoreContext, workflowId: string): Promise<void> {
   const handle = await openStore(context, "read");
   try {
-    assertCatalogExecutionCommittedOn(handle.db, workflowId);
+    await assertCatalogExecutionCommittedWith(context, handle.db, workflowId);
   } finally {
     handle.close();
   }
@@ -1009,7 +1325,7 @@ export async function assertCatalogExecutionCommitted(context: StoreContext, wor
 
 /** Every pending registration operation, oldest first (recovery discovery). */
 export async function listPendingCatalogRegistrations(context: StoreContext): Promise<PendingCatalogRegistration[]> {
-  return await withJournalWrite(context, (db) =>
+  return await withJournalWrite(context, (db, _generation, executionDb) =>
     pendingRows(db).flatMap((row) => {
       const workflowId = parseJournalWorkflowId(row);
       if (workflowId === undefined) return [];
@@ -1028,7 +1344,8 @@ export async function listPendingCatalogRegistrations(context: StoreContext): Pr
         phase: row.phase === "execution-written" ? ("execution-written" as const) : ("prepared" as const),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        rootVisible: db.prepare("select 1 from execution_registry where workflow_id = ?").get(workflowId) !== undefined,
+        // note: Registry membership is execution's own row, never the journal file's.
+        rootVisible: executionDb.prepare("select 1 from execution_registry where workflow_id = ?").get(workflowId) !== undefined,
       }];
     }),
   );
@@ -1094,14 +1411,9 @@ export async function purgeCatalogRegistration(
     if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `no failed registration record exists for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the matching operation id`);
     }
-    let after: unknown;
-    try { after = JSON.parse(row.after_versions_json); } catch { after = undefined; }
-    const failure = isPlainObject(after) ? after.failure : undefined;
-    if (!isPlainObject(failure) ||
-      failure.workflow_id !== workflowId ||
-      typeof failure.snapshot_path !== "string" ||
-      typeof failure.snapshot_content_sha256 !== "string" ||
-      typeof failure.reviewed_identity !== "string") {
+    // note: ONE identity-failure rule, shared with the pending refusal the gate publishes.
+    const failure = identityFailureOf(row);
+    if (!isPlainObject(failure) || failure.workflow_id !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow; if it is pending and unregistered, abandon it without file changes using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);
     }
     const snapshotPath = resolve(failure.snapshot_path);
@@ -1113,7 +1425,7 @@ export async function purgeCatalogRegistration(
   });
   // Current source bytes, including later edits, remain untouched; only native
   // journal identity and generation govern settlement.
-  return await withJournalWrite(context, (db, generation) => {
+  return await withJournalWrite(context, (db, generation, executionDb) => {
     if (generation.storeId !== initial.generation.storeId || generation.epoch !== initial.generation.epoch) {
       throw new CatalogError("store.operation-conflict", "the selected store identity or authority epoch changed during purge-registration; re-read the pending registration and retry against the current authority");
     }
@@ -1139,7 +1451,7 @@ export async function purgeCatalogRegistration(
     }
     if (row.phase !== "aborted") {
       refuseActiveCatalogRecovery(
-        db,
+        executionDb,
         workflowId,
         `mstar catalog purge-registration --workflow ${workflowId} --operation ${operationId} --expect ${input.expectedCatalogRevision} --actor ${actor}`,
       );
@@ -1170,7 +1482,7 @@ export async function purgeCatalogRegistration(
     };
     db.prepare("update catalog_operations set phase = 'aborted', result_json = ?, updated_at = ? where operation_id = ?")
       .run(JSON.stringify(receipt), timestamp, operationId);
-    db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+    bumpSharedRevision(db);
     return receipt;
   });
 }

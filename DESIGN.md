@@ -369,15 +369,16 @@ agrees, and a cell that drills two levels deep does not.
 | Band (container) | What the list does |
 | --- | --- |
 | **≥ 900px** | All columns, including the wide-only milestone column. Declared widths; the flexible title column gets the remainder (measured at 1900: 786px of title in an 1398px table, no scroll). |
-| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. Below `reflow-table` the collapse is the prototype's own mechanism: the table carries `data-narrow-cols="2"` (or `3`), and `@container` hides `:nth-child(n+3)` on both the header and the body, while the facts the hidden columns carried move into `.row-meta` **inside the record's first cell**. That is one record in one `<tr>`, not a spanning second row — the prototype never adds one, and neither does the product. The prototype's sidebar at 720px shows seven columns and no milestone (`prototype.html:2551`), and the eighth column is exactly what pushed the table past its card. Measured at 720: table 678px in a 678px card, every column whole, title 146px — the widest column on the Issues list. Where a list's own declared widths still exceed the floor, the **card body scrolls sideways** rather than squeezing: at 620 the Issues table scrolls, and every column stays reachable.
-  The floor is `declared + 88`, not `+ 96`, because the **dsh seat scrolls with `overflow-y: auto`**:
-  on a classic-scrollbar platform the vertical bar takes ~15px of a 720px pane, so a card holds
-  663px, not the 678px a macOS gate measures. The iterations set is 568px, so 96 would put its
-  floor at 664px — one pixel past the cliff, and that card would scroll at the approved width on
-  platforms nobody here runs. At 88 the floor is 656px, seven pixels under the classic-scrollbar
-  card; the 720px rendering is unchanged, because the table is `inline-size: 100%` and the floor
-  only decides when scrolling begins. |
-| **480–619px** | Secondary columns are hidden **by rule** (`display: none`), not by overflow, and each yielded fact reappears on the row's second line. Id, title and the screen's one status column keep their declared widths; the flexible title takes the rest (measured at 420 and 619: narrowest cell 80–112px, zero truncated cells, no sideways scroll). |
+| **620–899px** | The prototype's seven columns — the *wide-only* milestone column is hidden by rule (`@container (max-width: 899px)`), and the table keeps a floor of `declared widths + 88px` for the flexible column. Below `reflow-table` the collapse is the prototype's own mechanism: the table carries `data-narrow-cols="2"` (or `3`), and `@container` hides `:nth-child(n+3)` on both the header and the body, while the facts the hidden columns carried move into `.row-meta` **inside the record's first cell**. That is one record in one `<tr>`, not a spanning second row — the prototype never adds one, and neither does the product. The prototype's sidebar at 720px shows seven columns and no milestone (`prototype.html:2551`), and the eighth column is exactly what pushed the table past its card. At 720 the card holds 678px (663px on a classic-scrollbar platform), and every list's floor sits above it — Issues floors at 646px of declared widths + 88 = 734px — so the **card body scrolls sideways** rather than squeezing: every prototype column stays whole and reachable while the card and the page never overflow (`render-gate.test.ts` pins that scroll for Issues, Workflows and Iterations at 720, and for Issues at 620).
+  The floor is `declared + 88`: the 88 is the flexible column's own measure (~13 characters at
+  13px — a title's first words rather than its first letter), not a per-list scroll margin, and
+  the card it keeps a margin against is the **classic-scrollbar** one: the dsh seat scrolls with
+  `overflow-y: auto`, so on such a platform the vertical bar takes ~15px of a 720px pane and a
+  card holds 663px, not the 678px a macOS gate measures. The table is `inline-size: 100%`, so
+  the floor only decides when scrolling begins; with the declared widths every list's floor is
+  above the card at 720 on either platform, so each list scrolls inside its card at the approved
+  width instead of squeezing. |
+| **480–619px** | Secondary columns are hidden **by rule** (`display: none`), not by overflow, and each yielded fact reappears in the record's first cell as its `.row-meta` line. The columns collapse to the prototype's own 20%/80% split (`prototype.html:705-706`), and the meta line is one line with the prototype's ellipsis clip (`:718`) — a fact folds rather than reflows, and a record stays exactly two lines (measured at 420 and 619: no sideways scroll). |
 | **≤ 299px** | The collapsed table keeps the documented 300px floor and scrolls inside its own card. The card is narrower than the summary's four facts, so the summary line overflows its own box instead of reading as one measured line; the facts are all painted, the line keeps the title's baseline, and the page itself never scrolls sideways. |
 
 Two rules make this hold, and both are the defects that shipped:
@@ -395,30 +396,23 @@ Two rules make this hold, and both are the defects that shipped:
 A hidden column costs no width: the `<colgroup>` is gone, so a `display: none` cell no longer
 leaves a column's share behind it.
 
-The collapsed record's second line is a **row of its own spanning the primary columns**, not a
-second line inside the first cell. Inside that cell it only ever had the cell's width — 68px of
-an 80px id column, which rendered `critical · op…` — while a spanning row gives the facts the
-row's width and leaves both the header and the column policy untouched (the span is the primary
-count: a span over the hidden columns re-opens them under `table-layout: fixed`). Its facts wrap
-rather than truncate, so a fact is never cut in half.
+The collapsed record's second line lives **inside the first cell** as its `.row-meta` block, not
+in a spanning row (`prototype.html:701-720`, and the product follows: `DataTable` renders the
+meta in the first `<td>` of the same `<tr>`). One record is one row, so the header and the
+column policy stay untouched, and no span can re-open a hidden column under
+`table-layout: fixed` because there is none. Its bounds are deliberate and part of the contract:
 
-**What that trade costs, and where it stops.** The second line is an extra `<tr>`, so a screen
-reader announces a five-record list as ten rows, and the spanning cell has no header
-association. Its bounds are deliberate and part of the contract:
+- **list variant only** — a detail table carries no meta and keeps its own row rules;
+- **below the collapse floor only** (`reflow-table`, 620px of container) — above it the facts
+  are columns again and no meta line paints;
+- **one line, ellipsis-clipped** — the meta never wraps a fact onto a third line, so a record
+  is exactly two lines: the primary cell, then its meta;
+- **interaction unchanged** — the meta is part of the first cell, so the row keeps its pointer
+  handler and its one keyboard stop; a tap or an Enter still activates the record, by the
+  shortest path each input has.
 
-- **list variant only** — a detail table has no second line and keeps its own row rules;
-- **below the collapse floor only** (620px of container) — above it the facts are columns again
-  and there is no second row in the DOM tree's rendered form;
-- **one spanned cell** across exactly the visible primary columns, never a second grid;
-- **non-interactive facts**: the row carries no tab stop and no key handler, so keyboard order
-  stays one stop per record. It does carry the row's pointer handler — at the width the product
-  lives in this row is roughly half of the record's painted area, and a tap on it must navigate
-  like a tap on the row above. A mouse user and a keyboard user reach the same destination by
-  the shortest path each has.
-
-The alternative — keeping the facts in the first cell — cannot show them whole, because that
-cell is 80px. A cell-sized second line is a truncation dressed as a layout, so the extra row is
-the cheaper trade until `DataTable` grows a column-aware second line.
+The clip is the prototype's own shape for a collapsed record, not a lost fact: the column
+returns with its facts when the band widens.
 
 A **screen title never stacks, and never escapes its frame.** CJK breaks between every glyph, so
 a squeezed head set a two-glyph title as one glyph per line (measured: a 30.4px, 2-line box at a
@@ -527,36 +521,46 @@ The screen is the prototype's, in its order — **as of the confirmed baseline
 (the dashboard alignment change), which removed every document block**:
 
 ```
-.detail-head        title, the roadmap's direction above the identity meta
-                    (id · lifecycle · Revision N · N open issues), then the roadmap's
-                    presence chip and the catalog path
-.subtabs            Roadmap / Issues / Iterations, each with its count
-.panel              the milestone timeline — one node per milestone, target-ordered,
-                    missing targets last, plus one trailing unassigned-issues node
+.detail-head        title, the project's description above the identity meta
+                    (id · lifecycle · N open issues)
+.panel              the milestone timeline — one node per milestone in ordinal order (the
+                    milestone's stored position), plus one trailing unassigned-issues node
 .panel              the milestone board (writable), one row per milestone
+.subtabs            Issues / Iterations, each with its count
 ```
 
-The catalog-identity panel, the roadmap-authority panel, the stored-markdown disclosure
-and the stored-facts panel are **removed** with the user's decision; the direction moved
-into the header (falling back to the catalog description when the roadmap declares none;
-both absent renders nothing). The roadmap-presence chip and the location line stay.
+The milestone body is the screen's **default body, not a tab**. The catalog-identity
+panel, the roadmap-authority panel, the stored-markdown disclosure, the stored-facts
+panel and the roadmap-presence chip are **removed** with the roadmap domain; the header
+line is the project's own description (none renders nothing). The head renders the
+identity meta only — id, lifecycle and open-issue count — and no catalog path.
 
-Each milestone row carries four tallies (`N open`, `N resolved`, `N retired without
+Each milestone row carries its planned effort — `<n> sessions`, or the localized word for
+*unestimated* when the count is null — and four tallies (`N open`, `N resolved`, `N retired without
 resolution`, `N total`), each with its own `data-ms-count` hook so a test can pin the
 number rather than the label. The issues it owns render as compact id chips, toned by
-disposition, with the settled ones folded into `+N <disposition>`. Each timeline node
-carries the retired-over-total pair and the open count; a milestone with no issues still
-renders its node.
+disposition, with the settled ones folded into `+N <disposition>`. Each timeline node's
+status line reads `<n> sessions · <status>`, or `unestimated · <status>`, above the
+retired-over-total pair and the open count; a milestone with no issues still renders its
+node, and the trailing unassigned-issues node carries no effort text.
 
 **The milestone board is the page's only write surface**: a create form carrying **name
-and target only** (the engine's add verb has no status field — creation always inserts
-`planned`, and status is changed through the edit control), per-milestone inline edit
-(name / target / status), an assign picker over the project's open unassigned issues
+and effort sessions only** (the engine's add verb has no status field — creation always
+inserts `planned`, and status is changed through the edit control; a whole number of at
+least 1, an empty value meaning unestimated), per-milestone inline edit
+(name / effort sessions / status), an assign picker over the project's open unassigned issues
 (stating the 50-row cap when it applies), per-chip unassign, and a two-step inline remove
 confirm behind which the engine's own emptiness rule answers — a non-empty removal is attempted and its
 `milestone.not-empty` refusal surfaced verbatim, then the read reloads. Every write goes
 through one engine verb with the read's own store revision (contract C1/C2); no
 optimistic state survives a refusal.
+
+**The effort field draws a text input, not a number input.** The prototype's create form and
+the screen's create and edit controls all use `type="text"` with `inputMode="numeric"`: a
+`type="number"` input sanitises text that is not a number to an empty value, and that empty
+value would be sent as `null` — a typo silently clearing a stored estimate. The raw
+keystrokes reach the screen's own check instead, which refuses anything that is not a whole
+number with a visible, announced message; the range (at least 1) stays the engine's refusal.
 
 **One thing this screen has that the prototype cannot**: truncation. The prototype's
 milestone name is plain text in static HTML with nothing to ellipsis. Ours must fit
@@ -572,7 +576,7 @@ rewriting rather than patching, which is what eventually happened.
 ## A baseline offset is not a defect until you measure the prototype's
 
 The milestone board's head is a flex line whose parts carry different type sizes: the name
-at 13px, the status at 12px, the id and date at 10-11px. Their `top` values therefore differ
+at 13px, the status at 12px, the id and effort line at 10-11px. Their `top` values therefore differ
 even when the line is perfectly aligned — a 13px ascender starts higher than a 10px one.
 
 Measured `top` spread across that line:
@@ -1260,7 +1264,7 @@ rows: 0        before
 rows: 1        after
 ```
 
-The board's content was there — the milestone's name, status, target and `4/14` counts all
+The board's content was there — the milestone's name, status, effort line and `4/14` counts all
 rendered — but its row wore the generic `.row` class where the prototype has
 `.milestone-row` (`padding: 7px 0; border-bottom: 1px solid`). `.row` supplies a different
 rhythm and no per-row padding. `Row` gained a `rowClass` prop and the board passes it.
@@ -1471,8 +1475,8 @@ Measured on the three milestone states:
 prototype's colour" are different questions, and only the first was asked.
 
 **2. The milestone row was two rows in the prototype and one row here.** The prototype's
-`.milestone-top` (dot, name, target) and `.milestone-foot` (bar, counts) stack. As a single
-flex line at 360px, the target broke across lines and `5/14 · 9 open` split in two. The row is
+`.milestone-top` (dot, name, effort line) and `.milestone-foot` (bar, counts) stack. As a single
+flex line at 360px, the effort line broke across lines and `5/14 · 9 open` split in two. The row is
 now the prototype's two divs.
 
 **3. A dead rule was setting the layout.** `base.css` styled `.milestone-row` as a one-line

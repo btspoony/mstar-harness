@@ -14,16 +14,16 @@ Script hooks: `agent(prompt, opts?)`, `parallel(thunks)`, `pipeline(items, ...st
 
 Supported `schema` subset (object-rooted): `type`, `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, `oneOf`, plus the ignored annotations `description` / `title` / `default` / `examples`. Anything else (`pattern`, `format`, numeric bounds) is fatal.
 
-**Read-only guarantee.** Every seat is a delegated child with approval pinned to `never`: a seat can depend on no file write, so each script returns its whole payload in the result and the caller persists anything durable. Each prompt opens with the Assignment header below — header first, because the engine reads only the header region and resolves the role persona from `Execute as` (the dsh gate compiled into the package's `dist/`; its source is `src/gates/role-persona.ts` at the package root):
+**Read-only guarantee.** Every seat is a delegated child with approval pinned to `never`: a seat can depend on no file write, so each script returns its whole payload in the result and the caller persists anything durable. Each prompt opens with the Assignment front matter below — front matter first, because the engine reads it and resolves the role persona from `execute_as` (the dsh gate compiled into the package's `dist/`; its source is `src/gates/role-persona.ts` at the package root):
 
 ```markdown
-## Assignment
-
-Execute as: <role-id>
-Delegation: forbidden
-Task category: audit
-**Budget (review / QC seats)**: /1 round — one pass over the assigned scope
-**Return shape (review / QC seats)**: the result envelope; stop when the assigned scope is covered
+---
+execute_as: <role-id>
+delegation: forbidden
+task_category: audit
+budget: /1 round — one pass over the assigned scope
+return_shape: the result envelope; stop when the assigned scope is covered
+---
 ```
 
 ## Seat count — which carrier runs N seats
@@ -32,7 +32,7 @@ Task category: audit
 
 | Operator path | Script | Seats |
 |---|---|---|
-| Plan QC tri (`Execution mode: sdd`, conversation-only review) | § 1 `mstar-qc-tri` | 3 (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) |
+| Plan QC tri (`execution_mode: sdd`, conversation-only review) | § 1 `mstar-qc-tri` | 3 (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) |
 | `/codebase-audit` large-repo category fan-out | § 2 `mstar-audit-fanout` | 9 (one per audit category) |
 | `/amazing-pr-review deep` | § 3 `mstar-pr-seats` | 3–4 (2–3 domain + optional cross-domain security) |
 | `/amazing-pr-review` default tier, seats kept off the durable teammate budget | § 3 `mstar-pr-seats` | 2 domain lenses the tier selected |
@@ -40,11 +40,11 @@ Task category: audit
 
 ## 1. `mstar-qc-tri` — plan QC tri-review
 
-**File** `@mstar-harness/dsh/workflows/mstar-qc-tri.js` (this repo: `packages/dsh/workflows/mstar-qc-tri.js`) · **Use** the changed-scope plan QC tri on a dsh host instead of three `subagent` dispatches; legal only when the Assignment declares **conversation-only review** (`QC report path: N/A`) — the caller persists `{SDD_DIR}/review/qc1.md` … `qc3.md` from the returned envelopes. A plan-backed QC seat that must write its own report routes through a writable channel (`dsh.md` § QC default). Three seats are within the child pool (`maxActiveSubagents`, default 8) by construction — no chunking.
+**File** `@mstar-harness/dsh/workflows/mstar-qc-tri.js` (this repo: `packages/dsh/workflows/mstar-qc-tri.js`) · **Use** the changed-scope plan QC tri on a dsh host instead of three `subagent` dispatches; legal only when the Assignment declares **conversation-only review** (front matter `qc_report_path: N/A`) — the caller persists `{SDD_DIR}/review/qc1.md` … `qc3.md` from the returned envelopes. A plan-backed QC seat that must write its own report routes through a writable channel (`dsh.md` § QC default). Three seats are within the child pool (`maxActiveSubagents`, default 8) by construction — no chunking.
 
 **`meta`**
 ```json
-{ "name": "mstar-qc-tri", "description": "Plan QC tri-review: three independent read-only QC seats over one review range, each returning a verdict envelope.", "whenToUse": "dsh host, Execution mode: sdd — the changed-scope plan QC tri instead of three subagent dispatches.", "phases": [{ "title": "qc-tri", "detail": "Three concurrent read-only QC seats over the same review range." }] }
+{ "name": "mstar-qc-tri", "description": "Plan QC tri-review: three independent read-only QC seats over one review range, each returning a verdict envelope.", "whenToUse": "dsh host, execution_mode: sdd — the changed-scope plan QC tri instead of three subagent dispatches.", "phases": [{ "title": "qc-tri", "detail": "Three concurrent read-only QC seats over the same review range." }] }
 ```
 
 `args` — all six are required strings; the guard throws naming every missing key, and `sddDir` loses a trailing slash before the report paths are built:
@@ -98,7 +98,7 @@ Task category: audit
 
 **File** `@mstar-harness/dsh/workflows/mstar-review-single.js` (this repo: `packages/dsh/workflows/mstar-review-single.js`) · **Use** one fresh-context SDD task reviewer that must not consume a durable teammate seat (a teammate is durable and the pool is finite). The run costs one `workflow-run` node instead of a subagent card — the price of keeping the reviewer off the durable budget; one seat is far below the child pool, so no chunking applies.
 
-**This is Mode A, the SDD task reviewer, and the only mode it has.** The argument guard requires the task fields, so a PR or audit review cannot be routed here; the header's `Task category` is therefore not `audit` (an `audit` category selects `code-reviewer` Mode B and would run the wrong workflow). Writable work never uses this route.
+**This is Mode A, the SDD task reviewer, and the only mode it has.** The argument guard requires the task fields, so a PR or audit review cannot be routed here; the front matter `task_category` is therefore not `audit` (an `audit` category selects `code-reviewer` Mode B and would run the wrong workflow). Writable work never uses this route.
 
 **`meta`**
 ```json

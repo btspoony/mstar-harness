@@ -1,39 +1,37 @@
-/**
- * The host's envelope handling for the Projects pair, and the two facts this pair
- * is the only place to get wrong:
- *
- *  - the feature set is the fixed three with `Roadmap` permanently default — never
- *    "the first non-empty";
- *  - a project with no roadmap authority row is `absent`: not an empty board, not a
- *    hidden row, and `_default` is a real row that can carry it.
- */
+/** see packages/cli/web/projects-data.test.ts - The host's envelope handling for the Projects pair, and the two facts this pair is the only place to get wrong: - the milestone body reads the project-scoped milestone view, which needs no execution store — a degraded read is its own arm, never a flattened null; - the feature set is the fixed two with `Issues` permanently default — never "the first non-empty" — and no tab, route or label named roadmap survives. */
 import { describe, expect, test } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ProjectListDTO, RoadmapDTO } from "@mstar-harness/engine";
+import type { MilestoneRead, OverviewDTO, ProjectListDTO } from "@mstar-harness/engine";
 import {
   DEFAULT_PROJECT_FEATURE,
   PROJECT_FEATURES,
   ProjectDetail,
   Projects,
   copyFor,
+  milestonesArm,
   projectIdentity,
-  roadmapBody,
-  roadmapFeatureArm,
+  projectListModel,
 } from "@mstar-harness/ui";
 
 import {
+  MILESTONE_WRITE_PATH,
+  applyMilestoneFollowUp,
+  milestoneWriteFollowUp,
+  milestoneWriteStarted,
+  type MilestonePageState,
   projectDetailCopy,
-  projectRoadmapPath,
+  projectMilestonesPath,
   projectOptions,
   projectsCopy,
   projectsOutcome,
+  readProjectMilestones,
   readProjects,
-  readRoadmap,
-  roadmapOutcome,
+  writeMilestone,
 } from "./projects-data";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -68,26 +66,72 @@ const listEnvelope = (
   generation: number | null = 7,
 ) => ({ data: { items, total } as ProjectListDTO, projection: { ...projection, generation } });
 
-const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
+/** note: An explicit partial observation, as a source that could not prove its scope reports. */
+const partialObservation = {
+  scope: { kind: "query" as const, key: "projects" },
+  completeness: "partial" as const,
+  asOf: "2026-11-21T00:00:00.000Z",
+  authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+  revision: 3,
+  catalogRevision: 1,
+  code: "collaboration.observation-incomplete",
+};
+
+const milestoneRead = (over: Partial<MilestoneRead> = {}): MilestoneRead => ({
   projectId: "engine",
-  catalog: catalogEntry() as unknown as RoadmapDTO["catalog"],
-  authority: { state: "present", revision: 7, contentHash: "sha256:abcd1234" },
-  content: {
-    contentMarkdown: "## Direction\n\nOne product, two hosts.",
-    frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
-    direction: "One product, two hosts.",
-    goals: [{ ordinal: 1, parentOrdinal: null, checked: true, title: "One design system", body: "" }],
-    milestones: [],
-    sections: [],
-  } as unknown as RoadmapDTO["content"],
-  milestones: {
-    projectId: "engine",
-    milestones: [],
-    issues: [],
-    unassignedIssues: 0,
-  },
+  milestones: [
+    {
+      milestoneId: "9f2c4a10",
+      projectId: "engine",
+      name: "Release the shared layer",
+      effortSessions: 12,
+      status: "active",
+      ordinal: 0,
+      revision: 2,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-02T00:00:00.000Z",
+      totalIssues: 10,
+      openIssues: 4,
+      resolvedIssues: 6,
+      otherRetiredIssues: 0,
+    },
+  ],
+  issues: [
+    { id: "I-000870", title: "Tone disagrees", acceptance: "", disposition: "open", revision: 1, milestoneId: "9f2c4a10" },
+  ],
+  unassignedIssues: 3,
   ...over,
-}) as RoadmapDTO;
+});
+
+const overview = (milestones: OverviewDTO["milestones"]): OverviewDTO => ({
+  projectId: "engine",
+  workflows: { state: "read", data: { items: [], total: 0 } },
+  residuals: { state: "read", data: { open: 0, bySeverity: { critical: 0, high: 0, medium: 0, low: 0, nit: 0 } } },
+  milestones,
+  latestIteration: { state: "read", data: null },
+  issueFlow: { state: "read", data: { buckets: [], incompleteHistory: false } },
+});
+
+const overviewEnvelope = (data: OverviewDTO, extra: Record<string, unknown> = {}) => ({
+  data,
+  projection,
+  storeRevision: 41,
+  catalogRevision: 1,
+  collaboration: null,
+  execution: null,
+  ...extra,
+});
+
+/** see packages/engine/src/store-read.ts - the standalone milestone view's envelope. */
+const milestonesEnvelope = (data: MilestoneRead, extra: Record<string, unknown> = {}) => ({
+  data,
+  projection,
+  storeRevision: 41,
+  catalogRevision: 1,
+  collaboration: null,
+  execution: null,
+  ...extra,
+});
 
 const renderList = (items: ProjectListDTO["items"], total = items.length, generation: number | null = 7): string => {
   const outcome = projectsOutcome({ status: "ready", envelope: listEnvelope(items, total, generation) });
@@ -96,6 +140,25 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
 };
 
 describe("the projects list", () => {
+  test("a required collaboration gap is a failed read, not an empty project list", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          ...listEnvelope([project()]),
+          storeRevision: 1,
+          catalogRevision: 1,
+          collaboration: partialObservation,
+          execution: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readProjects(gapped);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
+    expect(projectsOutcome(result).kind).toBe("failed");
+  });
+
   test("outcome 1 — a healthy read lists the projects with their open counts", () => {
     const html = renderList([project(), project({ id: "_default", title: "Default" }, 0)]);
     expect(html).toContain("engine");
@@ -136,83 +199,55 @@ describe("the projects list", () => {
   });
 });
 
-describe("the roadmap read", () => {
-  test("the path scopes to one project", () => {
-    expect(projectRoadmapPath("engine")).toBe("/api/roadmap?project=engine");
-    expect(projectRoadmapPath("a/b")).toBe("/api/roadmap?project=a%2Fb");
+describe("the milestone read", () => {
+  test("the path scopes the milestone read to one project", () => {
+    expect(projectMilestonesPath("engine")).toBe("/api/milestones?project=engine");
+    expect(projectMilestonesPath("a/b")).toBe("/api/milestones?project=a%2Fb");
   });
 
-  test("a project with a roadmap row resolves a populated body", async () => {
+  test("a populated milestones member resolves a populated body", async () => {
     const ok = (async () =>
-      new Response(JSON.stringify({ data: roadmap(), projection }), {
+      new Response(JSON.stringify(milestonesEnvelope(milestoneRead())), {
         status: 200,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
-    const result = await readRoadmap(ok, "engine");
+    const result = await readProjectMilestones(ok, "engine");
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
-    expect(result.identity.projectId).toBe("engine");
-    expect(result.roadmap.kind).toBe("populated");
+    expect(result.milestones.kind).toBe("populated");
+    if (result.milestones.kind !== "populated") return;
+    expect(result.milestones.value.milestones.map((milestone) => milestone.name)).toEqual(["Release the shared layer"]);
+    expect(result.milestones.value.unassignedIssues).toBe(3);
   });
 
-  test("no roadmap authority row is ABSENT — and the head keeps the store's own facts", async () => {
-    // An absent authority row still ships a catalog entry. The head must be built
-    // from it: a synthesised title, `lifecycle: "unknown"` and a guessed path would
-    // be three invented facts on a page whose subject is what the store knows.
-    const absent = (async () =>
+  test("an empty milestone set is the empty arm, not an absence", async () => {
+    const ok = (async () =>
       new Response(
-        JSON.stringify({
-          data: roadmap({
-            catalog: catalogEntry({ id: "_default", title: "Default", lifecycle: "staging" }) as never,
-            authority: { state: "absent" } as never,
-          }),
-          projection,
-        }),
+        JSON.stringify(milestonesEnvelope(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 }))),
         { status: 200, headers: { "content-type": "application/json" } },
       )) as unknown as typeof fetch;
-    const result = await readRoadmap(absent, "_default");
-    expect(result.status).toBe("ready");
-    if (result.status !== "ready") return;
-    expect(result.roadmap.kind).toBe("absent");
-    // From the catalog, not from the route id.
-    expect(result.identity.projectId).toBe("_default");
-    expect(result.identity.title).toBe("Default");
-    expect(result.identity.lifecycle).toBe("staging");
-    expect(result.identity.path).toBe("projects:engine");
+    const result = await readProjectMilestones(ok, "engine");
+    expect(result).toMatchObject({ status: "ready", milestones: { kind: "empty" } });
   });
 
-  test("a roadmap with no content at all is empty, a different arm", () => {
-    // Nothing to act on: no direction, no goals, no milestones, no stored markdown.
-    const bare = roadmap({ content: null } as Partial<RoadmapDTO>);
-    expect(roadmapBody(roadmapFeatureArm({ data: bare, projection })).kind).toBe("empty");
+  test("a degraded member keeps its own arm and reason", async () => {
+    const degraded = (async () =>
+      new Response(
+        // see packages/cli/web/projects-data.ts - a degraded read is the route's own refusal.
+        JSON.stringify({ error: { code: "collaboration.not-initialized", message: "the milestone read could not be completed" } }),
+        { status: 503, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readProjectMilestones(degraded, "engine");
+    expect(result).toMatchObject({ status: "error", message: "the milestone read could not be completed" });
   });
 
-  test("a roadmap that reads but is unprojected is still absent, not unavailable", async () => {
-    // `data: null` is an absence whether or not a projection exists; the roadmap is
-    // not a projected view, so a null generation must not turn absence into failure.
-    const unprojected = (async () =>
-      new Response(JSON.stringify({ data: null, projection: { ...projection, generation: null } }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      })) as unknown as typeof fetch;
-    const result = await readRoadmap(unprojected, "engine");
-    expect(result.status).toBe("ready");
-    if (result.status !== "ready") return;
-    expect(result.roadmap.kind).toBe("absent");
-  });
-
-  test("a 404 is absent, through the same outcome", async () => {
-    const notFound = (async () =>
-      new Response(JSON.stringify({ error: { code: "not-found", message: "no such project" } }), {
-        status: 404,
-        headers: { "content-type": "application/json" },
-      })) as unknown as typeof fetch;
-    const result = await readRoadmap(notFound, "gone");
-    expect(result.status).toBe("absent");
-    const outcome = roadmapOutcome(result, "gone");
-    expect(outcome.kind).toBe("ready");
-    if (outcome.kind !== "ready") return;
-    expect(outcome.roadmap.kind).toBe("absent");
+  test("a required collaboration gap is a failure, never an empty board", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify(milestonesEnvelope(milestoneRead(), { collaboration: partialObservation })),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    expect(await readProjectMilestones(gapped, "engine")).toMatchObject({ status: "error" });
   });
 
   test("a refusal is a failure, not an absence", async () => {
@@ -221,19 +256,122 @@ describe("the roadmap read", () => {
         status: 503,
         headers: { "content-type": "application/json" },
       })) as unknown as typeof fetch;
-    expect(await readRoadmap(refused, "engine")).toEqual({ status: "error", message: "the store is staged" });
+    expect(await readProjectMilestones(refused, "engine")).toEqual({ status: "error", message: "the store is staged" });
+  });
+});
+
+describe("the dashboard milestone write channel", () => {
+  /** see packages/cli/web/projects-data.test.ts - A fetch that records the request and answers one settled response. */
+  const recording = (answer: { status: number; body: unknown }) => {
+    const calls: Array<{ url: string; method: string; body: unknown }> = [];
+    const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({
+        url: String(input),
+        method: init?.method ?? "GET",
+        body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+      });
+      return new Response(JSON.stringify(answer.body), {
+        status: answer.status,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    return { calls, fetchImpl };
+  };
+
+  test("the write posts the verb, the same read's revision and the operation id", async () => {
+    const read = recording({
+      status: 200,
+      body: milestonesEnvelope(milestoneRead()),
+    });
+    const observed = await readProjectMilestones(read.fetchImpl, "engine");
+    expect(observed).toMatchObject({ status: "ready", storeRevision: 41 });
+
+    const write = recording({ status: 200, body: { data: { milestoneId: "m-new", revision: 1 } } });
+    const result = await writeMilestone(write.fetchImpl, {
+      verb: "create",
+      projectId: "engine",
+      input: { name: "New milestone", effortSessions: null, ordinal: 1 },
+      operationId: "op-1",
+      expectedStoreRevision: 41,
+    });
+    expect(result.status).toBe("ok");
+    expect(write.calls[0]).toEqual({
+      url: MILESTONE_WRITE_PATH,
+      method: "POST",
+      body: {
+        verb: "create",
+        projectId: "engine",
+        input: { name: "New milestone", effortSessions: null, ordinal: 1 },
+        operationId: "op-1",
+        expectedStoreRevision: 41,
+      },
+    });
+  });
+
+  test("a stale observation is refused with the store's own revision-conflict, never a silent success", async () => {
+    const write = recording({
+      status: 500,
+      body: { error: { code: "milestone.revision-conflict", message: "[milestone.revision-conflict] the store moved" } },
+    });
+    const result = await writeMilestone(write.fetchImpl, {
+      verb: "update",
+      projectId: "engine",
+      milestoneId: "9f2c4a10",
+      patch: { name: "Renamed" },
+      operationId: "op-2",
+      expectedStoreRevision: 12,
+    });
+    expect(result).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
+    if (result.status !== "refused") return;
+    expect(result.message).toContain("milestone.revision-conflict");
+  });
+
+  test("a transport failure is its own code, so a retry can keep its operation id", async () => {
+    const failing = (async () => {
+      throw new Error("connection refused");
+    }) as unknown as typeof fetch;
+    const result = await writeMilestone(failing, {
+      verb: "remove",
+      projectId: "engine",
+      milestoneId: "9f2c4a10",
+      operationId: "op-3",
+      expectedStoreRevision: 12,
+    });
+    expect(result).toMatchObject({ status: "refused", code: "transport-error" });
+  });
+
+  test("an assignment carries the issue's own revision beside the store revision", async () => {
+    const write = recording({ status: 200, body: { data: { changed: true } } });
+    await writeMilestone(write.fetchImpl, {
+      verb: "assign",
+      projectId: "engine",
+      issueId: "I-000870",
+      milestoneId: "9f2c4a10",
+      issueRevision: 3,
+      operationId: "op-4",
+      expectedStoreRevision: 41,
+    });
+    expect(write.calls[0]?.body).toMatchObject({
+      verb: "assign",
+      issueId: "I-000870",
+      milestoneId: "9f2c4a10",
+      issueRevision: 3,
+      expectedStoreRevision: 41,
+    });
   });
 });
 
 describe("the detail's fixed feature set", () => {
+  const listModel = () => projectListModel(listEnvelope([project()]));
   const render = (feature: (typeof PROJECT_FEATURES)[number] = DEFAULT_PROJECT_FEATURE): string => {
-    const arm = roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }));
+    const rows = listModel().rows;
+    if (rows.kind !== "populated") throw new Error("expected populated rows");
     return renderToStaticMarkup(
       createElement(ProjectDetail, {
-        identity: projectIdentity(roadmap().catalog),
+        identity: projectIdentity(rows.value[0]!),
         feature,
         onFeatureChange: () => {},
-        roadmap: arm,
+        milestones: milestonesArm({ state: "read", data: milestoneRead() }),
         onBack: () => {},
         issues: createElement("div", { "data-ms-scoped-list": "issues" }),
         iterations: createElement("div", { "data-ms-scoped-list": "iterations" }),
@@ -242,23 +380,36 @@ describe("the detail's fixed feature set", () => {
     );
   };
 
-  test("three tabs, in the product's fixed order", () => {
-    expect(PROJECT_FEATURES).toEqual(["roadmap", "issues", "iterations"]);
+  test("two tabs, in the product's fixed order, and no roadmap label", () => {
+    expect(PROJECT_FEATURES).toEqual(["issues", "iterations"]);
     const html = render();
-    const order = ["Roadmap", "Issues", "Iterations"].map((label) => html.indexOf(label));
+    const order = ["Issues", "Iterations"].map((label) => html.indexOf(label));
     expect(order).toEqual([...order].sort((a, b) => a - b));
     expect(order.every((index) => index >= 0)).toBe(true);
+    expect(html.match(/role="tab"/g)?.length).toBe(2);
+    // see packages/cli/web/projects-data.test.ts - // No tab, route or label named roadmap survives.
+    expect(html).not.toContain("Roadmap");
+    expect(html).not.toContain("roadmap");
   });
 
-  test("Roadmap is the permanent default", () => {
-    expect(DEFAULT_PROJECT_FEATURE).toBe("roadmap");
-    // The default is a constant, not "the first tab that has content": selecting
-    // `issues` moves the selection and leaves the default where it was.
+  test("Issues is the permanent default", () => {
+    expect(DEFAULT_PROJECT_FEATURE).toBe("issues");
+    // see packages/cli/web/projects-data.test.ts - // The default is a constant, not "the first tab that has content": selecting
+    // `iterations` moves the selection and leaves the default where it was.
+    const iterations = render("iterations");
+    expect(iterations).toContain('data-ms-feature="iterations"');
     const issues = render("issues");
     expect(issues).toContain('data-ms-feature="issues"');
-    const roadmapTab = render("roadmap");
-    expect(roadmapTab).toContain('data-ms-feature="roadmap"');
-    expect(roadmapTab).not.toContain('data-ms-feature="issues"');
+    expect(issues).not.toContain('data-ms-feature="iterations"');
+  });
+
+  test("the milestone body renders from the rollup on every feature", () => {
+    const html = render();
+    expect(html).toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-milestone-timeline=""');
+    expect(html).toContain("Release the shared layer");
+    // see packages/cli/web/projects-data.test.ts - // The body is not a tab: it is present whichever feature is selected.
+    expect(render("iterations")).toContain('data-ms-milestones=""');
   });
 
   test("the breadcrumb names the trail and the project", () => {
@@ -267,27 +418,132 @@ describe("the detail's fixed feature set", () => {
     expect(html).toContain("engine");
   });
 
-  test("a project with no roadmap renders the absent arm, with a next step", () => {
-    const html = renderToStaticMarkup(
-      createElement(ProjectDetail, {
-        identity: projectIdentity(roadmap().catalog),
-        feature: "roadmap",
-        onFeatureChange: () => {},
-        roadmap: { kind: "absent" },
-        onBack: () => {},
-        issues: createElement("div", {}),
-        iterations: createElement("div", {}),
-        copy: projectDetailCopy(copyFor("en")),
-      }),
-    );
-    expect(html).toContain('data-ms-absence="absent"');
-    expect(html).not.toContain('data-ms-absence="empty"');
-  });
-
   test("no envelope counter, timestamp or catalog revision reaches the detail", () => {
     const html = render();
     for (const removed of ["1224", "storeRevision", "catalogRevision", "builtAt", "checkedAt", "sourceHash"]) {
       expect(html).not.toContain(removed);
     }
+  });
+});
+
+describe("the page's conflict policy (the production re-read and draft rules)", () => {
+  // see packages/cli/web/projects-data.test.ts - // The assertions fail if `main.tsx` drops the automatic re-read or clears drafts:
+  // the page has no policy of its own left to drift — it renders this function's
+  // output (reloadOverview → reload token, keepDraft → the draft store, etc.).
+  const accepted = { status: "ok" as const, receipt: null };
+
+  test("an accepted write re-reads the overview and CLEARS the draft", () => {
+    expect(milestoneWriteFollowUp({ verb: "update" }, accepted)).toEqual({
+      reloadOverview: true,
+      refreshIssues: false,
+      keepDraft: false,
+      refusal: null,
+      retainOperation: false,
+    });
+  });
+
+  test("a revision conflict re-reads the overview and KEEPS the typed draft", () => {
+    const conflict = milestoneWriteFollowUp(
+      { verb: "update" },
+      { status: "refused", code: "milestone.revision-conflict", message: "[milestone.revision-conflict] moved" },
+    );
+    expect(conflict.reloadOverview).toBe(true);
+    // see packages/cli/web/projects-data.test.ts - // THE regression the earlier test could not catch: a page that stopped
+    // re-reading, or cleared the draft on a conflict, fails here.
+    expect(conflict.keepDraft).toBe(true);
+    expect(conflict.refusal).toContain("milestone.revision-conflict");
+    expect(conflict.retainOperation).toBe(false);
+  });
+
+  test("an input refusal neither re-reads nor drops the draft", () => {
+    const refused = milestoneWriteFollowUp(
+      { verb: "create" },
+      { status: "refused", code: "milestone.invalid-input", message: "[milestone.invalid-input] bad name" },
+    );
+    expect(refused.reloadOverview).toBe(false);
+    expect(refused.keepDraft).toBe(true);
+    expect(refused.refusal).toContain("invalid-input");
+  });
+
+  test("an ambiguous transport failure keeps the operation for a replay and does not re-read", () => {
+    const ambiguous = milestoneWriteFollowUp(
+      { verb: "create" },
+      { status: "refused", code: "transport-error", message: "unreachable" },
+    );
+    expect(ambiguous.reloadOverview).toBe(false);
+    expect(ambiguous.retainOperation).toBe(true);
+    expect(ambiguous.keepDraft).toBe(true);
+  });
+
+  test("the page-state transition performs the follow-up: reload, refresh, verdict, operation", () => {
+    // see packages/cli/web/projects-data.test.ts - // The page calls this reducer with the policy's output; these cases are the
+    // transition itself, so the wiring cannot pass on a source-string match.
+    const start: MilestonePageState = {
+      overviewReloadToken: 3,
+      issuesRefreshToken: 1,
+      writes: { busy: false, refusal: null, keepDraft: undefined },
+      operationPending: false,
+    };
+    const inFlight = milestoneWriteStarted(start);
+    expect(inFlight).toMatchObject({ writes: { busy: true, refusal: null, keepDraft: undefined }, operationPending: true });
+
+    // see packages/cli/web/projects-data.test.ts - // Conflict: the overview re-reads, the draft verdict is "keep", the operation settles.
+    const conflict = applyMilestoneFollowUp(
+      inFlight,
+      milestoneWriteFollowUp(
+        { verb: "update" },
+        { status: "refused", code: "milestone.revision-conflict", message: "[milestone.revision-conflict] moved" },
+      ),
+    );
+    expect(conflict.overviewReloadToken).toBe(start.overviewReloadToken + 1);
+    expect(conflict.issuesRefreshToken).toBe(start.issuesRefreshToken);
+    expect(conflict.writes).toEqual({ busy: false, refusal: "[milestone.revision-conflict] moved", keepDraft: true });
+    expect(conflict.operationPending).toBe(false);
+
+    // see packages/cli/web/projects-data.test.ts - // Accepted: the overview re-reads, the draft verdict is "clear", the operation settles.
+    const accepted = applyMilestoneFollowUp(inFlight, milestoneWriteFollowUp({ verb: "update" }, { status: "ok", receipt: null }));
+    expect(accepted.overviewReloadToken).toBe(start.overviewReloadToken + 1);
+    expect(accepted.writes).toEqual({ busy: false, refusal: null, keepDraft: false });
+    expect(accepted.operationPending).toBe(false);
+
+    // see packages/cli/web/projects-data.test.ts - // Input refusal: nothing re-reads; the draft stays; the operation settles.
+    const refused = applyMilestoneFollowUp(
+      inFlight,
+      milestoneWriteFollowUp({ verb: "create" }, { status: "refused", code: "milestone.invalid-input", message: "bad name" }),
+    );
+    expect(refused.overviewReloadToken).toBe(start.overviewReloadToken);
+    expect(refused.issuesRefreshToken).toBe(start.issuesRefreshToken);
+    expect(refused.writes).toEqual({ busy: false, refusal: "bad name", keepDraft: true });
+    expect(refused.operationPending).toBe(false);
+
+    // see packages/cli/web/projects-data.test.ts - // Transport-ambiguous: nothing re-reads; the operation stays armed for the replay.
+    const ambiguous = applyMilestoneFollowUp(
+      inFlight,
+      milestoneWriteFollowUp({ verb: "create" }, { status: "refused", code: "transport-error", message: "unreachable" }),
+    );
+    expect(ambiguous.overviewReloadToken).toBe(start.overviewReloadToken);
+    expect(ambiguous.writes.keepDraft).toBe(true);
+    expect(ambiguous.operationPending).toBe(true);
+
+    // see packages/cli/web/projects-data.test.ts - // Accepted assign: BOTH reads re-read.
+    const assigned = applyMilestoneFollowUp(inFlight, milestoneWriteFollowUp({ verb: "assign" }, { status: "ok", receipt: null }));
+    expect(assigned.issuesRefreshToken).toBe(start.issuesRefreshToken + 1);
+    expect(assigned.overviewReloadToken).toBe(start.overviewReloadToken + 1);
+  });
+
+  test("only an assignment refreshes the scoped list/picker", () => {
+    expect(milestoneWriteFollowUp({ verb: "assign" }, accepted).refreshIssues).toBe(true);
+    for (const verb of ["create", "update", "remove"] as const) {
+      expect(milestoneWriteFollowUp({ verb }, accepted).refreshIssues).toBe(false);
+    }
+    // see packages/cli/web/projects-data.test.ts - // A refused assignment wrote nothing: no refresh.
+    expect(
+      milestoneWriteFollowUp({ verb: "assign" }, { status: "refused", code: "milestone.revision-conflict", message: "moved" })
+        .refreshIssues,
+    ).toBe(true);
+    expect(
+      milestoneWriteFollowUp({ verb: "assign" }, { status: "refused", code: "milestone.invalid-input", message: "bad" })
+        .refreshIssues,
+    ).toBe(false);
   });
 });

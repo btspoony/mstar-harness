@@ -4,7 +4,7 @@
  * is a name only — the skill owns the semantics, never the envelope.
  */
 
-/** Family defaults: one owning skill for the whole `<family>.*` group. */
+/** note: Family defaults: one owning skill for the whole `<prefix>.*` group, where the prefix is one or more dot segments. */
 const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   persist: "mstar-artifacts",
   workflow: "mstar-artifacts",
@@ -15,8 +15,13 @@ const FAMILY_OWNING_SKILL: Readonly<Record<string, string>> = {
   milestone: "mstar-project-governance",
   project: "mstar-project-governance",
   catalog: "mstar-conventions",
-  roadmap: "mstar-project-governance",
+  // see packages/commands/src/owning-skills.ts - // why: The board is read and cleaned at the iteration read/write points, so the
+  // skill that owns those points owns the verb.
+  planboard: "mstar-iteration",
   store: "mstar-conventions",
+  // why: The remote lane's procedure (provider-authoritative collaboration driven by the host's
+  // Linear MCP) is owned by the skill that documents it; other store verbs keep mstar-conventions.
+  "store.collaboration.remote": "mstar-remote-collaboration",
   sdd: "mstar-sdd",
   audit: "mstar-audit",
   dispatch: "mstar-dispatch-gates",
@@ -66,7 +71,14 @@ const COMMAND_OWNING_SKILL: Readonly<Record<string, string>> = {
   "store.migrate": "mstar-project-governance",
 };
 
-/** Exact id override, then family default, then nothing — no invented owner. */
+/** Exact id override, then the longest dotted family prefix, then nothing — no invented owner. */
 export function owningSkillFor(commandId: string): string | undefined {
-  return COMMAND_OWNING_SKILL[commandId] ?? FAMILY_OWNING_SKILL[commandId.split(".")[0] ?? ""];
+  const override = COMMAND_OWNING_SKILL[commandId];
+  if (override !== undefined) return override;
+  const segments = commandId.split(".");
+  for (let end = segments.length; end >= 1; end -= 1) {
+    const owner = FAMILY_OWNING_SKILL[segments.slice(0, end).join(".")];
+    if (owner !== undefined) return owner;
+  }
+  return undefined;
 }

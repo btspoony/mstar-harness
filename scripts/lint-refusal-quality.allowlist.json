@@ -6,8 +6,8 @@
     "expectedCount": 1
   },
   {
-    "signature": "missing-recovery:packages/commands/src/families/milestone.ts:ee13cb6822a9",
-    "justification": "Engine-supplied recovery text destructured from engineErrorFacts(error) (family-refusal.ts type-checks the string but proves no reachable command); strict static proof cannot cover it \u2014 see I-000872.",
+    "signature": "missing-recovery:packages/commands/src/families/milestone.ts:3bdd6ca110bd",
+    "justification": "The milestone family forwards engine-supplied recovery text with the command's own literal fallback (`engineRecovery ?? fallbackRecovery`); family-refusal.ts type-checks both strings but proves no reachable command, so strict static proof cannot evaluate which one runs \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },
@@ -84,8 +84,26 @@
     "expectedCount": 1
   },
   {
+    "signature": "missing-recovery:packages/commands/src/families/status.ts:6ca5a08dab26",
+    "justification": "The findings-cleanup refusal forwards engine-supplied recovery text (`facts.recovery` from `engineErrorFacts(error)`) with the command's literal fallback; strict static proof cannot evaluate the `facts.recovery ?? literal` expression \u2014 see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/status.ts:39fdad74afd7",
+    "justification": "The tech-debt refusal forwards engine-supplied recovery text (`facts.recovery` from `engineErrorFacts(error)`) with the command's literal fallback; strict static proof cannot evaluate the `facts.recovery ?? literal` expression \u2014 see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
     "signature": "missing-recovery:packages/commands/src/families/pr.ts:4678d5fb22d1",
     "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter after family-refusal.ts type-checks it; strict static proof cannot evaluate the `recovery ?? literal` expression, the same class as pr-review.ts — see I-000872.",
+    "trackingIssue": "I-000872",
+    "expectedCount": 1
+  },
+  {
+    "signature": "missing-recovery:packages/commands/src/families/store.ts:8b6fb04c6d73",
+    "justification": "Engine-supplied recovery text forwarded through this family's refusal adapter (`engineErrorFacts(error).recovery ?? <per-code literals>`), the same shape pr.ts and issue-sync.ts use; strict static proof cannot evaluate the `??` expression \u2014 see I-000872.",
     "trackingIssue": "I-000872",
     "expectedCount": 1
   },

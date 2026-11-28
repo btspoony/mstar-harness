@@ -18,12 +18,13 @@
  * fixture harness — no live harness is ever touched.
  */
 import { describe, expect, test } from "bun:test";
-import { initializeStore, openStore, readExecutionState, registerCatalogEntity, type ExecutionState } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, openStore, readExecutionState, registerCatalogEntity, type ExecutionState } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { CLI_ROOT, receiptStable, runCli as spawnCli, type RunResult } from "./harness";
+import { CLI_ROOT, receiptStable, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 const WORKFLOW_ID = "20260918-iteration-register-cli";
 const COMPASS_REF = "iterations/20260918-iteration-register-cli/delivery-compass.md";
@@ -101,13 +102,15 @@ function registerArgs(harness: string, extra: string[] = [], compassRef = COMPAS
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
   const repo = mkdtempSync(join(tmpdir(), "mstar-iteration-register-"));
   execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+  writeFixtureRepoId(repo);
   execFileSync("git", ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", "Fixture source"], { cwd: repo, stdio: "ignore" });
   const harness = join(repo, ".mstar");
   // Contract §4: the row pointers are resolved against `{PLAN_DIR}` and the
   // declaration is read, so the fixture owns the registered plan markdown.
   mkdirSync(join(harness, "plans"), { recursive: true });
   for (const id of ["20260918-plan-alpha", "20260918-plan-beta", "20260918-plan-gamma"]) {
-    writeFileSync(join(harness, "plans", `${id}.md`), `# Plan ${id}\n\n**plan_id:** ${id}\n`);
+    writeFileSync(join(harness, "plans", `${id}.md`), planFrontMatter(id, `# Plan ${id}
+`));
   }
   // Registration proves the named document IS this iteration's reviewed
   // compass, so the fixture states one like any real registration does.
@@ -118,6 +121,7 @@ async function setupHarness(fn: (harness: string, paths: { root: string; snapsho
   // writes `iteration belongs-to project` links, and a catalog relation may not
   // dangle, so the named project is registered like any real workspace does.
   await initializeStore({ harnessDir: harness }).then((handle) => handle.close());
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },
     { kind: "project", id: "engine", title: "engine", rootKind: "projects", relativePath: "engine" },

@@ -1,3 +1,11 @@
+---
+module: frozen-invariant lints (hash-gates, refusal-quality)
+date: 2026-11-09
+problem_type: best_practice
+category: best-practices
+severity: high
+---
+
 # Frozen-invariant lints must land CI-wired, and calibrate before narrowing
 
 Source: plan <plan-id> (#341); incidents I-000451, I-000434, I-000435.

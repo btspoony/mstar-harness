@@ -8,6 +8,7 @@
  *
  * Run with `bun test packages/engine/src/catalog-import.test.ts`.
  */
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -25,6 +26,8 @@ import {
   type CatalogImportPlan,
 } from "./catalog-import.js";
 import { getCatalog, listCatalog, registerCatalogEntity } from "./catalog.js";
+import { ensureCollaborationAuthority } from "./store-activation.js";
+import { openCollaborationStore, withCollaborationWrite } from "./collaboration-store.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-catalog-import-"));
@@ -38,11 +41,18 @@ type Fixture = { context: StoreContext; workspace: string; harness: string };
 /** A temp workspace with a real `.mstar` harness root and an active store. */
 async function freshWorkspace(name: string): Promise<Fixture> {
   const workspace = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(workspace, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${workspace.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
-  const handle = await initializeStore({ harnessDir: harness });
+  const context: StoreContext = { harnessDir: harness };
+  const handle = await initializeStore(context);
   handle.close();
-  return { context: { harnessDir: harness }, workspace, harness };
+  await ensureCollaborationAuthority(context);
+  return { context, workspace, harness };
 }
 
 /**
@@ -51,7 +61,7 @@ async function freshWorkspace(name: string): Promise<Fixture> {
  * database rather than from a returned receipt.
  */
 async function catalogRows(context: StoreContext): Promise<{ entities: number; links: number }> {
-  const handle = await openStore(context, "write");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const entities = handle.db.prepare("select count(*) as n from catalog_entities").get() as { n: number };
     const links = handle.db.prepare("select count(*) as n from catalog_links").get() as { n: number };
@@ -135,7 +145,7 @@ async function mixedFixture(name: string): Promise<Fixture> {
   write(agents, "specs/notes/README.md", md("# Ordinary README inside a walked root"));
   write(agents, "specs/INSTALL.md", md("# Install notes"));
   write(harness, "plans/20260918-alpha.md", md("# Alpha plan"));
-  write(harness, "projects/proj-a/roadmap.md", md("---", "project_id: proj-a", "title: Project Alpha", "status: active", "---", "", "# Project Alpha"));
+  mkdirSync(join(harness, "projects", "proj-a"), { recursive: true });
   return fixture;
 }
 
@@ -201,7 +211,8 @@ describe("catalog discovery", () => {
     expect(plan.version).toBe(CATALOG_IMPORT_PLAN_VERSION);
     expect(entityAt(plan, "iter-alpha")?.kind).toBe("iteration");
     expect(entityAt(plan, "proj-a")?.kind).toBe("project");
-    expect(entityAt(plan, "proj-a")?.title).toBe("Project Alpha");
+    // see packages/engine/src/catalog-import.test.ts - // A project package is its directory: no marker file, so the title falls back to the id.
+    expect(entityAt(plan, "proj-a")?.title).toBe("proj-a");
     expect(entityAt(plan, "20260918-alpha.md")?.kind).toBe("plan");
     expect(entityAt(plan, "20260918-alpha.md")?.title).toBe("Alpha plan");
     expect(entityAt(plan, "contract.md")?.documentKind).toBe("spec");
@@ -444,7 +455,7 @@ describe("fresh-clone tracked bodies", () => {
 describe("catalog export and portability", () => {
   test("export/import preserves ids, relations and provenance without creating an execution session", async () => {
     const source = await freshWorkspace("export-source-");
-    write(source.harness, "projects/proj-a/roadmap.md", md("# Project Alpha"));
+    mkdirSync(join(source.harness, "projects", "proj-a"), { recursive: true });
     write(join(source.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     const reviewed: CatalogImportInput[] = [
       { rootKind: "projects", relativePath: "proj-a", mapping: { kind: "project", id: "proj-a", title: "Project Alpha" } },
@@ -475,7 +486,7 @@ describe("catalog export and portability", () => {
 
     // A second clone holding the same tracked bodies.
     const clone = await freshWorkspace("export-clone-");
-    write(clone.harness, "projects/proj-a/roadmap.md", md("# Project Alpha"));
+    mkdirSync(join(clone.harness, "projects", "proj-a"), { recursive: true });
     write(join(clone.workspace, ".agents"), "specs/contract.md", md("# Contract", "", "Spec body."));
     const imported = await planCatalogImport(clone.context, catalogExportToInputs(payload));
     expect(imported.conflicts).toEqual([]);
@@ -493,11 +504,15 @@ describe("catalog export and portability", () => {
     expect(detail.entity.present).toBe(true);
     expect(imported.unknowns.some((unknown) => unknown.code === "source-missing" && unknown.key === "specs:extra.md")).toBe(true);
 
-    // No workflow session, no execution binding, no root registration.
-    const reader = await openStore(clone.context, "read");
-    const bindings = reader.db.prepare("select count(*) as n from catalog_execution_bindings").get() as { n: number };
-    const workflows = reader.db.prepare("select count(*) as n from catalog_operations where phase <> 'committed'").get() as { n: number };
-    reader.close();
+    // note: No workflow session, no execution binding, no root registration. The pin
+    // table stayed execution-side at the cutover; the import journal is
+    // collaboration data.
+    const execution = await openStore(clone.context, "read");
+    const bindings = execution.db.prepare("select count(*) as n from catalog_execution_bindings").get() as { n: number };
+    execution.close();
+    const journal = await openCollaborationStore(clone.context, "read");
+    const workflows = journal.db.prepare("select count(*) as n from catalog_operations where phase <> 'committed'").get() as { n: number };
+    journal.close();
     expect(bindings.n).toBe(0);
     expect(workflows.n).toBe(0);
     expect(readdirSync(clone.harness)).not.toContain("workflows");
@@ -633,12 +648,9 @@ describe("partial import explicitness (RV-3)", () => {
 
     // The obstruction moves out of the way (fixture-level removal), then the
     // SAME reviewed plan is re-run with the SAME operationId.
-    const handle = await openStore(fixture.context, "write");
-    try {
-      handle.db.prepare("delete from catalog_entities where kind = 'document' and id = 'doc-guard'").run();
-    } finally {
-      handle.close();
-    }
+    await withCollaborationWrite(fixture.context, (lane) => {
+      lane.db.prepare("delete from catalog_entities where kind = 'document' and id = 'doc-guard'").run();
+    });
     const retried = await importCatalog(fixture.context, plan, { operationId: "imp-partial", actor: "project-manager" });
     expect(retried.entities.map((receipt) => receipt.id).sort()).toEqual(["20260918-alpha", "doc-contract", "doc-guard"]);
     expect(retried.entities.every((receipt) => receipt.revision === 1)).toBe(true); // replayed, not re-written

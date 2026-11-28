@@ -44,11 +44,7 @@
  *       read must resolve to the branded wrapper — the probe contract
  *       (`probeRolePersonaSeam`'s branded-`ok` inputs) proven ON the
  *       installed deployment. The artifact bundle keeps the entry's frozen
- *       export surface (no probe symbol exported), so the pin observes the
- *       probe's contract structurally: canary dispatch + brand stamp +
- *       unchanged wrapper key surface. Armed by 4b: artifacts published
- *       before the seam probe shipped print the explicit deviation instead
- *       (never a silent skip).
+ *       export surface (no probe symbol exported).
  *   6. The HOST config-stack re-composition is modeled (the real app's
  *      HMR/typert path): the fallbacks effective readback reads the row
  *      config captured at apply time, so after the seed write the host
@@ -66,31 +62,42 @@
  * on the runner PATH (skip-guard below; the registry probe would pass).
  */
 import { afterEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { cp, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { load as parseYaml } from 'js-yaml'
 import { bootApp, startInfo, type BootResult, type FakeSettingsRegistry } from './harness.ts'
 import { fallbacksService } from '../src/gates/fallbacks-probe.ts'
 import { subagentRoleIds } from '../src/gates/agent-personas.ts'
 import { PERSONA_SEAM_EVENT } from '../src/gates/role-persona.ts'
+import { checkHostBuild, HOST_BUILD_RECOVERY } from '../scripts/build-host.ts'
 import { packageRoot } from '../scripts/bundle-harness-assets.ts'
+import { packAndProbe } from './install-e2e-pack-probe.ts'
 
 /** Repo root (packages/dsh/tests → up three levels). */
 const REPO_ROOT = resolve(import.meta.dir, '../../..')
 /** The real CLI entry (plan 001 surface) run as a subprocess. */
 const CLI_ENTRY = join(REPO_ROOT, 'packages/cli/src/index.ts')
 /** why: Neutral cwd for CLI subprocesses: harness resolution must answer from the
- * disposable home, never from the ambient control checkout's own `.mstarc`. */
+ * disposable home, never from the ambient control checkout's own `.mstarc`. The
+ * cwd is itself a declared git repo, or the init bootstrap's upward identity
+ * probe escapes it and writes a `.mstarc` into `$TMPDIR` itself. */
 const cliCwd = mkdtempSync(join(tmpdir(), 'dsh-cli-cwd-'))
+execFileSync('git', ['init', '-q', '-b', 'main', cliCwd], { stdio: 'ignore' })
+writeFileSync(join(cliCwd, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-cli-cwd-${cliCwd.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)
 /** The repo's own build mirror (synced by bundle-assets; gitignored). */
 const LOCAL_MIRROR = join(packageRoot, 'harness-agents')
 /** The profile the dsh CLI fixes for installs (dsh adapter `web`). */
 const DSH_PROFILE = 'web'
-/** Skip-guard probe: `dsh` bin on PATH + npm registry reachability (the
- * `dsh plugin add` flow forwards to pnpm over the network). Module scope —
- * the describe is skipped when either fails, with the reason printed. */
+// see scripts/ci-packed-manifest-guard.ts — the pack below uses `npm pack`
+// because a `workspace:` spec makes `bun pm pack` throw. `packRoot` and
+// `localTarball` are declared BEFORE the guard: a `let` beside the
+// booted/dshHome state would still be in its TDZ while the awaited guard runs.
+let packRoot: string | undefined
+let localTarball: string | undefined
 const skipReason = await (async (): Promise<string | undefined> => {
   // Bun.spawnSync throws ENOENT when the executable is missing — must be
   // caught, or the skip-guard itself crashes the suite (CI has no dsh bin).
@@ -109,6 +116,15 @@ const skipReason = await (async (): Promise<string | undefined> => {
   } catch (error) {
     return `npm registry unreachable (${error instanceof Error ? error.message : String(error)})`
   }
+  const buildCheck = checkHostBuild()
+  if (buildCheck.state !== 'current') {
+    return `${buildCheck.input} is ${buildCheck.state} for packages/dsh/dist/index.js — run \`${HOST_BUILD_RECOVERY}\` first`
+  }
+  const repoVersion = await readVersion(join(packageRoot, 'package.json'))
+  const result = await packAndProbe({ packageRoot, repoVersion, profile: DSH_PROFILE, env: dshEnv })
+  if (!result.ok) return result.reason
+  packRoot = result.packRoot
+  localTarball = result.tarball
   return undefined
 })()
 
@@ -170,21 +186,10 @@ function hasSeedsSurface(mstarPkgDir: string): boolean {
   return readFileSync(distIndex, 'utf8').includes('mstar seeds declared')
 }
 
-/** The role-preset-channel + seam-probe surface the shipped bundle carries:
- * the fail-loud warn text AND the ported channel's single start surface
- * (`startActivation`) in `dist/index.js` (the gates compile INTO the
- * single-file bundle; same marker mechanism as `hasSeedsSurface`). BOTH are
- * required: an artifact published on the removed per-start persona slot
- * carries the warn text but no `startActivation`, and its channel does not
- * wrap a `startActivation`-only runtime at all — so the 5b wrapper pin below
- * must stay disarmed for it. Absent markers are reported as an explicit
- * deviation (never a silent skip).
- * Cross-link (`SEAM_WARN` in `src/gates/role-persona.ts`): the warn marker is
- * a verbatim prefix of that warn text — REWORDING `SEAM_WARN` silently DISARMS
- * the 5b shipped-surface assertions (published artifacts stop matching the
- * marker, so the vintage guard would print the deviation forever). Change
- * the two strings together, and update the f9/f10 warn pins in
- * `tests/persona-seam-probe.spec.ts` in the same edit. */
+/** see packages/dsh/src/gates/role-persona.ts - the warn marker here is a
+ * verbatim prefix of `SEAM_WARN`; rewording `SEAM_WARN` breaks this match,
+ * so change both strings (and the f9/f10 warn pins in
+ * `tests/persona-seam-probe.spec.ts`) in the same edit. */
 function hasSeamProbeSurface(mstarPkgDir: string): boolean {
   const distIndex = join(mstarPkgDir, 'dist/index.js')
   if (!existsSync(distIndex)) return false
@@ -244,6 +249,8 @@ afterEach(async () => {
   dshHome = undefined
   if (hostCopyRoot !== undefined) await rm(hostCopyRoot, { recursive: true, force: true })
   hostCopyRoot = undefined
+  if (packRoot !== undefined) await rm(packRoot, { recursive: true, force: true })
+  packRoot = undefined
 })
 
 describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
@@ -267,68 +274,43 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
     const peersDir = join(profileDir(dshHome), 'node_modules/@deepseek-ai')
     console.log(`install-e2e: peers materialized under DSH_HOME profile: ${existsSync(peersDir)} (host provides seams)`)
 
-    // 4. Version/surface probe of the DEFAULT install. The dsh CLI pins
-    //    `^2.2.0` in the profile manifest; pnpm's minimumReleaseAge gate
-    //    excludes fresh publishes (< ~1 day) from RANGE resolution, so the
-    //    default add can land on a version without the seeds surface. When
-    //    that happens, re-add pinned to the repo's shipped version (the
-    //    explicit version bypasses the age gate — the default path
-    //    converges once the publish passes the window). Recorded as a
-    //    deviation in the SDD report; never a silent skip.
+    runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `file:${localTarball}`], 300_000)
     const installedVersion = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
-    if (!hasSeedsSurface(installedMstarDir(dshHome))) {
-      const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      console.log(`install-e2e: default add installed @mstar-harness/dsh@${installedVersion} WITHOUT the seeds surface — re-adding pinned @${repoVersion} (pnpm minimumReleaseAge range-resolution gate)`)
-      runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `@mstar-harness/dsh@${repoVersion}`], 300_000)
-      const pinned = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
-      expect(pinned).toBe(repoVersion)
-      expect(hasSeedsSurface(installedMstarDir(dshHome))).toBe(true)
-      // Post-pin dump probe (fix wave S-002 belt-and-suspenders): the
-      // re-add must not duplicate a loader row — exactly one mstar row
-      // and one fallbacks row, the production dump shape.
-      const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
-      expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after pinned re-add').toBe(1)
-      expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after pinned re-add').toBe(1)
-      console.log(`install-e2e: pinned add installed @mstar-harness/dsh@${pinned} with the full seeds surface`)
-    } else {
-      console.log(`install-e2e: default add installed @mstar-harness/dsh@${installedVersion} WITH the seeds surface — no pin needed`)
+    const repoVersion = await readVersion(join(packageRoot, 'package.json'))
+    expect(installedVersion).toBe(repoVersion)
+    expect(hasSeedsSurface(installedMstarDir(dshHome))).toBe(true)
+    const profileManifest: unknown = JSON.parse(readFileSync(join(profileDir(dshHome), 'package.json'), 'utf8'))
+    let mstarSpec: string | undefined
+    if (typeof profileManifest === 'object' && profileManifest !== null && 'dependencies' in profileManifest) {
+      const deps = profileManifest.dependencies
+      if (typeof deps === 'object' && deps !== null && '@mstar-harness/dsh' in deps && typeof deps['@mstar-harness/dsh'] === 'string') {
+        mstarSpec = deps["@mstar-harness/dsh"]
+      }
     }
+    expect(mstarSpec, 'profile manifest carries a string @mstar-harness/dsh spec').toBeDefined()
+    expect(resolve(mstarSpec!.replace(/^file:/, '')), 'the installed row resolves to this invocation’s tarball').toBe(resolve(localTarball!))
+    const lockText = readFileSync(join(profileDir(dshHome), 'pnpm-lock.yaml'), 'utf8')
+    expect(lockText.includes(`specifier: file:${localTarball}`), 'the lockfile records this invocation’s tarball as the mstar specifier').toBe(true)
+    const lockParsed: unknown = parseYaml(lockText)
+    let lockVersion: string | undefined
+    if (typeof lockParsed === 'object' && lockParsed !== null && 'importers' in lockParsed && typeof lockParsed.importers === 'object' && lockParsed.importers !== null && '.' in lockParsed.importers) {
+      const rootImporter: unknown = lockParsed.importers['.']
+      if (typeof rootImporter === 'object' && rootImporter !== null && 'dependencies' in rootImporter && typeof rootImporter.dependencies === 'object' && rootImporter.dependencies !== null && '@mstar-harness/dsh' in rootImporter.dependencies) {
+        const mstarEntry: unknown = rootImporter.dependencies['@mstar-harness/dsh']
+        if (typeof mstarEntry === 'object' && mstarEntry !== null && 'version' in mstarEntry && typeof mstarEntry.version === 'string') {
+          lockVersion = mstarEntry.version
+        }
+      }
+    }
+    expect(lockVersion, 'the lockfile records a resolved mstar version').toBeDefined()
+    expect(resolve(profileDir(dshHome), lockVersion!.replace(/^file:/, '')), 'the lockfile resolution points at this invocation’s tarball').toBe(resolve(localTarball!))
+    const pinnedDump = runDsh(dshHome, ['--profile', DSH_PROFILE, '--dump-config'], 30_000)
+    expect((pinnedDump.match(/name: '@mstar-harness\/dsh'/g) ?? []).length, 'exactly one mstar loader row after the local overwrite').toBe(1)
+    expect((pinnedDump.match(/name: dsh-llm-fallbacks/g) ?? []).length, 'exactly one fallbacks loader row after the local overwrite').toBe(1)
 
-    // 4b. Role-preset channel + seam-probe surface vintage (plan Task 2):
-    //     the same npm-lag reality as the seeds pin above — pnpm's
-    //     minimumReleaseAge gate excludes fresh publishes from RANGE
-    //     resolution, and a repo version whose channel port has not shipped
-    //     yet resolves stale. When the installed artifact lacks the surface
-    //     (the fail-loud warn marker AND the `startActivation` start surface
-    //     in `dist/index.js`), re-add pinned to the repo's shipped version
-    //     (the explicit version bypasses the age gate — same bypass as the
-    //     seeds pin). If the pinned artifact STILL lacks the surface, the
-    //     port has not published yet: print the explicit deviation and leave
-    //     the 5b assertions disarmed on this run (never a silent skip) — the
-    //     artifact's channel then wraps only the removed persona start
-    //     surface, so a `startActivation` runtime gets no wrapper at all.
-    //     Once the port publishes, the pinned artifact carries the surface
-    //     and 5b asserts on every run.
-    //     Ordered BEFORE the step-5 host copy (mirroring the seeds pin):
-    //     a probe-surface re-add must land before the copy, so the armed
-    //     surface and the booted surface are the SAME artifact — probing
-    //     the disk copy only after the boot could arm 5b against a stale
-    //     (pre-re-add) booted channel.
-    let probeSurfaceArmed = hasSeamProbeSurface(installedMstarDir(dshHome))
-    if (!probeSurfaceArmed) {
-      const repoVersion = await readVersion(join(packageRoot, 'package.json'))
-      const installedVersion = await readVersion(join(installedMstarDir(dshHome), 'package.json'))
-      if (installedVersion !== repoVersion) {
-        console.log(`install-e2e: installed @mstar-harness/dsh@${installedVersion} WITHOUT the role-preset channel surface — re-adding pinned @${repoVersion} (pnpm minimumReleaseAge gate; same bypass as the seeds pin)`)
-        runDsh(dshHome, ['plugin', '--profile', DSH_PROFILE, 'add', `@mstar-harness/dsh@${repoVersion}`], 300_000)
-      }
-      probeSurfaceArmed = hasSeamProbeSurface(installedMstarDir(dshHome))
-      if (!probeSurfaceArmed) {
-        console.log(`install-e2e: 5b DISARMED on the installed artifact — @mstar-harness/dsh@${repoVersion} does not carry the ported role-preset channel (startActivation) yet; the release carrying it arms this assertion (tests/role-persona.spec.ts pins the channel at src level today)`)
-      } else {
-        console.log('install-e2e: role-preset channel surface PRESENT on the installed artifact — 5b assertion armed')
-      }
-    }
+    const probeSurfaceArmed = hasSeamProbeSurface(installedMstarDir(dshHome))
+    expect(probeSurfaceArmed, 'the locally packed artifact carries the role-preset channel surface').toBe(true)
+    console.log('install-e2e: role-preset channel surface PRESENT on the locally packed artifact — 5b assertion armed')
 
     // 5. Single-instance resolution: copy the installed packages into the
     //    host module graph (real dirs, NOT symlinks — see header comment)
@@ -483,8 +465,8 @@ describe.skipIf(skipReason !== undefined)('installed-deployment e2e ', () => {
   }, { timeout: 600_000 })
 })
 
-// The skip-guard reason (module scope): printed ALWAYS so a skipped run is
-// explicit in the output, never a silent green.
 if (skipReason !== undefined) {
   console.log(`install-e2e: SKIPPED — ${skipReason}`)
+  if (packRoot !== undefined) await rm(packRoot, { recursive: true, force: true })
+  packRoot = undefined
 }

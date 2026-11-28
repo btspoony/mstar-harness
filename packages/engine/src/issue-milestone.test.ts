@@ -1,40 +1,75 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { join } from "node:path";
-import { withStoreRead, queryDashboard } from "./store-read.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
 import { assignIssueMilestone, closeIssue, getIssue, IssueError, listIssues, captureIssue } from "./issue.js";
 import { addMilestone, removeMilestone, readMilestonesOn as readMilestonesOnDb, updateMilestone } from "./milestone-store.js";
-import { initializeStore, upgradeStore, MIGRATIONS, migrationChecksum, SCHEMA_VERSION_TABLE_SQL, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import type { StoreContext, StoreDb } from "./store-db.js";
 
-const root = mkdtempSync(join(tmpdir(), "issue-milestone-"));
-const harness = join(root, ".mstar");
+const root = mkdtempSync(join(nodeOs.tmpdir(), "tmp-issue-milestone-"));
+const HOME = join(root, "home");
+mkdirSync(HOME);
+let homeSpy: { mockRestore(): void } | undefined;
+const repo = join(root, "repo");
+mkdirSync(repo, { recursive: true });
+execFileSync("git", ["init", "-q"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+// note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+// own repository, which never publishes the selector ref.
+execFileSync("git", ["config", `url.${repo}.insteadOf`, "https://github.com/acme/issue-milestone.git"], { cwd: repo, stdio: ["ignore", "ignore", "ignore"] });
+writeFileSync(join(repo, ".mstarc"), "[collaboration]\nmode=local\n");
+const harness = join(repo, ".mstar");
 const context: StoreContext = { harnessDir: harness };
 const projectId = "milestone-assignment-project";
 let db: StoreDb;
 let issueNumber = 0;
+/** note: v2 made the stable reference NOT NULL and unique; the fixture mints one per row. */
+let issueRefSequence = 0;
 function makeIssue(id: string, project = projectId): void {
-  db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?)").run(id, project, id);
+  const issueRef = `mstar:issue:00000000-0000-4000-8000-${String(++issueRefSequence).padStart(12, "0")}`;
+  db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key,issue_ref) values(?,?,'Issue','bug','high','impact','acceptance','now','now',?,?)").run(id, project, id, issueRef);
 }
-function revision(): number { return (db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision; }
-function issueRevision(id: string): number { return (db.prepare("select revision from issues where id=?").get(id) as { revision: number }).revision; }
+function revision(): number {
+  const row = db.prepare("select revision from collaboration_meta where id=1").get() as { revision: number };
+  return row.revision;
+}
+function issueRevision(id: string): number {
+  const row = db.prepare("select revision from issues where id=?").get(id) as { revision: number };
+  return row.revision;
+}
 function mutation(id: string, expectedRevision: number, expectedStoreRevision = revision(), actor = "project-manager") {
   return { operationId: id, actor, expectedRevision, expectedStoreRevision };
 }
 let milestoneId = "";
 let otherMilestoneId = "";
 beforeAll(async () => {
-  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-  execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
   mkdirSync(harness, { recursive: true });
-  const handle = await initializeStore(context); db = handle.db;
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  // invariant: The real activation also records this checkout's binding: an ACTIVE
+  // authority is never usable from an unbound checkout.
+  const seeded = new DatabaseSync(location.dbPath);
+  let authority: { storeId: string; epoch: number } | null = null;
+  try {
+    seeded.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(new Date().toISOString());
+    const row = seeded.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as { store_id?: unknown; authority_epoch?: unknown } | undefined;
+    if (typeof row?.store_id === "string" && typeof row.authority_epoch === "number") authority = { storeId: row.store_id, epoch: row.authority_epoch };
+  } finally {
+    seeded.close();
+  }
+  if (authority === null) throw new Error("fixture: the staged collaboration lane records no store identity");
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId: authority.storeId, epoch: authority.epoch, binding: "active" });
+  db = new DatabaseSync(location.dbPath);
   for (const id of [projectId, "other-project"]) db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project',?,?,'projects',?,'now','now')").run(id, id, `${id}/roadmap.md`);
   makeIssue("milestone-assignment-issue");
   makeIssue("milestone-membership-issue");
 });
-afterAll(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
+afterAll(() => { db.close(); homeSpy?.mockRestore(); rmSync(root, { recursive: true, force: true }); });
 
 describe("issue milestone association", () => {
   test("summary and detail expose nullable milestone membership", async () => {
@@ -42,7 +77,7 @@ describe("issue milestone association", () => {
     expect((await getIssue(context, "milestone-assignment-issue")).milestoneId).toBeNull();
   });
   test("successful assignment authorizes by the project-manager seat and advances both revisions once", async () => {
-    const made = await addMilestone(context, { projectId, name: `Milestone ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const made = await addMilestone(context, { projectId, name: `Milestone ${++issueNumber}`, effortSessions: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     milestoneId = made.milestoneId;
     const before = revision();
     const receipt = await assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId, reason: "roadmap" }, mutation("milestone-assign", 1));
@@ -70,7 +105,7 @@ describe("issue milestone association", () => {
     expect(revision()).toBe(before + 1);
   });
   test("rejects milestone from another project", async () => {
-    const other = await addMilestone(context, { projectId: "other-project", name: "Other project milestone", target: null, ordinal: 0 }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const other = await addMilestone(context, { projectId: "other-project", name: "Other project milestone", effortSessions: null, ordinal: 0 }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: other.milestoneId, reason: "wrong project" }, mutation("milestone-cross-project", 3))).rejects.toMatchObject({ code: "milestone.project-mismatch" });
   });
   test("invalid input and absent milestones use distinct refusal codes", async () => {
@@ -81,7 +116,7 @@ describe("issue milestone association", () => {
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { ...req, milestoneId: "missing-milestone" }, mutation("milestone-not-found", 3))).rejects.toMatchObject({ code: "milestone.not-found" });
   });
   test("supports explicit move and clear", async () => {
-    const another = await addMilestone(context, { projectId, name: `Move target ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const another = await addMilestone(context, { projectId, name: `Move target ${++issueNumber}`, effortSessions: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     otherMilestoneId = another.milestoneId;
     const moved = await assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: otherMilestoneId, reason: "reassign" }, mutation("milestone-move", 3));
     expect(moved.revision).toBe(4);
@@ -91,17 +126,17 @@ describe("issue milestone association", () => {
     expect((await getIssue(context, moved.issueId)).milestoneId).toBeNull();
   });
   test("delivered and dropped milestones refuse assignments", async () => {
-    const delivered = await addMilestone(context, { projectId, name: "Terminal delivered", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const delivered = await addMilestone(context, { projectId, name: "Terminal delivered", effortSessions: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     makeIssue("milestone-terminal-closed");
     const seated = await assignIssueMilestone(context, "milestone-terminal-closed", { projectId, milestoneId: delivered.milestoneId, reason: "prepare delivery" }, mutation("milestone-terminal-prepare", 1));
     await closeIssue(context, seated.issueId, "resolved", { reason: "done", references: ["test"], alignmentRef: "PM acceptance" }, { actor: "project-manager", operationId: "milestone-terminal-close", expectedRevision: seated.revision });
     await updateMilestone(context, projectId, delivered.milestoneId, { status: "active" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await updateMilestone(context, projectId, delivered.milestoneId, { status: "delivered" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: delivered.milestoneId, reason: "delivered" }, mutation("milestone-terminal-delivered", issueRevision("milestone-assignment-issue")))).rejects.toMatchObject({ code: "milestone.terminal" });
-    const dropped = await addMilestone(context, { projectId, name: "Terminal dropped", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const dropped = await addMilestone(context, { projectId, name: "Terminal dropped", effortSessions: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await updateMilestone(context, projectId, dropped.milestoneId, { status: "dropped" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     await expect(assignIssueMilestone(context, "milestone-assignment-issue", { projectId, milestoneId: dropped.milestoneId, reason: "dropped" }, mutation("milestone-terminal-dropped", issueRevision("milestone-assignment-issue")))).rejects.toMatchObject({ code: "milestone.terminal" });
-    const source = await addMilestone(context, { projectId, name: "Terminal source", target: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const source = await addMilestone(context, { projectId, name: "Terminal source", effortSessions: null, ordinal: ++issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     makeIssue("milestone-terminal-source-issue");
     const sourceAssigned = await assignIssueMilestone(context, "milestone-terminal-source-issue", { projectId, milestoneId: source.milestoneId, reason: "source guard" }, mutation("milestone-terminal-source-assign", 1));
     await updateMilestone(context, projectId, source.milestoneId, { status: "dropped" }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
@@ -115,7 +150,7 @@ describe("issue milestone association", () => {
     expect(issueRevision("milestone-assignment-issue")).toBe(issueBefore);
   });
   test("capture and close paths preserve existing milestone membership", async () => {
-    const made = await addMilestone(context, { projectId, name: `Membership ${++issueNumber}`, target: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
+    const made = await addMilestone(context, { projectId, name: `Membership ${++issueNumber}`, effortSessions: null, ordinal: issueNumber }, { operationId: crypto.randomUUID(), expectedStoreRevision: revision() });
     const assigned = await assignIssueMilestone(context, "milestone-membership-issue", { projectId, milestoneId: made.milestoneId, reason: "associate" }, mutation("milestone-membership-assign", 1));
     const capture = await captureIssue(context, { projectId, title: "Captured", kind: "bug", severity: "low", impact: "impact", acceptance: "acceptance", sourceIdentity: "milestone", rootCauseKey: "capture", acceptanceKey: "capture", occurrenceKey: "milestone-capture", sourceKind: "test", location: "test", observedBehavior: "observed", evidence: [], discoveredAt: "2026-09-29T00:00:00Z" }, { actor: "project-manager", operationId: "milestone-capture-op" });
     expect((await getIssue(context, assigned.issueId)).milestoneId).toBe(made.milestoneId);
@@ -126,37 +161,9 @@ describe("issue milestone association", () => {
   });
 });
 
-test("schema-4 stores list issues while provenance detail requires explicit upgrade", async () => {
-  const oldHarness = join(mkdtempSync(join(tmpdir(), "issue-schema-4-")), ".mstar");
-  mkdirSync(oldHarness, { recursive: true });
-  const raw = new DatabaseSync(storeDbPath({ harnessDir: oldHarness }));
-  raw.exec(SCHEMA_VERSION_TABLE_SQL);
-  for (const migration of MIGRATIONS.filter(({ version }) => version <= 4)) {
-    raw.exec(migration.sql);
-    raw.prepare("insert into schema_version(version,name,checksum,applied_at) values(?,?,?,?)")
-      .run(migration.version, migration.name, migrationChecksum(migration), "2026-09-29T00:00:00Z");
-  }
-  raw.prepare("update store_meta set authority_state='active' where id=1").run();
-  raw.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('old-issue','old-project','Old issue','bug','high','impact','acceptance','now','now','old-issue')").run();
-  raw.close();
-  const oldContext: StoreContext = { harnessDir: oldHarness };
-  expect((await listIssues(oldContext, { projectId: "old-project" })).items[0]?.milestoneId).toBeNull();
-  await expect(getIssue(oldContext, "old-issue")).rejects.toMatchObject({ code: "issue.schema-outdated" });
-  expect(await withStoreRead(oldContext, queryDashboard("issues"))).toMatchObject({ data: { total: 1 } });
-  await expect(
-    withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
-  ).rejects.toMatchObject({ code: "issue.schema-outdated" });
-  await upgradeStore(oldContext);
-  expect((await getIssue(oldContext, "old-issue")).milestoneId).toBeNull();
-  expect(
-    await withStoreRead(oldContext, queryDashboard("issue-detail", { id: "old-issue" })),
-  ).toMatchObject({ data: { id: "old-issue", milestoneId: null } });
-  rmSync(oldHarness, { recursive: true, force: true });
-});
-
 describe("removeMilestone", () => {
   test("removes an empty milestone and refuses a milestone that still holds issues", async () => {
-    const empty = await addMilestone(context, { projectId, name: "Removable", target: null, ordinal: 90 }, { operationId: "remove-empty-add", expectedStoreRevision: revision() });
+    const empty = await addMilestone(context, { projectId, name: "Removable", effortSessions: null, ordinal: 90 }, { operationId: "remove-empty-add", expectedStoreRevision: revision() });
     // The replay identity covers the caller's revision expectation, so the
     // retry re-presents the revision its first attempt was judged against.
     const removalRevision = revision();
@@ -165,7 +172,7 @@ describe("removeMilestone", () => {
     // Idempotent replay through the shared operation ledger.
     expect(await removeMilestone(context, projectId, empty.milestoneId, { operationId: "remove-empty", expectedStoreRevision: removalRevision })).toEqual(receipt);
 
-    const held = await addMilestone(context, { projectId, name: "Holding", target: null, ordinal: 91 }, { operationId: "remove-held-add", expectedStoreRevision: revision() });
+    const held = await addMilestone(context, { projectId, name: "Holding", effortSessions: null, ordinal: 91 }, { operationId: "remove-held-add", expectedStoreRevision: revision() });
     await assignIssueMilestone(
       context,
       "milestone-assignment-issue",
@@ -197,7 +204,7 @@ describe("removeMilestone", () => {
   });
 
   test("a stale expectedStoreRevision removal is refused and removes nothing", async () => {
-    const milestone = await addMilestone(context, { projectId, name: "Stale guard", target: null, ordinal: 92 }, { operationId: "remove-stale-add", expectedStoreRevision: revision() });
+    const milestone = await addMilestone(context, { projectId, name: "Stale guard", effortSessions: null, ordinal: 92 }, { operationId: "remove-stale-add", expectedStoreRevision: revision() });
     const current = revision();
     await expect(
       removeMilestone(context, projectId, milestone.milestoneId, { operationId: "remove-stale", expectedStoreRevision: current - 1 }),

@@ -1,15 +1,32 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import path from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import {
   createExecutionWorkflow,
+  initializeCollaborationStore,
   initializeStore,
+  readCollaborationAuthority,
   readExecutionState,
   registerCatalogEntity,
+  resolveCollaborationLocation,
+  writeCollaborationBinding,
   type WorkflowEntry,
   type WorkflowSnapshot,
 } from "@mstar-harness/engine";
+
+const HOME = mkdtempSync(path.join(tmpdir(), "mstar-dashboard-lifetime-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME, { recursive: true, force: true });
+});
 import { getCommandDefinitions } from "../src/index.js";
 import { failure } from "../src/families/dashboard.js";
 import { startDashboard, type RunningDashboard } from "../src/dashboard/server.js";
@@ -32,10 +49,40 @@ function context(harnessDir: string, effects: CommandEffects): InvocationContext
   };
 }
 
+/**
+ * why: A harness on BOTH lanes: the execution authority plus the active
+ * collaboration authority of a synthetic checkout, so the seeded catalog and
+ * workflow rows are served from their own sources.
+ */
 async function workspace(prefix: string): Promise<string> {
-  const harnessDir = mkdtempSync(path.join(tmpdir(), prefix));
+  const root = mkdtempSync(path.join(tmpdir(), prefix));
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${path.basename(root)}.git`], {
+    cwd: root,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${root}.insteadOf`, `https://github.com/acme/${path.basename(root)}.git`],
+    { cwd: root, stdio: ["ignore", "ignore", "ignore"] },
+  );
+  writeFileSync(path.join(root, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harnessDir = path.join(root, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
   const store = await initializeStore({ harnessDir });
   store.close();
+  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir }));
+  const lane = new DatabaseSync(resolveCollaborationLocation({ harnessDir }).dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding({ harnessDir }, await readCollaborationAuthority({ harnessDir }));
   return harnessDir;
 }
 

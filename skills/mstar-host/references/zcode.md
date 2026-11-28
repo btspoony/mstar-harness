@@ -77,12 +77,12 @@ Role shells are thin — each body only states the role identity and points at t
 
 ZCode C5/C5b SSOT is **this file** — do **not** load `_shared/host-role-binding-core.md` (that file is Kimi only). Role shells are thin (identity + skill pointer, not the full role prompt), so every role dispatch must carry:
 
-1. **`Execute as: <role-id>`** in Assignment (harness routing SSOT).
+1. **`execute_as: <role-id>`** in the Assignment front matter (harness routing SSOT).
 2. **`Act as <role-id>`** (or equivalent) at the top of the invoke prompt.
 3. **Skill load list** — instruct the subagent to read `mstar-roles` → `references/<role-id>.md` (or shared reference + parameters) and topic skills per that reference.
 4. **`subagent_type`** — bare Morning Star role id per C5; `general-purpose` fallback.
 
-Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `Execute as` — no recursive invoke of the same role; Assignment wins (`Delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
+Paste-only Assignment **without** an invoke call is **not** dispatch. Anti-recursion NEVER: leaf executors are already `execute_as` — no recursive invoke of the same role; Assignment wins (`delegation: forbidden` unless stated). Independent ready implementers may run concurrently after isolation; scheduling → **`parallel-dispatch.md`** § SDD implement.
 
 **Role-binding field:** **`subagent_type`** — the bare Morning Star role id per C5 (`general-purpose` / `Explore` fallbacks); the thin role shell still needs the C5b prompt binding above.
 **Engine scope (#156):** no engine dispatch gate observes caller identity here (the binding field carries the **invoke target**, not the dispatching seat), so this red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
@@ -93,19 +93,23 @@ ZCode invoke shape (same turn):
 Agent(
   subagent_type: "fullstack-dev",
   description: "<short task label>",
-  prompt: "<full Assignment body including Execute as + Act as + skill load>"
+  prompt: "<full Assignment document including the front matter execute_as + Act as + skill load>"
 )
 ```
 
-Assignment / prompt template:
+Assignment / prompt template (front matter is the only field contract; the full key set → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)):
 
 ```markdown
-## Assignment
+---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: deep
+working_branch: feat/example
+plan_path: /path/to/control-root/.mstar/plans/20260717-example.md
+task_budget: one implementer round closing this task's Files list and verification gates
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Working branch**: feat/example
-**Plan Path**: .mstar/plans/20260717-example.md
+## Assignment
 
 **IDENTITY:** You ARE `fullstack-dev`. Act as `fullstack-dev` for this task.
 
@@ -117,7 +121,7 @@ Load: `mstar-harness-core` → `mstar-host` → `zcode.md` → `mstar-roles` →
 Role id not exposed (older ZCode) → `subagent_type: "general-purpose"` with the same body. For **`Explore`** orientation:
 
 ```text
-Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-only orientation; Execute as: n/a ...")
+Agent(subagent_type: "Explore", description: "...", prompt: "... Act as explore-only orientation; execute_as: n/a ...")
 ```
 
 ## PM dispatch (`Agent`)
@@ -126,20 +130,20 @@ Harness **dispatch** on ZCode = **one or more `Agent` tool calls** with correct 
 
 | Harness | ZCode |
 |---------|-------|
-| `Execute as: <role-id>` | Role id in Assignment + **Act as** + skill load in **Agent** prompt (C5b) |
+| `execute_as: <role-id>` | Role id in the Assignment front matter + **Act as** + skill load in **Agent** prompt (C5b) |
 | `subagent_type` for invoke | bare role id (e.g. `fullstack-dev`, `qc-specialist`); `general-purpose` fallback; `Explore` for read-only |
 | Parallel batch **N** | **N `Agent`** calls in **one assistant message** |
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all via bare `subagent_type: "qc-specialist"` / `"qc-specialist-2"` / `"qc-specialist-3"` (`general-purpose` fallback; N rules → `parallel-dispatch.md`).
+- **`execution_mode: sdd`**: **N=3** `Agent` calls (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) — each prompt **Act as** the respective QC role, all via bare `subagent_type: "qc-specialist"` / `"qc-specialist-2"` / `"qc-specialist-3"` (`general-purpose` fallback; N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 
 Cannot emit required **N** → **`Blocked`**.
 
 ### SDD implement
 
-- **`Execution mode: sdd`**: one implementer **`Agent`** per task id (bare role id per C5, `general-purpose` fallback); task reviewer = new **`Agent`** with **Act as `code-reviewer`** (`subagent_type: "code-reviewer"`, `general-purpose` fallback; ZCode L2 review; not qc-specialist*), always with C5b prompt binding — no sticky resume unless host adds it later. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
+- **`execution_mode: sdd`**: one implementer **`Agent`** per task id (bare role id per C5, `general-purpose` fallback); task reviewer = new **`Agent`** with **Act as `code-reviewer`** (`subagent_type: "code-reviewer"`, `general-purpose` fallback; ZCode L2 review; not qc-specialist*), always with C5b prompt binding — no sticky resume unless host adds it later. Ready-task scheduling → **`parallel-dispatch.md`** § SDD implement.
 - Independent ready implementers use isolated parallel tracks; never share a writable worktree or session.
 
 ## Clarify
@@ -165,7 +169,7 @@ Cannot emit required **N** → **`Blocked`**.
 
 ## Git and final evidence
 
-- Git work follows `mstar-branch-worktree` and Assignment **Working branch** / **Branch policy**.
+- Git work follows `mstar-branch-worktree` and the Assignment front matter `working_branch` / `branch_policy`.
 - Completion reports cite concrete commands, artifacts, and commit lines when required.
 
 ## Gotchas

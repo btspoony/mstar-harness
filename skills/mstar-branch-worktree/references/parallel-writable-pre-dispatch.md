@@ -30,10 +30,10 @@ Before the **first** concurrent writable implement dispatch in a round:
 
 1. **Re-read repo parallel rules** — root `AGENTS.md` and `{HARNESS_DIR}/AGENTS.md` for branch / worktree / merge-order constraints not duplicated in harness skills.
 2. **Confirm PM checkout** — PM thread operates the **integration worktree** (dedicated checkout on `spec_integration_branch`); the primary checkout (main worktree) keeps its recorded **`Main worktree branch`** and never switches. **Do not** `checkout` topic / feature branches in the PM **primary cwd** to "help" implementers.
-3. **Create isolation** — from the realpath of the Git top-level, for each writable track: `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<track-slug> <branch>` (or equivalent checkout-isolation capability) **before** dispatch. `<repo>` is the repo basename; create a new branch with `-b <branch>` when needed. Each Assignment **must** include absolute **`Worktree path`**.
-4. **Verify paths exist** — for each track: directory exists; `git -C <path> branch --show-current` matches Assignment **`Working branch`**.
-5. **Retain track ownership** — before L2 dispatch, PM records every track's Assignment **`Working branch`** in the governing plan row **`metadata.track_branches: string[]`** (ACTIVE: store execution authority graph). Retain these branches while the lifecycle is active; the main-residency check consumes this record. Tracks hold no row-level execution leases.
-6. **Assignment tags** — `Dispatch mode: parallel independent tracks` + `Worktree isolation: required` (`mstar-phase-gates`).
+3. **Create isolation** — from the realpath of the Git top-level, for each writable track: `mkdir -p ../<repo>.worktrees && git worktree add ../<repo>.worktrees/<track-slug> <branch>` (or equivalent checkout-isolation capability) **before** dispatch. `<repo>` is the repo basename; create a new branch with `-b <branch>` when needed. Each writable track's Assignment front matter **must** declare its absolute `worktree_path`.
+4. **Verify paths exist** — for each track: directory exists; `git -C <path> branch --show-current` matches the Assignment's `working_branch`.
+5. **Retain track ownership** — before L2 dispatch, PM records every track's Assignment `working_branch` in the governing plan row **`metadata.track_branches: string[]`** (ACTIVE: store execution authority graph). Retain these branches while the lifecycle is active; the main-residency check consumes this record. Tracks hold no row-level execution leases.
+6. **Assignment declaration** — the parallel shape is the schema's own front-matter list: `worktree_path` (one absolute checkout per track) plus `working_branch` (one entry per track, or one shared value for all); ≥2 `worktree_path` entries is the only parallel declaration a gate reads — no marker key exists.
 7. **Merge order** — when tracks may touch overlapping paths (shared packages, migrations, lockfiles), PM assigns **explicit sequential merge order** before dispatch.
 
 ## PM primary cwd invariants
@@ -46,8 +46,8 @@ Before the **first** concurrent writable implement dispatch in a round:
 
 ## Leaf implementer invariants
 
-- **Before first** repo `Write` / `commit`: `cd` to Assignment **`Worktree path`**.
-- **Never** implement in PM's integration checkout when Assignment names a different **`Worktree path`**.
+- **Before first** repo `Write` / `commit`: `cd` to the Assignment's `worktree_path`.
+- **Never** implement in PM's integration checkout when Assignment names a different `worktree_path`.
 - Completion Report: **`Worktree path used`** (absolute) + **`Working branch used`**.
 
 ## Common anti-patterns
@@ -55,7 +55,7 @@ Before the **first** concurrent writable implement dispatch in a round:
 | Looks compliant | Actually wrong |
 |----------------|----------------|
 | Two Task invokes in one message | Both writers share default repo root checkout |
-| Assignment lists `Working branch: feature/...` only | No `Worktree path`; subagent inherits PM cwd |
+| Assignment declares only `working_branch` | No `worktree_path`; subagent inherits PM cwd |
 | `git checkout -b feature/...` on shared checkout | Branch exists but **no** directory isolation |
 | Sibling worktree root exists | Per-track subdirs missing — empty root ≠ isolation |
 | Prior serial plans succeeded | Assumes parallel needs no worktree setup |

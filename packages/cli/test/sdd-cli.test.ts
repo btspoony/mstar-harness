@@ -21,15 +21,22 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createExecutionWorkflow, initializeStore, readExecutionState, registerCatalogEntity } from "@mstar-harness/engine";
-import { cliEnv, runCli, SRC_ENTRY, type RunResult } from "./harness";
+import { createExecutionWorkflow, ensureCollaborationAuthority, initializeStore, readExecutionState, registerCatalogEntity } from "@mstar-harness/engine";
+import { cliEnv, runCli, SRC_ENTRY, writeFixtureRepoId, type RunResult } from "./harness";
 import { expectUsageDiagnostic } from "./support/cli-assertions";
 
 /** Built entry when the suite runs against a built CLI (CI); else the source entry. */
 const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
 
-/** Sample plan mirroring the engine fixture: fenced fake headings + real ones. */
-const SAMPLE_PLAN = `# Fixture Plan
+/** Sample plan mirroring the engine fixture: fenced fake headings + real ones.
+ * A `plan_id` front matter fence is required — a brief without one is refused.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
+const SAMPLE_PLAN = `---
+plan_id: 20260907-sdd-brief-fixture
+---
+
+# Fixture Plan
 
 ## Goal
 
@@ -388,6 +395,7 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   git(["checkout", "-q", "-b", "main"], primary);
   git(["config", "user.email", "sdd-cli-test@example.com"], primary);
   git(["config", "user.name", "SDD CLI Test"], primary);
+  writeFixtureRepoId(primary);
   writeFileSync(join(primary, "src-sentinel.txt"), "primary source sentinel\n");
   // Mirror the real default: control artifacts (.mstar/) are gitignored, so
   // the causal-replay suite can assert "sources clean" via git status while
@@ -408,7 +416,9 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   const harnessDir = join(control, ".mstar");
   const planFile = join(harnessDir, "plans", `${PLAN_ID}.md`);
   mkdirSync(dirname(planFile), { recursive: true });
-  writeFileSync(planFile, "# Plan\n\n## Task 1\n\n- implement\n");
+  // A declared plan_id is required: taskBrief refuses a plan without one.
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  writeFileSync(planFile, `---\nplan_id: ${PLAN_ID}\n---\n\n# Plan\n\n## Task 1\n\n- implement\n`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
   const ctxFile = join(sddDir, "context.json");
@@ -422,6 +432,7 @@ async function executionFixture(root: string, opts: { nested?: boolean } = {}): 
   // branch-alignment arm production uses.
   const storeContext = { harnessDir };
   (await initializeStore(storeContext)).close();
+  await ensureCollaborationAuthority(storeContext);
   await registerCatalogEntity(
     storeContext,
     { kind: "plan", id: PLAN_ID, title: PLAN_ID, rootKind: "plans", relativePath: `plans/${PLAN_ID}.md` },

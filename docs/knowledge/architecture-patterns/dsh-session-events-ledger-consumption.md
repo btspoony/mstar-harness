@@ -30,7 +30,7 @@ W-B2 (iter-<plan-id>, plan `<plan-id>`) built the workflow ledger over durable `
 
 ## Guidance
 
-1. **Session access is a named cordis service, consumed structurally.** `ctx.get('sessions')` (`SessionStore`, `packages/core/session/src/index.ts:792,797`) exposes `get(id)` / `list()`; `session.events` is an immutable deep-frozen full-log snapshot (`:559-562`). Structural views (no plugin dep) follow the agents/loader seam pattern already used in this package.
+1. **Session access is a named cordis service, consumed structurally.** `ctx.get('sessions')` (`SessionStore`, then `packages/core/session/src/index.ts:792,797`; the upstream tree has since split it into the published `@deepseek-ai/dsh-session` package) exposes `get(id)` / `list()`; `session.events` is an immutable deep-frozen full-log snapshot (`:559-562`). Structural views (no plugin dep) follow the agents/loader seam pattern already used in this package.
 
 2. **The live firehose emit is CARRIER-FIRST.** `session/event` (and `session/created`) dispatch as `[{}, 'session/event', session, event]` — cordis shifts the leading carrier object into `this`, so listeners receive `(session, event)`. Emitting name-first (`emit('session/event', session, event)`) silently mis-routes; the fake-registry tests proved it. Both events use a scope-null resolver (`scoped-events.generated.ts:25/27`), so a root-context untagged listener receives ALL sessions.
 

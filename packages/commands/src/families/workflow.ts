@@ -88,7 +88,11 @@ function engineRefusal(id: string, error: unknown): CommandEnvelope<never> {
                         ? "The engine refused this supplied attestation. Omit --attestation to use the document the verb generates from its own recorded facts, or correct the file: `mstar schema --command workflow.adopt-terminal` publishes the structural contract and semantic rules; the engine validator remains authoritative. Do not invent operator, consumer-readiness, or stop facts."
                         : code.startsWith("execution.adoption")
                           ? "Preserve the header and resolve the stated cause; re-read `mstar status validate` before retrying."
-                          : undefined;
+                          : code === "collaboration.mode-unavailable"
+                            // invariant: A remote checkout has no local catalog or registration lane, so the
+                            // named cause is the mode, not the request payload.
+                            ? "Remote authority admits no local catalog or registration lane, so nothing was reserved. Read the addressed plan rows and their catalog pins with mstar plan show --workflow <workflow-id> --plan <plan-id>, then re-register against the provider project or run this verb in a local or mirror checkout."
+                            : undefined;
   const refusalDetails = details === undefined
     ? undefined
     : {
@@ -264,14 +268,14 @@ function makeDefinition(
     ...(id === "workflow.register" ? {
       requirements: [
         { name: "workflow", ownership: "caller" as const, route: "cli" as const, required: true },
-        { name: "planId", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
+        { name: "planId", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document front matter (canonical form: plan_id: <id> inside the front matter fence)" },
         { name: "planTitle", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
         { name: "planFile", ownership: "caller" as const, route: "cli" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
         { name: "deliveryKind", ownership: "caller" as const, route: "cli" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },
         { name: "expect", ownership: "caller" as const, route: "cli" as const, required: false, tokenKind: "root" as const, constraint: "optional checked constraint on the current root execution token" },
         { name: "operation", ownership: "caller" as const, route: "cli" as const, required: false, constraint: "optional pinned replay id" },
         { name: "workflow", ownership: "caller" as const, route: "mcp" as const, required: true },
-        { name: "planId", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document header (canonical form: **plan_id:** <id>)" },
+        { name: "planId", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the plan_id declared in the selected plan document front matter (canonical form: plan_id: <id> inside the front matter fence)" },
         { name: "planTitle", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must equal the selected plan document's H1 title" },
         { name: "planFile", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: "must identify the selected plan document under the canonical plans directory" },
         { name: "deliveryKind", ownership: "caller" as const, route: "mcp" as const, required: true, constraint: `must be one of ${WORKFLOW_DELIVERY_KINDS.join(" | ")}` },

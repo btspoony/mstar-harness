@@ -14,6 +14,7 @@ import type { IssueDetail, IssuePage, ReadEnvelope } from "@mstar-harness/engine
 import { IssueDetail as IssueDetailScreen, Issues, copyFor } from "@mstar-harness/ui";
 
 import {
+  assignableOptions,
   ISSUE_FILTER_OPTIONS,
   keepPreviousOnLoad,
   issueDetailCopy,
@@ -23,14 +24,16 @@ import {
   issuesCopy,
   issuesOutcome,
   issuesPath,
+  readAssignableIssues,
   readIssueDetail,
   readIssues,
   scopedFilters,
   startRead,
 } from "./issues-data";
-import { DEFAULT_ISSUE_FILTERS, DISPOSITIONS, ISSUE_KINDS, SEVERITIES } from "@mstar-harness/ui";
+import { ASSIGNABLE_ISSUE_LIMIT, DEFAULT_ISSUE_FILTERS, DISPOSITIONS, ISSUE_KINDS, SEVERITIES } from "@mstar-harness/ui";
 
 const projection = {
+  observed: true,
   generation: 7,
   freshness: "current" as const,
   builtAt: "2026-10-25T05:00:00.000Z",
@@ -57,6 +60,8 @@ const listEnvelope = (items: IssuePage["items"], total = items.length, projectio
   storeRevision: 1224,
   catalogRevision: 9,
   projection: projectionBlock,
+  collaboration: null,
+  execution: null,
 });
 
 const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
@@ -119,6 +124,17 @@ const detail = (over: Partial<IssueDetail> = {}): IssueDetail => ({
 
 const query = { filters: { ...DEFAULT_ISSUE_FILTERS }, offset: 0 };
 
+/** note: An explicit partial observation, as a source that could not prove its scope reports. */
+const partialObservation = {
+  scope: { kind: "query" as const, key: "issues" },
+  completeness: "partial" as const,
+  asOf: "2026-11-21T00:00:00.000Z",
+  authority: { repoKey: "github.com/acme/repo", mode: "local" as const, storeId: "store-a", epoch: 1 },
+  revision: 3,
+  catalogRevision: 1,
+  code: "collaboration.observation-incomplete",
+};
+
 const renderList = (items: IssuePage["items"], total = items.length, projectionBlock = projection, applied = query): string => {
   const outcome = issuesOutcome({ status: "ready", envelope: listEnvelope(items, total, projectionBlock) }, applied);
   if (outcome.kind !== "ready") throw new Error("expected a ready list");
@@ -165,6 +181,19 @@ describe("the list read", () => {
     expect(path).toContain("severity=critical");
     expect(path).toContain("limit=50");
     expect(path).toContain("offset=50");
+  });
+
+  test("a required collaboration gap is a failed read, not rows", async () => {
+    const gapped = (async () =>
+      new Response(JSON.stringify({ ...listEnvelope([summary()], 1), collaboration: partialObservation }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const result = await readIssues(gapped, query);
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
+    expect(issuesOutcome(result, query).kind).toBe("failed");
   });
 
   test("outcome 1 — a healthy read becomes a listed page", () => {
@@ -282,6 +311,26 @@ describe("the detail read", () => {
     expect(issueDetailOutcome(result).kind).toBe("failed");
   });
 
+  test("a required collaboration gap is a failure, never an absence", async () => {
+    const gapped = (async () =>
+      new Response(
+        JSON.stringify({
+          data: detail(),
+          storeRevision: 1224,
+          catalogRevision: 9,
+          projection,
+          collaboration: partialObservation,
+          execution: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      )) as unknown as typeof fetch;
+    const result = await readIssueDetail(gapped, "I-000870");
+    expect(result.status).toBe("error");
+    if (result.status !== "error") return;
+    expect(result.message).toContain("collaboration.observation-incomplete");
+    expect(issueDetailOutcome(result).kind).toBe("failed");
+  });
+
   test("a body that is not an envelope is a failure, never an absence", async () => {
     const nonsense = (async () =>
       new Response(JSON.stringify({ hello: "world" }), {
@@ -325,5 +374,88 @@ describe("P1: a keystroke must not unmount the search box", () => {
     const ready = issuesOutcome({ status: "ready", envelope: listEnvelope([], 0) }, query);
     const failed = keepPreviousOnLoad(ready, { kind: "failed", message: "refused" });
     expect(failed).toEqual({ kind: "failed", message: "refused" });
+  });
+});
+
+describe("the assign picker's read", () => {
+  test("pages the whole OPEN set of the project, ignoring the address bar's filters", async () => {
+    // see packages/cli/web/issues-data.test.ts - // The page is the address bar's: a severity filter and a second page. The picker
+    // must not inherit either — it asks its own query and follows every page.
+    const requested: string[] = [];
+    const fetchImpl = (async (input: string | URL | Request) => {
+      const url = new URL(String(input), "http://localhost");
+      requested.push(url.search);
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const items = offset === 0 ? Array.from({ length: 50 }, (_, index) => summary({ id: `I-${index}`, milestoneId: null })) : [summary({ id: "I-tail-51", milestoneId: null })];
+      return new Response(
+        JSON.stringify({
+          ...listEnvelope(items, 51),
+          // see packages/cli/web/issues-data.test.ts - // The list's own page bounds ride the collaboration scope key; the pager
+          // treats the two pages as one list when the logical scope matches.
+          collaboration: {
+            scope: { kind: "query", key: `issues:open:engine:50:${offset}` },
+            completeness: "complete",
+            asOf: "2026-11-21T00:00:00.000Z",
+            authority: { repoKey: "github.com/acme/repo", mode: "local", storeId: "store-a", epoch: 1 },
+            revision: 3,
+            catalogRevision: 1,
+            code: null,
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as unknown as typeof fetch;
+
+    const result = await readAssignableIssues(fetchImpl, "engine");
+    expect(result.status).toBe("ready");
+    if (result.status !== "ready") return;
+    expect(result.envelope.data.items).toHaveLength(51);
+    // see packages/cli/web/issues-data.test.ts - // Every request is the picker's own: disposition=open + the project, no
+    // severity/search/kind filter, and the two page offsets.
+    for (const search of requested) {
+      const params = new URLSearchParams(search);
+      expect(params.get("disposition")).toBe("open");
+      expect(params.get("project")).toBe("engine");
+      expect(params.get("severity")).toBeNull();
+      expect(params.get("q")).toBeNull();
+      expect(params.get("kind")).toBeNull();
+    }
+    expect(requested.some((search) => new URLSearchParams(search).get("offset") === "50")).toBe(true);
+  });
+
+  test("a required collaboration gap is a failed read, never a short picker", async () => {
+    const gapped = (async () =>
+      new Response(JSON.stringify({ ...listEnvelope([summary()], 1), collaboration: partialObservation }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+    const result = await readAssignableIssues(gapped, "engine");
+    expect(result.status).toBe("error");
+  });
+});
+
+describe("the picker's offer list follows an assignment", () => {
+  test("an assigned issue leaves the offer set; an unassigned one returns at its NEW revision", () => {
+    const open = (id: string, revision: number, milestoneId: string | null) => summary({ id, revision, milestoneId });
+    // see packages/cli/web/issues-data.test.ts - // Before: I-1 and I-2 are offered; I-3 is already assigned and I-4 is resolved.
+    const before = [open("I-1", 3, null), open("I-2", 1, null), open("I-3", 1, "m-1"), summary({ id: "I-4", disposition: "resolved", milestoneId: null })];
+    expect(assignableOptions(before).map((issue) => issue.id)).toEqual(["I-1", "I-2"]);
+
+    // see packages/cli/web/issues-data.test.ts - // I-1 is assigned: the refreshed rows no longer offer it.
+    const afterAssign = [open("I-1", 4, "m-1"), open("I-2", 1, null), open("I-3", 1, "m-1")];
+    expect(assignableOptions(afterAssign).map((issue) => issue.id)).toEqual(["I-2"]);
+
+    // see packages/cli/web/issues-data.test.ts - // I-1 is unassigned again: it returns carrying the observed revision the next
+    // write must hash (5), so a stale pick cannot revert another writer.
+    const afterUnassign = [open("I-1", 5, null), open("I-2", 1, null)];
+    expect(assignableOptions(afterUnassign)).toEqual([
+      { id: "I-1", title: before[0]!.title, severity: "critical", revision: 5 },
+      { id: "I-2", title: before[1]!.title, severity: "critical", revision: 1 },
+    ]);
+  });
+
+  test("the offer list is capped at the host limit, stated by its length", () => {
+    const many = Array.from({ length: 60 }, (_, index) => summary({ id: `I-${index}`, milestoneId: null }));
+    expect(assignableOptions(many)).toHaveLength(ASSIGNABLE_ISSUE_LIMIT);
   });
 });

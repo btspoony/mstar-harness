@@ -5,11 +5,12 @@
  * field forwarding or source strings.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { initializeStore } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore } from "@mstar-harness/engine";
+import { writeFixtureRepoId } from "./harness";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -93,9 +94,12 @@ function capturePayload(overrides: Record<string, unknown> = {}): Record<string,
 async function makeHarness(): Promise<{ root: string; harness: string }> {
   const root = mkdtempSync(join(tmpdir(), "mstar-issue-cli-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   await initializeStore({ harnessDir: harness }).then((h) => h.close());
+  await ensureCollaborationAuthority({ harnessDir: harness });
   return { root, harness };
 }
 
@@ -258,7 +262,11 @@ describe("mstar issue CLI bundle", () => {
     const finalShow = runBundle("node", ["issue", "show", "--id", created.issueId, "--harness", harness], root);
     expect((jsonOf(finalShow).data as { revision: number }).revision).toBe(detail.revision);
   });
-  test("obsolete closes a removed subject end to end: show, list, export, reopen", async () => {
+  // The budget covers ~11 bundle spawns; the default 5s bound kills the case
+  // on a loaded CI shard (reproduced at 5.08s under CPU contention) — same
+  // reason the reopen case above declares 30s.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+  test("obsolete closes a removed subject end to end: show, list, export, reopen", { timeout: 30_000 }, async () => {
     const { root, harness } = await makeHarness();
     const captureFile = join(root, "obsolete-capture.json");
     writeJson(captureFile, capturePayload({ occurrenceKey: "obsolete-run", rootCauseKey: "obsolete-cause" }));

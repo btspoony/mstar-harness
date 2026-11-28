@@ -11,20 +11,34 @@
  *
  * No barrel: importers name this module by explicit relative path.
  */
+import { dirname } from 'node:path'
 import {
-  assignmentHeaderRegion,
+  assignmentFrontmatterEntries,
   composeDispatchGate,
   isReadOnlyAssignmentRole,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
 } from '@mstar-harness/engine'
-import type { ValidationResult } from '@mstar-harness/engine'
+import type { AssignmentSourceResult, DocumentFrontmatterError, FrontmatterEntry, ValidationResult } from '@mstar-harness/engine'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING } from './_shared.ts'
+import { asRecord, liveConfigValue, ROOT_SESSION_DISPATCH_BINDING, sessionCwdOf } from './_shared.ts'
 import type { Config } from './_shared.ts'
 import { isRootLikeAgent } from './steering.ts'
 import type { SessionHint } from './workflow-selection.ts'
 import type { ExecutionWorkflowSourceRead } from './workflow-selection.ts'
 import { worktreeL1Violations, worktreeL2Violations } from './dispatch-worktree.ts'
+import { planIdOfEntries } from './dispatch-assignment.ts'
+
+/**
+ * True when any violation is a TERMINAL refusal — a verdict independent of
+ * enforcement (the engine `ValidationResult.terminal` contract, emitted for
+ * every `readAssignmentSource` refusal): there is no verified document to
+ * evaluate, so a caller that can refuse an action MUST refuse it whether or
+ * not the deployment asked for `hard`.
+ * @param violations - the verdict's violation list.
+ */
+export function hasTerminalRefusal(violations: readonly ValidationResult[]): boolean {
+  return violations.some((violation) => violation.terminal === true)
+}
 
 /**
  * The dispatching session's stable id, when the seam exposes it (dsh
@@ -87,15 +101,14 @@ export function dispatchCallerOf(config: Config, agent: unknown): string {
  * Extracted from `gateDispatch` so the `tools/pre-execute` listener and the
  * host adapter's `beforeDispatch` share ONE code path.
  *
- * Header-region scoping: the engine `assignmentHeaderRegion`
- * slice is computed ONCE and feeds the composition AND the worktree parsers
- * (fields, branch forms, direct-on exception, worktree tracks) — body-quoted
- * field examples after a `# Task` / `# Target` / `---` marker never leak
- * into the header fields the gate validates (the same discipline
- * enforcement / plan-id / lease already honor). Well-formed assignments
- * (fields in the header) slice to the full text, so their verdicts are
- * unchanged. The composition never throws: unexpected failures degrade to
- * the silent non-shaped result.
+ * ONE parse per dispatch: the front matter entries (the caller's, else this
+ * core's own) feed the read-only-role read, the worktree L1/L2 track
+ * questions and every composition leg (fields, branch forms, direct-on
+ * exception, enforcement) — no leg reparses the resolved document. Parsers
+ * are front matter-scoped, so body-quoted field examples after a
+ * `# Task` / `# Target` / `---` marker never leak into a gate. The
+ * composition never throws: unexpected failures degrade to the silent
+ * non-shaped result.
  *
  * @returns the violations plus the writable flag (false for read-only
  * roles — the listener feeds it to the lease gate).
@@ -105,19 +118,65 @@ export function dispatchCallerOf(config: Config, agent: unknown): string {
  * @param hint - the carrying session's selection hint (the adapter derives
  *   it once per dispatch and shares it with the lease gate, the ledger
  *   record and every selection read below).
+ * @param source - the dispatch's ONE source resolution (`Assignment file:`
+ *   pointer or inline passthrough) as the calling gate resolved it BEFORE
+ *   its first asynchronous step. Passed, never re-resolved: a refusal is
+ *   terminal here, and a resolved document is consumed verbatim — no stage
+ *   of one dispatch may read the source a second time, so a file swapped
+ *   mid-dispatch cannot split the decision from the record.
+ * @param decision - the caller's ALREADY-parsed view of that document (the
+ *   adapter needs the plan id for workflow selection before it gets here) —
+ *   handed on so the L1/L2 checks, the read-only-role read and the
+ *   composition all consume one parse. `entries` `null` is a FAILED parse,
+ *   reused as the caller's verdict input (`parseError` carries its
+ *   diagnostic into the composition, so the schema layer never re-parses);
+ *   `undefined` (no parse handed in) → this core parses once.
  */
 export async function dispatchGateCore(
   config: Config,
   harnessDir: string | null,
   prompt: string,
+  source: AssignmentSourceResult,
   callerAgent: unknown,
   hint?: SessionHint,
   activeSource?: ExecutionWorkflowSourceRead,
-): Promise<{ violations: ValidationResult[]; writable: boolean | undefined }> {
-  const header = assignmentHeaderRegion(prompt)
-  const violations: ValidationResult[] = [...worktreeL2Violations(header), ...await worktreeL1Violations(harnessDir, header, hint, activeSource)]
-  // Read-only roles (scout/explore) skip the branch-form gate entirely.
-  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(header).executeAs ?? '') ? false : undefined
+  decision?: { entries?: Map<string, FrontmatterEntry> | null; planId: string | undefined; parseError?: DocumentFrontmatterError | null },
+): Promise<{ violations: ValidationResult[]; writable: boolean | undefined; text: string }> {
+  // compass D14/D16 — the ONE resolution per dispatch: the caller hands its
+  // already-resolved `AssignmentSourceResult`; this core NEVER reads the
+  // source itself. The refusal is itself the verdict: validating the
+  // pointer text would report field violations on the wrong body.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  if (!source.ok) {
+    return {
+      // Terminal by contract: every `readAssignmentSource` refusal means no
+      // verified document exists, so the refusal is the verdict — no
+      // enforcement setting and no role exemption may soften it.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      violations: [{ ok: false, severity: source.severity, code: source.code, message: source.message, fix: source.fix, terminal: true }],
+      writable: undefined,
+      text: prompt,
+    }
+  }
+  const text = source.text
+  // One parse per decision: the adapter's parse when it handed one in, else
+  // this core's — and it feeds the L1/L2 worktree checks, the read-only-role
+  // read and every composition leg, so no leg reparses the resolved
+  // document. A FAILED parse (`entries: null`) is REUSED as the caller's
+  // verdict input — its structured diagnostic rides into the composition
+  // (`parseError`), which hands it to the schema layer for the line-numbered
+  // refusal without a second read of the rejected block. D16 recognition
+  // belongs to that one composition (one owner for the whole host family).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const entries = decision?.entries !== undefined ? decision.entries : assignmentFrontmatterEntries(text)
+  const violations: ValidationResult[] = [
+    ...worktreeL2Violations(entries),
+    ...await worktreeL1Violations(harnessDir, entries, decision?.planId ?? planIdOfEntries(entries), hint, activeSource),
+  ]
+  // Read-only roles (scout/explore) skip the branch-form gate entirely;
+  // the role is the parsed front matter field of the document.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? '') ? false : undefined
   // Engine single composition: shape guard + validateAssignmentFields
   // (writable) + antiRecursionPrecheck (caller = the dispatching agent's own
   // role, DERIVED from the calling session — an explicit binding is honoured
@@ -126,12 +185,38 @@ export async function dispatchGateCore(
   // fail-closed contract: an empty binding emits
   // dispatch.anti-recursion.empty-binding) + default-branch gate (Assignment
   // branch forms, else $MSTAR_WORKING_BRANCH; direct-on exception only when
-  // its branch is the one being checked) + header-region enforcement. Never
-  // throws. The caller is read LIVE — `dispatchBinding` is volatile (a
+  // its branch is the one being checked) + D16 + header-region enforcement.
+  // Never throws. The caller is read LIVE — `dispatchBinding` is volatile (a
   // settings save applies on the next dispatch) — and an explicitly blank
   // value still fails closed.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
   violations.push(
-    ...composeDispatchGate(header, { caller: dispatchCallerOf(config, callerAgent), callerRequired: true, writable }).violations,
+    ...composeDispatchGate(text, {
+      caller: dispatchCallerOf(config, callerAgent),
+      callerRequired: true,
+      writable,
+      entries,
+      // The caller's kept parse refusal (failed parse): the schema layer
+      // reports the carried line-numbered diagnostic instead of re-parsing.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+      parseError: decision?.parseError,
+      // Pointer provenance: a resolved `Assignment file:` carrier commits to
+      // the Assignment contract, so empty or unrelated file content is ONE
+      // invalid Assignment — never a silent non-Assignment pass.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      fileCarrier: source.path !== undefined,
+      // Git anchor: the DISPATCHING session's own checkout, never the process
+      // cwd — a host process serving another repository must not inspect it.
+      // The exec-less host hook carries no session and keeps `cwd` unset.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      cwd: sessionCwdOf(callerAgent),
+      // Source-relative `worktree_path` base: the pointed FILE's own
+      // directory (CLI parity), independent of the Git anchor above, so an
+      // assignment home outside the repository never moves which checkout the
+      // gate inspects.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+      assignmentDir: source.path === undefined ? undefined : dirname(source.path),
+    }).violations,
   )
-  return { violations, writable }
+  return { violations, writable, text }
 }

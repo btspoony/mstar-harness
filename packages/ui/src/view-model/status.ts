@@ -59,7 +59,7 @@ export type PlanStatusLiteral = (typeof PLAN_STATUSES)[number];
 export const LIFECYCLES = ["active", "archived", "superseded"] as const;
 export type LifecycleLiteral = (typeof LIFECYCLES)[number];
 
-/** Milestone statuses (roadmap feature). */
+/** Milestone statuses (the project screen's milestone board). */
 export const MILESTONE_STATUSES = ["planned", "active", "delivered", "dropped"] as const;
 export type MilestoneStatusLiteral = (typeof MILESTONE_STATUSES)[number];
 

@@ -31,7 +31,7 @@ This Phase owns the complete per-plan dispatch loop: entry checks, session todos
 2. **Pre-implement gate = GO**：plan 已 locked、tasks ready（见 `mstar-phase-gates`）
 3. 用户意图为 **continue Autonomous Execute**（推进迭代 Execute、继续 per-plan 循环等）
 4. **Branch metadata gate:** verify the `--entry` branch-metadata fact (workflow `branch.base` / `branch.target` / `branch.integration` registered) and require at least one active plan's `metadata.spec_integration_branch`; resolve missing facts through §2.3. Missing → **STOP**; never default to `main` / `master` (default-branch prohibition → **`mstar-branch-worktree`** § Git 功能分支门禁（业务仓库）).
-5. **Worktree and concurrent-write safety:** establish a separate integration checkout and distinct feature checkouts before writable dispatch; verify the `--entry` main-residency and recorded-integration-checkout facts. Record missing or corrected source branch/worktree through ordinary prepare. Execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `Worktree path`, `Working branch`, control `Plan Path` and `SDD dir`. Shared coordination writes use the control DB transaction/CAS authority; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
+5. **Worktree and concurrent-write safety:** establish a separate integration checkout and distinct feature checkouts before writable dispatch; verify the `--entry` main-residency and recorded-integration-checkout facts. Record missing or corrected source branch/worktree through ordinary prepare. Execution state is read/written through public verbs against control `{HARNESS_DIR}/store.db`; authored plans, Assignments, iteration package, SDD and append-only `notes.jsonl` use absolute control paths. Leaf Assignments include absolute feature `worktree_path`, `working_branch`, control `plan_path` and `sdd_dir`. Shared coordination writes use the control DB transaction/CAS authority; independent writable tasks use L1/L2 isolation. Missing gitignored plans in a feature checkout never justify waiver. Serial scheduling does not waive checkout isolation; integration merges always remain serial.
 
 > **Engine-check pointer:** `mstar worktree check --workflow <id> --entry` owns the workflow-entry facts (branch metadata, main residency, recorded integration checkout, merge-lease state — the engine-enforced subset only); per-plan L1 uses `mstar worktree check --workflow <id> --plan <plan-id>`. `mstar-branch-worktree` owns the L1/L2 isolation callout. These checks do not confer row authority.
 
@@ -185,9 +185,9 @@ PR tracker 返回的结果是 `result-settled` 输入之一：只消费一次，
 对每个本轮要推进的 active `plan_id`（**可交错 / 并行**是默认读法：非强制 plan A 全 Done 再 plan B，plan 编号或 task 编号本身都不是串行理由）：
 
 1. **Configure/source facts:** show the selected workflow/plan, verify its feature checkout/branch (`mstar worktree check --workflow <id> --plan <plan-id>`), and correct missing facts through ordinary prepare. Defaults are PM Acceptance / `allow-residual`; no ceremonial prepare is needed for valid metadata/defaults. A legacy active `mandatory` row uses ordinary prepare with `--acceptance-gate pm-acceptance` before completion → `mstar-roles/references/project-manager/acceptance.md`.
-2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments include absolute Worktree path, Working branch and control-root Plan Path/SDD dir; parallel tracks additionally satisfy L2 isolation.
+2. **Start:** record `Todo → InProgress` through ordinary `progress` before writable dispatch. Leaf Assignments carry front matter `worktree_path`, `working_branch` and control-root `plan_path` / `sdd_dir`; parallel tracks additionally satisfy L2 isolation.
 3. **Implement → InReview** (product edits in the feature worktree; authored plans, iteration package and SDD use absolute control paths; execution state uses public domain verbs):
-   - **默认 `Execution mode: sdd`**（多 task plan；hotfix 可 `inline`）。
+   - **默认 `execution_mode: sdd`**（多 task plan；hotfix 可 `inline`）。
    - PM 载入 **`mstar-sdd`** 后，按依赖与 ownership 派发 **独立 ready tasks 并行** 的 per-task 循环（**不是**一次派发 dev 做全部 tasks）：
      1. `mstar sdd workspace <plan-id>` → `{SDD_DIR}`
      2. `mstar sdd task-brief <plan-file> N` → `{SDD_DIR}/task-N-brief.md`；记录 `BASE_SHA`
@@ -203,7 +203,7 @@ PR tracker 返回的结果是 `result-settled` 输入之一：只消费一次，
    - On merge conflict, retain InReview and resolve or explicitly abort Git in that same checkout; do not invent Done. After a completed merge, retry complete with the same actual SHAs, never repeat the merge because a response was lost. Exact operation replay does not re-run Git or rewrite timestamps. Missing scope facts use ordinary prepare; actual Git conflicts must be resolved, not suppressed by state edits.
    - **Completion witness:** the merge completion proves is a real two-parent merge whose second parent is the QC-reviewed source SHA and whose `integration.result_sha` is that resulting merge commit; when earlier batches were already integrated, plan the final batch so this merge still exists, and never record an already-integrated no-op as the merge.
 6. **Per-plan compound:** after `Done`, run the compound disposition (Q1–Q8; `created` / `updated` / reasoned `skipped`) in the integration worktree and record the outcome in the plan's authored `## Review Gate Summary` — the engine completion payload is already written and is not amended. Commit the tracked `{KNOWLEDGE_DIR}` / `CONCEPTS.md` changes to `branch.integration` **only when the capture changed tracked files**; a reasoned `skipped` with no tracked change is satisfied by the recorded outcome and creates no empty commit. Never defer the disposition to iteration-close, and never start the next row before this step finishes.
-7. **Publish the layer**（`mstar-iteration/references/pr-stack.md`「Layer」「Sizing」「Opening」「Tracking」）：命名本 commit 所在的 integration range，在其 HEAD 上建 `iteration-stack/<iteration-id>/sNN`，用 `mstar pr-review size --base <predecessor> --head <layer>` 量测（size stop 的处置与 owner 书面 size 例外 → `pr-stack.md`「Sizing」，不在此处复述），push layer ref 后对它开 PR——首个 open layer 的 base 是 `branch.target`，其余是 live predecessor；写 compass `PR stack` 行，本 plan 首个 layer 发布时启动其 PR tracker。量测或发布未完成 → 停在该 layer，不推进它的下一层；其它 plan 的独立 ready 工作照常派发（推迟发布，不推迟实现）。`branch.integration` 从不作 PR head。
+7. **Publish the layer**（`mstar-iteration/references/pr-stack.md`「Layer」「Sizing」「Opening」「Tracking」）：命名本 commit 所在的 integration range，在其 HEAD 上建 `iteration-stack/<iteration-id>/sNN`，用 `mstar pr-review size --base <predecessor> --head <layer>` 量测（size stop 的处置与 owner 书面 size 例外 → `pr-stack.md`「Sizing」，不在此处复述），push layer ref 后对它开 PR——首个 open layer 的 base 是 `branch.target`，其余是 live predecessor；写 compass `PR stack` 行，本 plan 首个 layer 发布时启动其 PR tracker。量测或发布未完成 → 停在该 layer，不推进它的下一层；其它 plan 的独立 ready 工作照常派发（推迟发布，不推迟实现）。`branch.integration` 从不作 PR head。若 compass 里更早的 `Done` plan 仍无 `PR stack` 行，下一次 `plan complete` 以 `coordination.layer-unpublished` 拒绝——行内容可为真实 layer PR、空 range 的 `—`、或已开 aggregate PR（逐 plan 复用，`pr-stack.md`「Records」），补写行后重试同一次 completion。
    - 这里只 push layer ref；`branch.integration` 的 upstream 同步独立于发布 → § Rescheduling checkpoint「Integration ref sync」。
 8. **Cross-plan 进度同步**：更新 `{ITERATION_DIR}/<iteration-id>/delivery-compass.md` 的 `## Plans` 表状态列
 9. **Next ready row/wave:** continue from step 1; rows may interleave, while all integration writes remain serial.
@@ -236,9 +236,9 @@ mstar worktree cleanup --workflow <id> [--harness <path>] [--apply] [--remote] [
 | 规则 | 说明 |
 |------|------|
 | 并行 | 独立 ready tasks 各自 fresh implementer + 隔离 worktree；单一 canonical per-plan SDD root 内分离 task artifact 路径，context/progress 仅 PM 串行写；leaf 直接消费不可变绝对路径，不调用共享 context helper；每 task 后一位 fresh reviewer；真实依赖与 merge 串行（`mstar-sdd`） |
-| Sticky（可选） | Assignment **`SDD implementer session: sticky`** + `implementer-session.json`；implementer **resume**，reviewer **fresh** — `mstar-sdd/references/sticky-implementer-session.md` |
+| Sticky（可选） | Assignment front matter **`sdd_implementer_session: sticky`** + `implementer-session.json`；implementer **resume**，reviewer **fresh** — `mstar-sdd/references/sticky-implementer-session.md` |
 | 文件交接 | brief / report / diff / `progress.md` 在 `{SDD_DIR}`；dispatch prompt **只给路径**，不贴 plan 全文或 task 历史 |
-| Assignment fields | Every implement dispatch includes `Execution mode: sdd`, absolute `SDD dir`, source Worktree path/Working branch and inherited control-root Plan Path. |
+| Assignment 字段 | Every implement dispatch includes front matter `execution_mode: sdd`, absolute `sdd_dir`, source `worktree_path` / `working_branch` and inherited control-root `plan_path`. |
 | 大包 inline | **禁止**把 T1–Tn 或整份 plan 写进 **一个** `fullstack-dev` leaf Assignment 冒充 SDD |
 | 分支 diff | 全部 task 完成后 `mstar sdd review-package MERGE_BASE HEAD` → `{SDD_DIR}/review/` branch diff → plan QC tri（席位 → **`mstar-review-qc`** § 分派时机） |
 
@@ -258,8 +258,8 @@ Iteration Phase 2 附加：
 - Product edits run from the feature worktree; authored plans / iteration package /
   SDD use absolute control paths, and state uses public verbs against the control
   authority, never feature-cwd relative `.mstar/...`.
-- Assignment MUST include absolute feature **`Worktree path`** and absolute
-  control **`Plan Path`** / **`SDD dir`** before writable implement dispatch.
+- Assignment MUST include absolute feature **`worktree_path`** and absolute
+  control **`plan_path`** / **`sdd_dir`** before writable implement dispatch.
 - Default **L1**: one writable track per plan. Within-plan multi-writable tracks
   still follow L2 `parallel-writable-pre-dispatch` (`mstar-branch-worktree`).
 

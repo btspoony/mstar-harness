@@ -124,7 +124,7 @@
 
 .ms-container .sec-note { font-size: var(--ms-fs-11); color: var(--ms-text-muted); margin: 4px 0 0; }
 
-.ms-container .table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.ms-container .table { width: 100%; min-inline-size: var(--ms-table-floor, 0); border-collapse: collapse; table-layout: fixed; }
 
 .ms-container .table th {
   height: 26px; padding: 0 10px; text-align: left; vertical-align: middle;
@@ -348,13 +348,18 @@
 
 .ms-container .identity-line {
   display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  min-width: 0;
   margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--ms-border-hairline);
   font-family: var(--ms-font-mono); font-size: var(--ms-fs-11); color: var(--ms-text-muted);
 }
 
 .ms-container .identity-line .sep { color: var(--ms-border-strong); }
 
-.ms-container .identity-line .id-strong { color: var(--ms-text-secondary); }
+/* A harness directory is one unbroken mono string with no break opportunity; as a
+   flex item its automatic minimum is its full length, which pushed the page wider
+   than the pane at 280px. It wraps anywhere instead — the line is a fact row, and a
+   wrapped path stays readable where an ellipsis would not. */
+.ms-container .identity-line .id-strong { color: var(--ms-text-secondary); min-width: 0; overflow-wrap: anywhere; }
 
 .ms-container .identity-line .spacer { flex: 1 1 auto; }
 
@@ -492,7 +497,7 @@
 
 .ms-container .rm-project-go { color: var(--ms-text-muted); font-size: 11px; width: 14px; text-align: right; }
 
-/* Milestone timeline (project roadmap, plan 20261029-dashboard-alignment Task 6):
+/* Milestone timeline (the project screen's milestone body, plan 20261029-dashboard-alignment Task 6):
    the declarations mirror the prototype's one-for-one, so `check:declarations`
    compares identical values and the visual is the prototype's. */
 .ms-container .timeline { display: flex; gap: 10px; position: relative; margin: 6px 0 4px; padding: 4px 0 16px; }
@@ -791,7 +796,10 @@
 }
 
 @container (max-width: 619px) {
-.ms-container .table[data-narrow-cols] { table-layout: fixed; }
+/* The collapsed form has fewer columns and fits its card by design, so the
+   declared-set floor is switched off here; the hard 300px floor below re-applies
+   under the documented table floor. */
+.ms-container .table[data-narrow-cols] { table-layout: fixed; min-inline-size: 0; }
 
 .ms-container .table[data-narrow-cols] col { width: auto !important; }
 
@@ -847,6 +855,12 @@
 
 .ms-container .table th, .ms-container .table td { padding-left: 8px; padding-right: 8px; }
 
+}
+
+/* The documented table floor (`--ms-table-floor`, 300px): under it the collapsed
+   form keeps this minimum and scrolls inside its own card instead of squeezing. */
+@container (max-width: 299px) {
+.ms-container .table[data-narrow-cols] { min-inline-size: 300px; }
 }
 
 @container (max-width: 479px) {

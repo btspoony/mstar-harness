@@ -36,7 +36,16 @@ import {
   resolveTrackedResultDir,
 } from "./path.js";
 import { mainWorktreeRoot, realpathNearest } from "./git-probe.js";
-import { openStore, readStoreAuthority, storeDbPath, type StoreContext, type StoreDb } from "./store-db.js";
+import {
+  openCollaborationStore,
+  readCollaborationObservation,
+  withCollaborationWrite,
+  type CollaborationScope,
+  type CompleteCollaborationObservation,
+} from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import type { RemoteIntent, RemoteWriteOrigin } from "./collaboration-remote.js";
+import { StoreError, type StoreContext, type StoreDb, storeDbPath } from "./store-db.js";
 
 // ---------------------------------------------------------------------------
 // Vocabulary (contract §2)
@@ -44,7 +53,15 @@ import { openStore, readStoreAuthority, storeDbPath, type StoreContext, type Sto
 
 export type CatalogEntityKind = "project" | "iteration" | "plan" | "document";
 export type CatalogRootKind = "repository" | "harness" | "plans" | "iterations" | "specs" | "knowledge" | "projects";
-export type CatalogDocumentKind = "spec" | "knowledge" | "guide" | "compass" | "plan" | "roadmap" | "review" | "other";
+export type CatalogDocumentKind = "spec" | "knowledge" | "guide" | "compass" | "plan" | "review" | "other";
+
+/**
+ * note: The ONE document-kind vocabulary, shared by the local catalog verbs and the remote contract:
+ * a wire shape that admits a value this list omits would let a retired kind re-enter through a
+ * surface that never learned it was retired.
+ */
+export const DOCUMENT_KIND_NAMES = ["spec", "knowledge", "guide", "compass", "plan", "review", "other"] as const;
+
 export type CatalogLifecycle = "active" | "archived" | "superseded";
 export type CatalogRelation =
   | "belongs-to"
@@ -75,7 +92,6 @@ const DOCUMENT_KINDS: Record<CatalogDocumentKind, true> = {
   guide: true,
   compass: true,
   plan: true,
-  roadmap: true,
   review: true,
   other: true,
 };
@@ -105,6 +121,8 @@ export type CatalogOperation = {
   operationId: string;
   actor: string;
   expectedRevision?: number;
+  /** note: The project journal a remote write appends to; a local/mirror write never reads it. */
+  projectId?: string;
 };
 
 export type CatalogEntityInput = {
@@ -481,7 +499,7 @@ type EntityRecord = {
 function normalizeDocumentKind(kind: CatalogEntityKind, documentKind: unknown): CatalogDocumentKind | null {
   if (kind === "document") {
     if (documentKind === undefined || documentKind === null) {
-      throw invalid("a document entity requires documentKind (spec|knowledge|guide|compass|plan|roadmap|review|other)");
+      throw invalid("a document entity requires documentKind (spec|knowledge|guide|compass|plan|review|other)");
     }
     return requireDocumentKind(documentKind);
   }
@@ -733,11 +751,13 @@ export type ComposedStoreRevision = {
  * — one reader for both transports.
  */
 export function readCatalogStoreVersionsOn(db: StoreDb): CatalogStoreVersions {
-  const row = readStoreAuthority(db);
-  if (typeof row.authorityState !== "string" || typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
-    throw new CatalogError("store.not-active", "store_meta is missing; the store cannot accept catalog mutations. Run mstar store upgrade --operator <name> (one-command minimal activation) or mstar store activate --manifest <migration.json> --attestation <file.json>, then retry.");
+  const row = db
+    .prepare("select authority_state, revision, catalog_revision from collaboration_meta where id = 1")
+    .get() as { authority_state?: unknown; revision?: unknown; catalog_revision?: unknown } | undefined;
+  if (typeof row?.authority_state !== "string" || typeof row.revision !== "number" || typeof row.catalog_revision !== "number") {
+    throw new CatalogError("store.not-active", "collaboration_meta is missing; the catalog requires the repository's collaboration authority. Run mstar store init (fresh scope) or the reviewed collaboration apply/activate sequence, then retry.");
   }
-  return { storeRevision: row.revision, catalogRevision: row.catalogRevision, authorityState: row.authorityState };
+  return { storeRevision: row.revision, catalogRevision: row.catalog_revision, authorityState: row.authority_state };
 }
 
 function assertCatalogActive(db: StoreDb): void {
@@ -759,10 +779,10 @@ function assertCatalogActive(db: StoreDb): void {
  */
 function bumpCatalogRevisions(db: StoreDb, composed?: ComposedStoreRevision): CatalogStoreVersions {
   if (composed !== undefined) {
-    db.prepare("update store_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
+    db.prepare("update collaboration_meta set catalog_revision = catalog_revision + 1 where id = 1").run();
     return { ...readCatalogStoreVersionsOn(db), storeRevision: composed.committedStoreRevision };
   }
-  db.prepare("update store_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
+  db.prepare("update collaboration_meta set revision = revision + 1, catalog_revision = catalog_revision + 1 where id = 1").run();
   return readCatalogStoreVersionsOn(db);
 }
 
@@ -816,24 +836,69 @@ function receiptOf(row: EntityRow, storeRevision: number): CatalogReceipt {
 }
 
 async function withCatalogWrite<T>(context: StoreContext, fn: (db: StoreDb) => T): Promise<T> {
-  const handle = await openStore(context, "write");
-  try {
-    handle.db.exec("begin immediate");
-    try {
-      const result = fn(handle.db);
-      handle.db.exec("commit");
-      return result;
-    } catch (error) {
-      try {
-        handle.db.exec("rollback");
-      } catch {
-        // nothing committed
-      }
-      throw error;
-    }
-  } finally {
-    handle.close();
+  return withCollaborationWrite(context, (handle) => fn(handle.db));
+}
+
+/**
+ * note: The remote branch of every catalog write: the portable catalog is part of a project journal,
+ * so the change is frozen as one durable project-replace intent against the observed document.
+ * Location facts (root kind, relative path, source hash) are checkout evidence the remote
+ * document does not carry; the portable identity, metadata and lifecycle are what it publishes.
+ */
+/**
+ * note: The confirmed business result of a remote catalog write: the frozen document is the
+ * recorded effect, so the row's revision comes from it. A remote write owns no local store
+ * revision, so `storeRevision` is 0 exactly as a remote composite's collaboration revision is.
+ */
+function confirmedCatalogReceipt(intent: RemoteIntent, kind: CatalogReceipt["kind"], id: string): CatalogReceipt {
+  const confirmed = intent.confirmed;
+  if (confirmed === null) {
+    throw new CatalogError(
+      "catalog.revision-conflict",
+      `Operation ${intent.operationId} is confirmed without a recorded provider effect; nothing was read or changed.`,
+    );
   }
+  const change = confirmed.event.change;
+  const entities = change.kind === "project-replace" ? (change.project.catalogEntities as Array<Record<string, unknown>>) : [];
+  const row = entities.find((entity) => entity.kind === kind && entity.id === id);
+  return { kind, id, revision: typeof row?.revision === "number" ? row.revision : 0, storeRevision: 0 };
+}
+
+async function queueCatalogWrite(
+  context: StoreContext,
+  operation: CatalogOperation,
+  entity: Readonly<{ kind: CatalogReceipt["kind"]; id: string }>,
+  origin: RemoteWriteOrigin,
+  next: (current: Record<string, unknown>) => Record<string, unknown>,
+): Promise<CatalogReceipt> {
+  const projectId = operation.projectId;
+  if (typeof projectId !== "string" || projectId.trim() === "") {
+    throw new CatalogError(
+      "catalog.invalid-entity",
+      "A remote catalog write appends to one project journal; name it with `projectId`. Nothing was enqueued.",
+    );
+  }
+  // note: Dynamic on purpose — collaboration-remote.ts imports this module, so a static import
+  // would close the cycle before the catalog contract initializes.
+  const { prepareRemoteProjectWrite, pendingRemoteEffect } = await import("./collaboration-remote.js");
+  const intent = await prepareRemoteProjectWrite(context, {
+    projectId: projectId.trim(),
+    operationId: operation.operationId,
+    origin,
+    next,
+  });
+  if (intent.confirmed !== null) return confirmedCatalogReceipt(intent, entity.kind, entity.id);
+  throw pendingRemoteEffect(intent);
+}
+
+/** note: The observed portable entities of one project journal. */
+function observedEntities(current: Record<string, unknown>): Array<Record<string, unknown>> {
+  return current.catalogEntities as Array<Record<string, unknown>>;
+}
+
+/** note: The observed portable links of one project journal. */
+function observedLinks(current: Record<string, unknown>): Array<Record<string, unknown>> {
+  return current.catalogLinks as Array<Record<string, unknown>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -855,6 +920,31 @@ export async function registerCatalogEntity(
   input: CatalogEntityInput,
   operation: CatalogOperation,
 ): Promise<CatalogReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const op = requireOperation(operation);
+    const kind = requireEntityKind(input?.kind);
+    const id = requireCatalogId("id", input?.id);
+    const title = requireNonblank("title", input?.title);
+    const description = normalizeDescription(input?.description);
+    const documentKind = normalizeDocumentKind(kind, input?.documentKind);
+    const lifecycle = input?.lifecycle === undefined ? "active" : requireLifecycle(input.lifecycle);
+    return queueCatalogWrite(
+      context,
+      { ...op, projectId: operation.projectId },
+      { kind, id },
+      { verb: "catalog-register", request: { projectId: operation.projectId, kind, id, title, description, documentKind, lifecycle } },
+      (current) => {
+        const entities = observedEntities(current);
+        if (entities.some((entity) => entity.kind === kind && entity.id === id)) {
+          throw new CatalogError("catalog.duplicate", `${kind} ${id} is already registered in the observed project; nothing was enqueued.`);
+        }
+        return {
+          ...current,
+          catalogEntities: [...entities, { kind, id, title, description, documentKind, lifecycle, revision: 1 }],
+        };
+      },
+    );
+  }
   return withCatalogWrite(context, (db) => registerCatalogEntityOn(db, context, input, operation));
 }
 
@@ -966,6 +1056,43 @@ export async function updateCatalogEntity(
   const target = requireKey("key", key);
   const expected = requireExpectedRevision(expectedRevision);
   const record = normalizePatch(patch);
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    return queueCatalogWrite(
+      context,
+      { ...op, projectId: operation.projectId },
+      target,
+      { verb: "catalog-update", request: { projectId: operation.projectId, key: target, patch: record, expectedRevision: expected } },
+      (current) => {
+      const entities = observedEntities(current);
+      const row = entities.find((entity) => entity.kind === target.kind && entity.id === target.id);
+      if (row === undefined) throw new CatalogError("catalog.not-found", `${target.kind} ${target.id} is not registered in the observed project`);
+      if (row.revision !== expected) {
+        throw new CatalogError(
+          "catalog.revision-conflict",
+          `${target.kind} ${target.id} is at revision ${String(row.revision)}, not the expected ${expected}; nothing was enqueued.`,
+        );
+      }
+      return {
+        ...current,
+        catalogEntities: entities.map((entity) =>
+          entity.kind === target.kind && entity.id === target.id
+            ? {
+                ...entity,
+                title: record.title ?? entity.title,
+                description: record.description !== undefined ? record.description : entity.description,
+                documentKind:
+                  record.documentKind !== undefined
+                    ? normalizeDocumentKind(target.kind, record.documentKind)
+                    : entity.documentKind,
+                lifecycle: record.lifecycle !== undefined ? requireLifecycle(record.lifecycle) : entity.lifecycle,
+                revision: (entity.revision as number) + 1,
+              }
+            : entity,
+        ),
+      };
+      },
+    );
+  }
   const hash = requestHash("updateCatalogEntity", { target, record, expected, ...op });
 
   return withCatalogWrite(context, (db) => {
@@ -1045,6 +1172,61 @@ export async function linkCatalogEntities(
   link: CatalogLinkInput,
   operation: CatalogOperation,
 ): Promise<CatalogReceipt> {
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const op = requireOperation(operation);
+    if (!link || typeof link !== "object") throw invalid("a catalog link is required");
+    const from = requireKey("link.from", link.from);
+    const to = requireKey("link.to", link.to);
+    assertAllowedLink(from, link.relation, to);
+    const ordinal = normalizeOrdinal(link.ordinal);
+    return queueCatalogWrite(
+      context,
+      { ...op, projectId: operation.projectId },
+      from,
+      {
+        verb: "catalog-link",
+        request: { projectId: operation.projectId, from, to, relation: link.relation, ordinal, expectedRevision: operation.expectedRevision },
+      },
+      (current) => {
+      const entities = observedEntities(current);
+      for (const endpoint of [from, to]) {
+        if (!entities.some((entity) => entity.kind === endpoint.kind && entity.id === endpoint.id)) {
+          throw new CatalogError(
+            "catalog.link-refused",
+            `${endpoint.kind} ${endpoint.id} is not registered in the observed project; a dangling link is never published.`,
+          );
+        }
+      }
+      if (operation.expectedRevision !== undefined) {
+        const row = entities.find((entity) => entity.kind === from.kind && entity.id === from.id);
+        if (row !== undefined && row.revision !== operation.expectedRevision) {
+          throw new CatalogError(
+            "catalog.revision-conflict",
+            `${from.kind} ${from.id} is at revision ${String(row.revision)}, not the expected ${operation.expectedRevision}; nothing was enqueued.`,
+          );
+        }
+      }
+      // note: Replaying an existing link is idempotent; a supplied ordinal replaces the stored one.
+      const kept = observedLinks(current).filter(
+        (row) =>
+          !(
+            row.fromKind === from.kind &&
+            row.fromId === from.id &&
+            row.relation === link.relation &&
+            row.toKind === to.kind &&
+            row.toId === to.id
+          ),
+      );
+      return {
+        ...current,
+        catalogLinks: [
+          ...kept,
+          { fromKind: from.kind, fromId: from.id, relation: link.relation, toKind: to.kind, toId: to.id, ordinal },
+        ],
+      };
+      },
+    );
+  }
   return withCatalogWrite(context, (db) => linkCatalogEntitiesOn(db, context, link, operation));
 }
 
@@ -1186,12 +1368,49 @@ function bindCatalogFilter(filter: CatalogFilter | undefined): { where: string; 
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
+/** note: The canonical scope key of one catalog page: the filters with the applied bounds. */
+function catalogPageScope(filter: CatalogFilter, limit: number, offset: number): CollaborationScope {
+  return {
+    kind: "query",
+    key: `catalog:${JSON.stringify({
+      kind: filter.kind ?? null,
+      documentKind: filter.documentKind ?? null,
+      lifecycle: filter.lifecycle ?? null,
+      projectId: filter.projectId ?? null,
+      iterationId: filter.iterationId ?? null,
+      limit,
+      offset,
+    })}`,
+  };
+}
+
+/**
+ * invariant: A remote snapshot carries portable catalog IDENTITY only - no checkout-relative
+ * path, no resolved absolute path and no live file probe. The catalog's row
+ * contract requires those location facts, so this read refuses by name instead
+ * of inventing them; the dashboard's catalog identity (and its remote-aware
+ * project/iteration/milestone views) is the supported remote route.
+ */
+function assertLocalCatalogRead(context: StoreContext): void {
+  if (resolveCollaborationLocation(context).mode !== "remote") return;
+  throw new StoreError(
+    "remote.unavailable",
+    "The catalog's registered rows carry a checkout-relative location that a remote observation does not have, so this " +
+      "read cannot answer them. Read the portable catalog identity through the dashboard views (projects, iterations, " +
+      "milestones) or the remote issue reads; nothing was read.",
+  );
+}
+
 /**
  * List catalog rows with their incident links. `lifecycle` is unfiltered
  * unless asked (retention is explicit: archived/superseded rows stay
  * registered), ordering is the contract §6 deterministic kind/title/id.
  */
-export async function listCatalog(context: StoreContext, filter: CatalogFilter = {}): Promise<CatalogPage> {
+export async function listCatalog(
+  context: StoreContext,
+  filter: CatalogFilter = {},
+): Promise<CatalogPage & { collaboration: CompleteCollaborationObservation }> {
+  assertLocalCatalogRead(context);
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
   if (!Number.isInteger(limit) || limit < 1 || limit > 200 || !Number.isInteger(offset) || offset < 0) {
@@ -1199,9 +1418,11 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
   }
   const { where, params } = bindCatalogFilter(filter);
   const roots = catalogRoots(context);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
     const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, catalogPageScope(filter, limit, offset));
     const storeRevision = readCatalogStoreVersionsOn(db).storeRevision;
     const total = db.prepare(`select count(*) as n from catalog_entities ${where}`).get(...params) as { n: number };
     const rows = db
@@ -1210,33 +1431,65 @@ export async function listCatalog(context: StoreContext, filter: CatalogFilter =
           `order by catalog_entities.kind asc, catalog_entities.title asc, catalog_entities.id asc limit ? offset ?`,
       )
       .all(...params, limit, offset) as EntityRow[];
+    // note: The page's incident links belong to the same snapshot as its rows, total
+    // and revision: read them inside this transaction, before it commits.
+    const links = incidentLinks(
+      db,
+      rows.map((row) => ({ kind: row.kind, id: row.id })),
+    );
+    db.exec("commit");
     return {
       items: rows.map((row) => toCatalogEntity(row, roots)),
-      links: incidentLinks(
-        db,
-        rows.map((row) => ({ kind: row.kind, id: row.id })),
-      ),
+      links,
       total: total.n,
       storeRevision,
+      collaboration,
     };
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // note: connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }
 }
 
 /** One catalog row with every link incident to it. */
-export async function getCatalog(context: StoreContext, key: CatalogKey): Promise<CatalogDetail> {
+export async function getCatalog(
+  context: StoreContext,
+  key: CatalogKey,
+): Promise<CatalogDetail & { collaboration: CompleteCollaborationObservation }> {
+  assertLocalCatalogRead(context);
   const target = requireKey("key", key);
   const roots = catalogRoots(context);
-  const handle = await openStore(context, "read");
+  const handle = await openCollaborationStore(context, "read");
   try {
-    const row = readEntity(handle.db, target.kind, target.id);
+    const db = handle.db;
+    db.exec("begin");
+    const collaboration = readCollaborationObservation(handle, {
+      kind: "query",
+      key: `catalog:${target.kind}:${target.id}`,
+    });
+    const row = readEntity(db, target.kind, target.id);
     if (!row) throw new CatalogError("catalog.not-found", `${target.kind} ${target.id} is not registered`);
-    return {
+    const detail = {
       entity: toCatalogEntity(row, roots),
-      links: incidentLinks(handle.db, [target]),
-      storeRevision: readCatalogStoreVersionsOn(handle.db).storeRevision,
+      links: incidentLinks(db, [target]),
+      storeRevision: readCatalogStoreVersionsOn(db).storeRevision,
+      collaboration,
     };
+    db.exec("commit");
+    return detail;
+  } catch (error) {
+    try {
+      handle.db.exec("rollback");
+    } catch {
+      // note: connection-level failure during rollback -- nothing was committed
+    }
+    throw error;
   } finally {
     handle.close();
   }

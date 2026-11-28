@@ -17,12 +17,13 @@
  * `initializeExecutionAuthority` / `createExecutionWorkflow`).
  */
 import { afterAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   initializeStore,
   readExecutionState,
   registerCatalogEntity,
@@ -56,12 +57,18 @@ function makeHarness(
 ): { root: string; harness: string; statusPath: string; snapshotPath: string; storeDb: string } {
   const root = mkdtempSync(join(tmpdir(), `wgate-s4-${id}-`));
   roots.push(root);
+  // Collaboration identity: the fixture repo has no origin, so the declared
+  // repo_id is what resolves the user-level lane the catalog writes need.
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root, stdio: "ignore" });
+  writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=wgate-s4-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   const statusPath = join(harness, "status.json");
   writeFileSync(statusPath, VALID_STATUS);
-  if (enforcement !== undefined) writeFileSync(join(root, ".mstarc"), `[config]\nenforcement=${enforcement}\n`);
+  if (enforcement !== undefined) {
+    writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=wgate-s4-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n[config]\nenforcement=${enforcement}\n`);
+  }
   return {
     root,
     harness,
@@ -82,6 +89,7 @@ function makeHarness(
 async function seedActiveExecutionAuthority(harness: string): Promise<void> {
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const activated = await readExecutionState({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },

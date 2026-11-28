@@ -16,12 +16,19 @@
  * Stores are REAL (`initializeStore` / `openStore`, real `node:sqlite`
  * migrations); the refusals are the entry's own.
  */
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { initializeStore, openStore } from "@mstar-harness/engine";
+import {
+  ensureCollaborationAuthority,
+  initializeCollaborationStore,
+  initializeStore,
+  probeCollaborationAuthority,
+  resolveCollaborationLocation,
+} from "@mstar-harness/engine";
 import { HOOK_ENTRIES, HOOK_OUTFILE_REL, buildZcodeHooks } from "../../scripts/build-zcode-hooks.ts";
 
 const HOOK_SRC = join(import.meta.dir, "mstar-write-gate.ts");
@@ -44,7 +51,12 @@ const BAD_JSON = "{ not json";
 
 const roots: string[] = [];
 
+/** Isolated user home for the collaboration lane (the child inherits it). */
+const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "wgate-g4b-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+
 beforeAll(async () => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
   await buildZcodeHooks(); // regenerate the committed artifact (deterministic)
 });
 
@@ -52,17 +64,26 @@ afterAll(() => {
   // The suite rebuilds the tracked bundles in `beforeAll`; put the committed
   // bytes back so a green run does not leave the worktree dirty.
   for (const [path, bytes] of COMMITTED_BUNDLES) writeFileSync(path, bytes);
+  // Restore the shared module's homedir before removing its target: a leaked
+  // spy would make every later test file depend on this deleted directory.
+  homeSpy?.mockRestore();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  rmSync(FIXTURE_HOME, { recursive: true, force: true });
 });
 
 function makeHarness(id: string, enforcement?: "hard" | "soft"): { root: string; harness: string; register: string; storeDb: string } {
   const root = mkdtempSync(join(tmpdir(), `wgate-g4b-${id}-`));
   roots.push(root);
+  // A real git worktree: collaboration resolution names the main checkout.
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: "ignore" });
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "workflows"), { recursive: true });
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   writeFileSync(join(harness, "status.json"), VALID_STATUS);
-  if (enforcement !== undefined) writeFileSync(join(root, ".mstarc"), `[config]\nenforcement=${enforcement}\n`);
+  writeFileSync(
+    join(root, ".mstarc"),
+    `${enforcement === undefined ? "" : `[config]\nenforcement=${enforcement}\n\n`}[collaboration]\nmode=local\nrepo_id=wgate-${id}\n`,
+  );
   return {
     root,
     harness,
@@ -71,19 +92,30 @@ function makeHarness(id: string, enforcement?: "hard" | "soft"): { root: string;
   };
 }
 
-/** REAL active store, plus one read in THIS process (a child's first read of a
- * store the runner just wrote intermittently fails to open — task-3 report). */
+/** REAL ACTIVE authorities (the `store init` pair), warmed for a child read. */
 async function seedActiveStore(harness: string): Promise<void> {
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
-  const warm = await openStore({ harnessDir: harness }, "read");
-  warm.close();
+  expect(await probeCollaborationAuthority({ harnessDir: harness })).toMatchObject({ kind: "active" });
 }
 
-/** Unreadable authority through the REAL engine channel (`store.corrupt`). */
-function corruptStore(harness: string): void {
+/** REAL staged-only collaboration lane (built, never activated). */
+async function seedStagedCollaboration(harness: string): Promise<void> {
+  await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
+}
+
+/** Unreadable COLLABORATION authority through the REAL engine channel. */
+function corruptCollaboration(harness: string): void {
+  const dbPath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
+  rmSync(dbPath, { force: true });
+  mkdirSync(dbPath, { recursive: true });
+}
+
+/** Unreadable EXECUTION store: bytes no SQLite connection opens. */
+function corruptExecution(harness: string): void {
   for (const suffix of ["", "-wal", "-shm"]) rmSync(join(harness, `store.db${suffix}`), { force: true });
-  mkdirSync(join(harness, "store.db"), { recursive: true });
+  writeFileSync(join(harness, "store.db"), "not a sqlite database\n");
 }
 
 interface RunResult {
@@ -101,7 +133,7 @@ function runGate(
   env: Record<string, string> = {},
   extraArgs: string[] = [],
 ): RunResult {
-  const merged = { ...process.env };
+  const merged = { ...process.env, HOME: FIXTURE_HOME };
   delete merged.MSTAR_WRITE_GATE;
   delete merged.MSTAR_HARNESS_DIR;
   Object.assign(merged, env);
@@ -171,25 +203,28 @@ describe("ZCode write gate \u2014 authority paths (source entry)", () => {
     expect(run.stderr).toContain(AUTHORITY_LINE);
   });
 
-  test("a CASE-VARIANT register on the pre-activation fall-through keeps its document validator (qc2-F-005)", () => {
+  test("a CASE-VARIANT register without an ACTIVE collaboration lane refuses by authority (qc2-F-005)", async () => {
     const caseVariant = (harness: string): string => join(harness, "projects", "_default", "RESIDUALS.json");
 
     // The FW-3 folded shape walk classifies the case-variant basename as a
-    // register document (dsh/omp parity): the register shape validator
-    // decides — not the authority route, not silence.
-    const hard = makeHarness("register-case-legacy-hard", "hard");
-    const blocked = runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(hard.harness), BAD_JSON));
-    expect(blocked.exitCode).toBe(2);
-    const out = lines(blocked);
-    expect(out[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
-    expect(out[2]).toBe(ENFORCEMENT_LINE); // the enforcement axis, not the authority invariant
-    expect(runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(hard.harness), VALID_REGISTER)).exitCode).toBe(0);
+    // register document (dsh/omp parity): the collaboration authority decides,
+    // and a missing lane is a refusal — never the document validator.
+    for (const enforcement of ["hard", "soft"] as const) {
+      const fixture = makeHarness(`register-case-absent-${enforcement}`, enforcement);
+      const blocked = runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(fixture.harness), BAD_JSON));
+      expect(blocked.exitCode, enforcement).toBe(2);
+      const out = lines(blocked);
+      expect(out[1]!.startsWith("[high] store.authority-unavailable: ")).toBe(true);
+      expect(blocked.stderr).toContain("collaboration.not-initialized");
+      expect(out[2]).toBe(AUTHORITY_LINE);
 
-    const soft = makeHarness("register-case-legacy-soft", "soft");
-    const silent = runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(soft.harness), BAD_JSON));
-    expect(silent.exitCode).toBe(0);
-    expect(silent.stdout).toBe("");
-    expect(silent.stderr).toBe("");
+      const staged = makeHarness(`register-case-staged-${enforcement}`, enforcement);
+      await seedStagedCollaboration(staged.harness);
+      const stagedRun = runGate(process.execPath, HOOK_SRC, writeEvent(caseVariant(staged.harness), VALID_REGISTER));
+      expect(stagedRun.exitCode, `${enforcement}-staged`).toBe(2);
+      expect(stagedRun.stderr).toContain("store.authority-unavailable");
+      expect(stagedRun.stderr).toContain("collaboration.not-active");
+    }
   });
 
   test("a retired register write on an ACTIVE store is refused (soft mode included)", async () => {
@@ -199,32 +234,44 @@ describe("ZCode write gate \u2014 authority paths (source entry)", () => {
     expect(run.exitCode).toBe(2);
     expect(run.stdout).toBe("");
     expect(run.stderr).toContain("project.register.retired");
-    expect(run.stderr).toContain("store.db");
+    expect(run.stderr).toContain("collaboration database");
     expect(run.stderr).toContain(AUTHORITY_LINE);
   });
 
-  test("an unreadable authority refuses fail-closed, carrying the engine refusal", async () => {
+  test("an unreadable collaboration authority refuses fail-closed, carrying the engine refusal", async () => {
     const fixture = makeHarness("register-corrupt", "soft");
-    corruptStore(fixture.harness);
+    await seedActiveStore(fixture.harness);
+    corruptCollaboration(fixture.harness);
     const run = runGate(process.execPath, HOOK_SRC, writeEvent(fixture.register, VALID_REGISTER));
     expect(run.exitCode).toBe(2);
     expect(run.stderr).toContain("store.authority-unavailable");
-    expect(run.stderr).toContain("store.corrupt");
+    expect(run.stderr).toContain("collaboration.unreadable");
   });
 
-  test("pre-activation register writes keep their document validator and enforcement axis", () => {
-    const hard = makeHarness("register-legacy-hard", "hard");
-    const blocked = runGate(process.execPath, HOOK_SRC, writeEvent(hard.register, BAD_JSON));
-    expect(blocked.exitCode).toBe(2);
-    const out = lines(blocked);
-    expect(out[1]!.startsWith("[high] status.invalid-json: ")).toBe(true);
-    expect(out[2]).toBe(ENFORCEMENT_LINE); // the enforcement axis, not the authority invariant
+  test("without an ACTIVE collaboration lane the register refuses by authority in both enforcement modes", async () => {
+    for (const state of ["missing", "staged"] as const) {
+      for (const enforcement of ["hard", "soft"] as const) {
+        const fixture = makeHarness(`register-${state}-${enforcement}`, enforcement);
+        if (state === "staged") await seedStagedCollaboration(fixture.harness);
+        const blocked = runGate(process.execPath, HOOK_SRC, writeEvent(fixture.register, BAD_JSON));
+        expect(blocked.exitCode, `${state}-${enforcement}`).toBe(2);
+        const out = lines(blocked);
+        expect(out[1]!.startsWith("[high] store.authority-unavailable: ")).toBe(true);
+        expect(blocked.stderr).toContain(
+          state === "staged" ? "collaboration.not-active" : "collaboration.not-initialized",
+        );
+        expect(out[2]).toBe(AUTHORITY_LINE);
+      }
+    }
+  });
 
-    const soft = makeHarness("register-legacy-soft", "soft");
-    const silent = runGate(process.execPath, HOOK_SRC, writeEvent(soft.register, BAD_JSON));
-    expect(silent.exitCode).toBe(0);
-    expect(silent.stdout).toBe("");
-    expect(silent.stderr).toBe("");
+  test("collaboration-only: the register is retired and no execution authority is implied", async () => {
+    const fixture = makeHarness("register-collaboration-only", "soft");
+    await ensureCollaborationAuthority({ harnessDir: fixture.harness });
+    const run = runGate(process.execPath, HOOK_SRC, writeEvent(fixture.register, VALID_REGISTER));
+    expect(run.exitCode).toBe(2);
+    expect(run.stderr).toContain("project.register.retired");
+    expect(run.stderr).toContain(AUTHORITY_LINE);
   });
 
   test("a symlink alias that resolves into the harness is refused like the authority (S-G4b-03)", async () => {
@@ -332,17 +379,18 @@ describe("ZCode write gate \u2014 authority paths (source entry)", () => {
     expect(vetoed.stderr).toContain("project.register.retired");
     expect(vetoed.stderr).toContain(AUTHORITY_LINE);
 
-    // Both contexts pre-activation keep the legacy path (issue contract §7):
-    // the landed register's own document validator decides, on the source's
-    // enforcement axis.
+    // Both contexts have no ACTIVE collaboration lane: the landed register's
+    // authority is the verdict, and it is a refusal — never the document
+    // validator.
     const legacyDest = makeHarness("cross-dest-legacy", "soft");
     writeFileSync(legacyDest.register, VALID_REGISTER);
     const legacySource = makeHarness("cross-src-legacy-2", "hard");
     symlinkSync(legacyDest.register, legacySource.register);
-    expect(runGate(process.execPath, HOOK_SRC, writeEvent(legacySource.register, VALID_REGISTER)).exitCode).toBe(0);
-    const invalid = runGate(process.execPath, HOOK_SRC, writeEvent(legacySource.register, BAD_JSON));
-    expect(invalid.exitCode).toBe(2);
-    expect(lines(invalid)[2]).toBe(ENFORCEMENT_LINE); // the enforcement axis, not the authority invariant
+    const refused = runGate(process.execPath, HOOK_SRC, writeEvent(legacySource.register, VALID_REGISTER));
+    expect(refused.exitCode).toBe(2);
+    expect(refused.stderr).toContain("store.authority-unavailable");
+    expect(refused.stderr).toContain("collaboration.not-initialized");
+    expect(lines(refused)[2]).toBe(AUTHORITY_LINE);
   });
 
   test("unrelated targets and MSTAR_WRITE_GATE=off still pass silently", async () => {
@@ -388,12 +436,36 @@ describe("ZCode write gate \u2014 committed bundle under native node", () => {
     expect(aliased.stderr).toContain("store.direct-write-refused");
   });
 
-  test("bundle preserves the document validator for a pre-activation register", () => {
-    const fixture = makeHarness("bundle-legacy", "hard");
+  test("bundle refuses a register without an ACTIVE collaboration lane", async () => {
+    const fixture = makeHarness("bundle-absent", "hard");
     const run = runGate("node", HOOK_BUNDLE, writeEvent(fixture.register, BAD_JSON));
     expect(run.exitCode).toBe(2);
-    expect(lines(run)[2]).toBe(ENFORCEMENT_LINE);
-    expect(run.stderr).toContain("status.invalid-json");
+    expect(lines(run)[1]!.startsWith("[high] store.authority-unavailable: ")).toBe(true);
+    expect(run.stderr).toContain("collaboration.not-initialized");
+    expect(lines(run)[2]).toBe(AUTHORITY_LINE);
+  });
+
+  test("bundle: a bound checkout leaves a corrupt execution store to the execution domain", async () => {
+    const fixture = makeHarness("bundle-bound-corrupt", "hard");
+    // The REAL adopted pair: `ensureCollaborationAuthority` records this
+    // checkout's binding, so the lane is owned and the execution file is not a
+    // possible legacy owner.
+    await seedActiveStore(fixture.harness);
+    corruptExecution(fixture.harness);
+
+    // The coordination-document route surfaces the execution store's own
+    // refusal, and never the legacy-owner probe's collaboration code.
+    const status = runGate("node", HOOK_BUNDLE, writeEvent(join(fixture.harness, "status.json"), BAD_JSON));
+    expect(status.exitCode).toBe(2);
+    expect(status.stderr).toContain("store.corrupt");
+    expect(status.stderr).not.toContain("collaboration.unreadable");
+
+    // The register route is decided by the adopted lane, not by the execution
+    // file: the retired register keeps its own code in the committed bundle.
+    const register = runGate("node", HOOK_BUNDLE, writeEvent(fixture.register, VALID_REGISTER));
+    expect(register.exitCode).toBe(2);
+    expect(register.stderr).toContain("project.register.retired");
+    expect(register.stderr).not.toContain("collaboration.unreadable");
   });
 
   test("active store bundle refuses the retired status route through the authority", async () => {

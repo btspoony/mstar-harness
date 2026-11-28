@@ -1,12 +1,13 @@
 // Build @mstar-harness/commands before running this isolated SDK consumer suite.
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client, InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/client";
 import { McpServer } from "@modelcontextprotocol/server";
 import { commandEnvelopeSchema, getCommandDefinitions, type CommandDefinition, type CommandEnvelope, type InvocationContext } from "@mstar-harness/commands";
-import { initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { z } from "zod";
 import { registerMcpCommands } from "../src/mcp/register.js";
 import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
@@ -14,9 +15,12 @@ import { KNOWLEDGE_GOOD } from "./support/cli-content-fixtures";
 async function withClient(
   definitions: readonly CommandDefinition[],
   run: (client: Client, cwd: string) => Promise<void>,
-  options: { controlRoot?: string } = {},
+  options: { controlRoot?: string; cwd?: string } = {},
 ) {
-  const cwd = mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
+  // invariant: A caller-provided cwd is the caller's fixture (e.g. its Git checkout): the
+  // server only points the invocation context at it and never cleans it up.
+  const owned = options.cwd === undefined;
+  const cwd = options.cwd ?? mkdtempSync(join(tmpdir(), "mstar-mcp-consumer-"));
   const server = new McpServer({ name: "isolated-command-server", version: "1.0.0" });
   const client = new Client({ name: "independent-command-consumer", version: "1.0.0" });
   const [clientEnd, serverEnd] = InMemoryTransport.createLinkedPair();
@@ -33,7 +37,7 @@ async function withClient(
   } finally {
     await client.close();
     await server.close();
-    rmSync(cwd, { recursive: true, force: true });
+    if (owned) rmSync(cwd, { recursive: true, force: true });
   }
 }
 
@@ -417,14 +421,16 @@ generated_at: 2026-01-02
   });
 
   /**
-   * The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
+   * invariant: The `--knowledge-dir` half of `compound.validate` is a store.db query, not a
    * README index read. The dsh-native tool that used to carry it is gone, so
    * these are the product regressions on the SURVIVING route: the folded MCP
-   * action. Complete catalog passes, an unregistered knowledge body fails, and a
-   * store that cannot answer refuses instead of reading as complete.
+   * action. A missing authority refuses with the lane's own code, a complete
+   * catalog passes, and an unregistered knowledge body fails with its path.
    */
   test("compound validate --knowledge-dir asserts catalog completeness through the surviving action", async () => {
     const root = mkdtempSync(join(tmpdir(), "mstar-mcp-catalog-"));
+    execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+    writeFileSync(join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-mcp-catalog-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
     const knowledgeDir = join(root, ".agents", "knowledge");
@@ -435,18 +441,29 @@ generated_at: 2026-01-02
       arguments: { action: "validate", docPath: join(knowledgeDir, "good.md"), knowledgeDir },
     }));
     try {
+      // note: The invocation cwd IS the fixture's Git checkout: the completeness
+      // verdict is the checkout's configured knowledge root, while the store
+      // root stays pinned to its `.mstar`.
       await withClient([definition("compound.validate")], async (client) => {
-        // No store yet: unavailable catalog data is never read as complete, and
-        // the retired README reader is not the fallback either.
+        // invariant: No authority yet: the completeness gate refuses with the missing
+        // lane's own code — never a directory mismatch or a content gap
+        // standing in for the absent authority.
         const missing = await validate(client);
         expect(missing).toMatchObject({ command: "compound.validate", status: "refused", exitCode: 1 });
-        expect(catalogCodes(missing)).toContain("store.not-initialized");
+        expect(catalogCodes(missing)).toContain("collaboration.not-initialized");
+        expect(catalogCodes(missing)).not.toContain("compound.catalog.knowledge-dir-mismatch");
+        expect(catalogCodes(missing)).not.toContain("catalog.discovery.missing-document");
+        expect(catalogCodes(missing)).not.toContain("compound.catalog.unavailable");
+        expect(catalogCodes(missing)).not.toContain("store.not-initialized");
         expect(catalogCodes(missing)).not.toContain("compound.index.retired");
         expect(catalogCodes(missing)).not.toContain("compound.scope.outside");
-      }, { controlRoot: harness });
+      }, { controlRoot: harness, cwd: root });
 
+      // invariant: Both authorities, exactly as `store init` leaves them, then the one
+      // body the knowledge root carries is registered.
       const context = { harnessDir: harness };
       (await initializeStore(context)).close();
+      await ensureCollaborationAuthority(context);
       await registerCatalogEntity(context, {
         kind: "document", id: "doc-good", title: "Good doc", rootKind: "knowledge", relativePath: "good.md", documentKind: "knowledge",
       }, { operationId: "fixture-catalog-register", actor: "compound" });
@@ -462,7 +479,7 @@ generated_at: 2026-01-02
         expect(catalogCodes(gap)).toContain("catalog.discovery.missing-document");
         if (gap.status === "ok") throw new Error("expected a catalog gap refusal");
         expect(JSON.stringify(gap.details?.violations ?? [])).toContain("knowledge/unregistered.md");
-      }, { controlRoot: harness });
+      }, { controlRoot: harness, cwd: root });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -208,16 +208,17 @@ describe("command discovery", () => {
     if (envelope.status !== "ok") throw new Error(`expected schema result, got ${envelope.status}`);
     const data = envelope.data as { kind: "command"; descriptor: { input: Record<string, unknown> } };
     const requirements = data.descriptor.input["x-mstar-requirements"] as Array<Record<string, unknown>>;
+    expect(requirements.some((row) => String(row.name).includes("arget"))).toBe(false);
     expect(requirements).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: "name",
         alternatives: expect.objectContaining({
           cardinality: "at-least-one",
-          members: expect.arrayContaining([expect.objectContaining({ name: "clearTarget", whenTrue: true })]),
+          members: expect.arrayContaining([expect.objectContaining({ name: "clearEffortSessions", whenTrue: true })]),
         }),
       }),
       expect.objectContaining({
-        name: "target",
+        name: "effortSessions",
         alternatives: expect.objectContaining({ cardinality: "at-most-one" }),
       }),
     ]));

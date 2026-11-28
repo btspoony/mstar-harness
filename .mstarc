@@ -4,3 +4,8 @@
 adr_dir=docs/adr
 knowledge_dir=docs/knowledge
 specs_dir=docs/specs
+
+; Collaboration authority: the local user-level lane owns issues, findings,
+; projects, roadmaps and catalog identity. No provider mirror is declared.
+[collaboration]
+mode=local

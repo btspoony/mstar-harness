@@ -28,6 +28,7 @@ import { tmpdir } from "node:os";
 import {
   ACTIVATION_PROTOCOL_VERSION,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionAuthority,
@@ -37,7 +38,8 @@ import {
   type ExecutionState,
   type StoreContext,
 } from "@mstar-harness/engine";
-import { CLI_ROOT, receiptStable, runCli as spawnCli, type RunResult } from "./harness";
+import { CLI_ROOT, receiptStable, runCli as spawnCli, writeFixtureRepoId, type RunResult } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 type EngineManifest = { engines?: { node?: string } };
 // Repo manifest read at runtime: no test pins the runtime floor, and
@@ -51,6 +53,7 @@ const atOrAboveRuntime = `${Number.parseInt(declaredNodeFloor.split(".")[0]!, 10
 
 const WORKFLOW_ID = "wf-exec-workflow";
 const PLAN_ID = "20260922-execution-workflow-plan";
+
 const COORDINATOR_ID = "coord-exec-workflow";
 const ITERATION_ID = "iter-exec-workflow";
 const INTEGRATION_BRANCH = "iteration/exec-workflow";
@@ -115,6 +118,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
@@ -123,9 +127,10 @@ async function activeFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   await readExecutionAuthority(context);
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
-  writeText(planMarkdown, `# Active workflow transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Active workflow transport plan\n"));
   return { root, harnessDir, context, planMarkdown };
 }
 

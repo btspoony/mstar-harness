@@ -40,15 +40,20 @@ function withAssignment(assignmentText: string, fn: (file: string) => void): voi
   }
 }
 
-/** Assignment carrying an `Execution mode` header field. */
+/**
+ * Assignment carrying an `execution_mode` front matter field.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
 function assignmentWithMode(mode: string): string {
-  return `## Assignment
+  return `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: ${mode}
+working_branch: feature/foo
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: ${mode}
-**Working branch**: feature/foo
+## Assignment
 `;
 }
 
@@ -138,14 +143,16 @@ describe("mstar review seats — execution-mode → QC seat count matrix", () =>
     });
   });
 
-  test("assignment without Execution mode → dispatch.execution-mode.missing, exit 1", () => {
+  test("assignment without execution_mode → dispatch.execution-mode.missing, exit 1", () => {
     withAssignment(
-      `## Assignment
+      `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/foo
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/foo
+## Assignment
 `,
       (file) => {
         const result = runCli(["review", "seats", file]);

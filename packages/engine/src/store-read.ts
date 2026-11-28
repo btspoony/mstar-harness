@@ -1,28 +1,4 @@
-/**
- * store-read.ts -- the issue-store READ boundary (state-projection-contract §6).
- *
- * One request = one read handle (`withStoreRead`): an optional lazy projection
- * refresh for the views that need projected execution/roadmap rows, then every
- * view query inside ONE read transaction over committed store data. The view
- * readers return DTOs only -- no source JSON is read or parsed here, and no
- * filesystem probe happens in a view (source I/O is isolated in the projection
- * refresh boundary, `refreshProjections`).
- *
- * Why the view SQL is written out here instead of calling `listIssues` /
- * `getIssue` / `listCatalog`: those functions each open their OWN connection,
- * which would break both contract §6 requirements -- "one store handle per
- * request" and one transaction that sees issue, catalog and projection rows at
- * the same point in time. The issue readers below therefore mirror
- * `issue.ts` (`LAST_ACTIVITY_SQL`, `bindFilter`, `listIssues`, `getIssue`)
- * statement for statement, and `store-read.test.ts` pins the two readers to the
- * same answer so a future change to one side cannot drift silently.
- *
- * Refusals reuse the frozen vocabulary: `store.not-active` for a staged store,
- * the issue domain's `issue.not-found` for an absent issue, and the engine's
- * `SddScriptError(…, 2)` usage failure (the CLI's exit-2 / HTTP-400 class) for
- * a request shape the contract does not define -- an unknown view, a missing
- * required filter or an out-of-range page.
- */
+/** see packages/engine/src/store-read.ts - store-read.ts -- the issue-store READ boundary (state-projection-contract §6). One request = one read handle (`withStoreRead`): an optional lazy projection refresh for the views that need projected execution rows, then every view query inside ONE read transaction over committed store data. The view readers return DTOs only -- no source JSON is read or parsed here, and no filesystem probe happens in a view (source I/O is isolated in the projection refresh boundary, `refreshProjections`). Why the view SQL is written out here instead of calling `listIssues` / `getIssue` / `listCatalog`: those functions each open their OWN connection, which would break both contract §6 requirements -- "one store handle per request" and one transaction that sees issue, catalog and projection rows at the same point in time. The issue readers below therefore mirror `issue.ts` (`LAST_ACTIVITY_SQL`, `bindFilter`, `listIssues`, `getIssue`) statement for statement, and `store-read.test.ts` pins the two readers to the same answer so a future change to one side cannot drift silently. Refusals reuse the frozen vocabulary: `store.not-active` for a staged store, the issue domain's `issue.not-found` for an absent issue, and the engine's `SddScriptError(…, 2)` usage failure (the CLI's exit-2 / HTTP-400 class) for a request shape the contract does not define -- an unknown view, a missing required filter or an out-of-range page. */
 import type { CatalogDocumentKind, CatalogEntityKind, CatalogLifecycle, CatalogRootKind, CatalogKey } from "./catalog.js";
 import {
   assertExecutionSelection,
@@ -31,7 +7,7 @@ import {
 } from "./execution-read.js";
 import type { ExecutionPlanView, ExecutionRead, ExecutionState } from "./execution-store.js";
 import {
-  assertIssueProvenanceSchema,
+  assertIssueStoreActive,
   IssueError,
   ISSUE_DISPOSITIONS,
   ISSUE_KINDS,
@@ -43,16 +19,42 @@ import {
   type IssueFilter,
   type IssueKind,
   type IssuePage,
+  type ProviderOnlyIssue,
   type Severity,
 } from "./issue.js";
 import { readMilestonesOn, type MilestoneRead } from "./milestone-store.js";
+import {
+  ISSUE_REF_PATTERN,
+  openCollaborationStore,
+  readCollaborationObservation,
+  type CollaborationObservation,
+  type CollaborationScope,
+  type CollaborationStoreHandle,
+} from "./collaboration-store.js";
+import {
+  openRemoteReadView,
+  remoteCatalogLinks,
+  remoteCatalogRows,
+  remoteCollaborationObservation,
+  remoteIssueFlow,
+  remoteIssuePage,
+  remoteIssueRead,
+  remoteMilestones,
+  remotePlanFindings,
+  remoteProjectList,
+  remoteProjectListItem,
+  remoteResidualCounts,
+  requireRemoteProjects,
+  type RemoteCatalogRow,
+  type RemoteReadView,
+} from "./collaboration-remote-read.js";
+import { resolveCollaborationLocation, type CollaborationLocation } from "./collaboration-identity.js";
 import { ProjectionError, refreshProjections, type ProjectionFreshness, type SourceDiagnostic } from "./projection.js";
-import type { RoadmapContent } from "./roadmap-content.js";
-import { readRoadmapAuthorityOn, type RoadmapRead } from "./roadmap-store.js";
 import { SddScriptError } from "./sdd.js";
 import { openStore, readStoreAuthority, StoreError, type StoreContext, type StoreDb, type StoreHandle } from "./store-db.js";
 import { ExecutionError } from "./execution-store.js";
 import type { AuthorityVerdict } from "./recovery-intent.js";
+import { SWITCHED_NOT_PRESENTED_SQL, assertPresented } from "./cross-authority-move.js";
 import { WORKFLOW_TERMINAL_STATUSES } from "./workflow.js";
 
 /** Refusal codes the read boundary itself raises (both already frozen). */
@@ -73,8 +75,15 @@ export class StoreReadError extends Error {
 // Envelope and request shapes (contract §6)
 // ---------------------------------------------------------------------------
 
-/** The projection health block every read envelope discloses. */
+/**
+ * The projection health block a read envelope discloses. The projection is
+ * disposable execution data, so its health is reported separately from the
+ * authority of the rows a view answers with. `observed: false` means this
+ * request never opened the execution database (a pure collaboration view):
+ * the null members are an absence of observation, not a health verdict.
+ */
 export type ReadProjection = {
+  observed: boolean;
   generation: number | null;
   freshness: ProjectionFreshness;
   builtAt: string | null;
@@ -83,24 +92,48 @@ export type ReadProjection = {
   diagnostics: SourceDiagnostic[];
 };
 
-/** Contract §6 read envelope: the view DTO plus the revisions it was read at. */
+/** One read of the execution domain, or its named unavailability. */
+export type ExecutionObservation =
+  | { asOf: string; storeId: string; epoch: number; revision: number }
+  | { asOf: null; code: string };
+
+/**
+ * Contract §Read/Completeness: the view DTO plus the source evidence it was
+ * read at. `storeRevision`/`catalogRevision` refer only to collaboration and
+ * are `null` when not observed; execution never claims those counters.
+ */
 export type ReadEnvelope<T> = {
   data: T;
-  storeRevision: number;
-  catalogRevision: number;
   projection: ReadProjection;
+  storeRevision: number | null;
+  catalogRevision: number | null;
+  collaboration: CollaborationObservation | null;
+  execution: ExecutionObservation | null;
+};
+
+/** The handles one view's synchronous work is composed from. */
+export type StoreReadSources = {
+  collaboration: CollaborationStoreHandle | null;
+  /** note: The remote generation's admitted evidence when the selection is remote; never a local handle. */
+  remote: RemoteReadView | null;
+  execution: StoreHandle | null;
 };
 
 /**
- * One request's view work. `run` executes inside the single read transaction,
- * so every reader it uses sees one consistent snapshot; `needsProjection`
- * says whether the view consumes projected execution/roadmap rows and
- * therefore needs the lazy refresh first.
+ * One request's view work. `run` executes synchronously inside each opened
+ * source's own read transaction, so the view composes its data by key in
+ * memory and never joins across files. `collaboration`/`execution` declare
+ * which sources the view reads; a source that is optional and unavailable
+ * reaches `run` as `null`, while a required one refuses. A view whose data has
+ * a known content gap reports the original code as `collaborationGap`.
  */
 export type StoreReadQuery<T> = {
   view: string;
   needsProjection: boolean;
-  run(handle: StoreHandle): T;
+  /** note: `projectIds` is the exact project set a project-narrowed query contributes; omitted means the scope's own set. */
+  collaboration: { scope: CollaborationScope; required: boolean; projectIds?: readonly string[] } | null;
+  execution: "not-requested" | "required" | "optional";
+  run(sources: StoreReadSources): { data: T; collaborationGap?: string };
 };
 
 /** Contract §6 dashboard views. */
@@ -112,14 +145,14 @@ export type DashboardView =
   | "iterations"
   | "iteration-detail"
   | "projects"
-  | "roadmap"
   | "issue-flow"
+  | "milestones"
   | "overview";
 
 /**
  * Request filters. Only the fields a view needs are read: `id` for the three
  * detail views, `issue` for the issue list, `projectId` for the project-scoped
- * views (required by `roadmap`), and `limit`/`offset` for the three lists.
+ * views, and `limit`/`offset` for the three lists.
  */
 export type DashboardFilters = {
   id?: string;
@@ -144,13 +177,16 @@ export type CatalogIdentityDTO = {
   id: string;
   title: string;
   description: string | null;
-  rootKind: CatalogRootKind;
-  relativePath: string;
+  /** note: `null` on a remote snapshot: a provider observation carries no checkout-relative location. */
+  rootKind: CatalogRootKind | null;
+  relativePath: string | null;
   documentKind: CatalogDocumentKind | null;
   lifecycle: CatalogLifecycle;
   revision: number;
-  registeredAt: string;
-  updatedAt: string;
+  registeredAt: string | null;
+  updatedAt: string | null;
+  /** note: `remote` marks the identity as observed evidence, not a local catalog row. */
+  source?: "remote";
 };
 
 /**
@@ -295,19 +331,6 @@ export type ProjectListItem = {
 
 export type ProjectListDTO = { items: ProjectListItem[]; total: number };
 
-export type RoadmapDTO = {
-  projectId: string;
-  catalog: CatalogIdentityDTO;
-  authority: { state: "present"; revision: number; contentHash: string } | { state: "absent" };
-  content: RoadmapContent | null;
-  /**
-   * The project's authoritative milestone grouping and issue membership
-   * (§4). Required, and independent of the stored Markdown: a project with
-   * milestones but no content answers with `content: null` and this data.
-   */
-  milestones: MilestoneRead;
-};
-
 export type IssueFlowBucket = {
   /** UTC calendar day, `YYYY-MM-DD`. */
   date: string;
@@ -377,14 +400,16 @@ export type OverviewDTO = {
 /** The DTO each dashboard view answers with. */
 export type DashboardViewData = {
   issues: IssuePage;
-  "issue-detail": IssueDetail;
+  /** note: A remote unmarked provider issue answers its own visible DTO, never a fabricated MStar detail. */
+  "issue-detail": IssueDetail | ProviderOnlyIssue;
   workflows: WorkflowListDTO;
   "workflow-detail": WorkflowDTO | null;
   iterations: IterationListDTO;
   "iteration-detail": IterationDTO | null;
   projects: ProjectListDTO;
-  roadmap: RoadmapDTO | null;
   "issue-flow": IssueFlow;
+  /** see packages/engine/src/store-read.ts - collaboration-only: no execution store needed. */
+  milestones: MilestoneRead;
   overview: OverviewDTO;
 };
 
@@ -397,8 +422,9 @@ const DASHBOARD_VIEWS: Record<DashboardView, { needsProjection: boolean }> = {
   iterations: { needsProjection: true },
   "iteration-detail": { needsProjection: true },
   projects: { needsProjection: false },
-  roadmap: { needsProjection: false },
   "issue-flow": { needsProjection: false },
+  // see packages/engine/src/store-read.ts - purely collaboration, so no projection and no execution store.
+  milestones: { needsProjection: false },
   // Joins projected workflow/plan/compass rows with non-projected issue and
   // milestone tables, so it takes the refresh the two iteration views take.
   overview: { needsProjection: true },
@@ -448,21 +474,60 @@ function parseJsonArray<T>(value: unknown): T[] {
 }
 
 // ---------------------------------------------------------------------------
-// Store metadata
+// note: Source evidence
 // ---------------------------------------------------------------------------
 
-type ReadMeta = { authorityState: string; storeRevision: number; catalogRevision: number };
+/** note: A refusal's stable code, disclosed as the gap of an optional source. */
+function errorCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const { code } = error;
+    if (typeof code === "string" && code !== "") return code;
+  }
+  return "store.authority-unreadable";
+}
 
-function readMeta(db: StoreDb): ReadMeta {
-  const row = readStoreAuthority(db);
-  if (typeof row.revision !== "number" || typeof row.catalogRevision !== "number") {
+/**
+ * invariant: The projection block of a request that never opened the execution store. Its
+ * `checkedAt` is its OWN instant: projection health is a separate observation and
+ * never borrows an authority snapshot's timestamp.
+ */
+function unobservedProjection(): ReadProjection {
+  return {
+    observed: false,
+    generation: null,
+    freshness: "unavailable",
+    builtAt: null,
+    checkedAt: new Date().toISOString(),
+    diagnostics: [],
+  };
+}
+
+/**
+ * note: The execution domain's own evidence: its identity, epoch and revision. The
+ * execution authority is asserted here, inside the read transaction -- a
+ * non-active execution store is not read authority for its own domain.
+ */
+function readExecutionObservation(handle: StoreHandle): ExecutionObservation {
+  // note: Same rule as the collaboration source: the execution observation is stamped
+  // when its own transaction establishes the snapshot.
+  const asOf = new Date().toISOString();
+  const authority = handle.db.prepare("select authority_state from execution_meta where id = 1").get() as
+    | { authority_state?: unknown }
+    | undefined;
+  if (authority?.authority_state !== "active") {
+    const state = typeof authority?.authority_state === "string" ? authority.authority_state : "missing";
+    throw new StoreReadError(
+      "store.not-active",
+      `The execution authority is ${state}; a non-active execution store is not read authority. ` +
+        "Run `mstar store upgrade --operator <name>` to import legacy state and activate it, then retry.",
+    );
+  }
+  const row = handle.db.prepare("select revision from store_meta where id = 1").get() as { revision?: unknown } | undefined;
+  const revision = integer(row?.revision);
+  if (revision === null) {
     throw new StoreReadError("store.not-active", "store_meta is missing; the store cannot serve reads");
   }
-  return {
-    authorityState: typeof row.authorityState === "string" ? row.authorityState : "",
-    storeRevision: row.revision,
-    catalogRevision: row.catalogRevision,
-  };
+  return { asOf, storeId: handle.storeId, epoch: handle.epoch, revision };
 }
 
 /** Last-refresh diagnostics: `projection_meta.last_error_json.sources` (P5's shape). */
@@ -494,6 +559,7 @@ function readProjectionBlock(db: StoreDb): ReadProjection {
     }
   }
   return {
+    observed: true,
     generation: integer(row.generation),
     freshness: freshness === "current" || freshness === "stale" ? freshness : "unavailable",
     builtAt: text(row.built_at),
@@ -507,61 +573,172 @@ function readProjectionBlock(db: StoreDb): ReadProjection {
 // ---------------------------------------------------------------------------
 
 /**
- * Open one read handle, refresh the projection when the view needs it, and run
- * the view inside ONE read transaction. A store that cannot be opened (missing,
- * corrupt, below-floor runtime, newer schema) or that is not active fails here
- * -- it never degrades into an empty result set.
+ * Open the sources the view declares, refresh the projection when it needs it,
+ * and run the view's synchronous work inside EACH opened source's own read
+ * transaction. The sources are independent snapshots composed by key in
+ * memory; nothing here claims a cross-file transaction.
+ *
+ * A required source that cannot be opened (missing, corrupt, below-floor
+ * runtime, newer schema, non-active) refuses -- it never degrades into an
+ * empty result set or a placeholder total. An optional source that cannot be
+ * opened is disclosed as unavailable.
  */
 export async function withStoreRead<T>(context: StoreContext, query: StoreReadQuery<T>): Promise<ReadEnvelope<T>> {
-  if (typeof query?.run !== "function" || typeof query.view !== "string") {
-    usage("withStoreRead requires a view query built by queryDashboard/queryIssueFlow");
-  }
+  const declared =
+    typeof query === "object" &&
+    query !== null &&
+    typeof query.run === "function" &&
+    typeof query.view === "string" &&
+    typeof query.needsProjection === "boolean" &&
+    (query.collaboration === null || typeof query.collaboration === "object") &&
+    (query.execution === "not-requested" || query.execution === "required" || query.execution === "optional");
+  if (!declared) usage("withStoreRead requires a view query built by queryDashboard/queryMilestones/queryIssueFlow");
+  const scope = query.collaboration === null ? null : query.collaboration.scope;
+
   // The single source-I/O boundary (contract §5/§6). It may write derived
   // projection rows and health; issue/catalog and execution authority are
   // never touched by it, and a refused refresh leaves the last good generation.
   if (query.needsProjection) await refreshProjections(context);
 
-  const handle = await openStore(context, "read");
+  let collaborationHandle: CollaborationStoreHandle | null = null;
+  let remoteView: RemoteReadView | null = null;
+  let executionHandle: StoreHandle | null = null;
+  /** note: The checked remote selection when it resolved, so an unavailable arm still names its source. */
+  let remoteSelection: { selectorCommit: string; generation: number } | null = null;
+  // invariant: Both opens sit INSIDE the cleanup scope: a required execution open that
+  // throws must not strand the collaboration handle it already acquired.
   try {
-    const db = handle.db;
-    db.exec("begin deferred");
-    try {
-      const meta = readMeta(db);
-      if (meta.authorityState !== "active") {
-        throw new StoreReadError(
-          "store.not-active",
-          `The store is ${meta.authorityState === "" ? "unreadable" : meta.authorityState}; a staged store is not read authority ` +
-            "(contract \u00a72: no ordinary reads serve staged data). Nothing was read.",
-        );
-      }
-      // Every envelope discloses projection health, so a store that predates
-      // migration 3 is refused with the same actionable upgrade refusal the
-      // projection module raises (never an empty view).
-      const projectionTable = db
-        .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'")
-        .get() as { n?: number } | undefined;
-      if (!projectionTable?.n) {
-        throw new ProjectionError(
-          "projection.schema-outdated",
-          `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). ` +
-            "Import legacy execution state and apply pending schemas with `mstar store upgrade --operator <name>`, then retry; nothing was read.",
-        );
-      }
-      const projection = readProjectionBlock(db);
-      const data = query.run(handle);
-      db.exec("commit");
-      return { data, storeRevision: meta.storeRevision, catalogRevision: meta.catalogRevision, projection };
-    } catch (error) {
+    let collaborationCode: string | null = null;
+    let executionCode: string | null = null;
+    if (scope !== null) {
+      // invariant: Resolving the selection IS admitting the source. A selector outage is an
+      // unavailable source, not a view failure: an optional collaboration dependency never
+      // blocks the execution data the view owns, and no local fallback is opened instead.
+      let remote: boolean | null = null;
+      /** note: The location this request already resolved, so the nested cache open never re-resolves. */
+      let remoteLocation: CollaborationLocation | undefined;
       try {
-        db.exec("rollback");
-      } catch {
-        // connection-level failure during rollback -- nothing was committed
+        const location = resolveCollaborationLocation(context);
+        remote = location.mode === "remote";
+        if (remote) remoteLocation = location;
+        if (remote === true && location.selection !== undefined) {
+          remoteSelection = {
+            selectorCommit: location.selection.commit,
+            generation: location.selection.generation,
+          };
+        }
+      } catch (error) {
+        if (query.collaboration?.required !== false) throw error;
+        collaborationCode = errorCode(error);
+      }
+      // invariant: A remote selection opens ONLY the cache evidence lane; a local-authority
+      // handle is never opened, so no local row can stand in for the provider. An unresolved
+      // selection opens neither.
+      if (remote === true) {
+        try {
+          remoteView = await openRemoteReadView(context, query.collaboration?.projectIds, remoteLocation);
+        } catch (error) {
+          if (query.collaboration?.required !== false) throw error;
+          collaborationCode = errorCode(error);
+        }
+      } else if (remote === false) {
+        try {
+          collaborationHandle = await openCollaborationStore(context, "read");
+        } catch (error) {
+          if (query.collaboration?.required !== false) throw error;
+          collaborationCode = errorCode(error);
+        }
+      }
+    }
+    if (query.execution !== "not-requested") {
+      try {
+        executionHandle = await openStore(context, "read");
+      } catch (error) {
+        if (query.execution === "required") throw error;
+        executionCode = errorCode(error);
+      }
+    }
+    if (collaborationHandle !== null) collaborationHandle.db.exec("begin deferred");
+    if (executionHandle !== null) executionHandle.db.exec("begin deferred");
+    try {
+      const collaboration =
+        collaborationHandle !== null && scope !== null
+          ? readCollaborationObservation(collaborationHandle, scope)
+          : remoteView !== null && scope !== null
+            ? remoteCollaborationObservation(remoteView, scope, query.collaboration?.projectIds)
+            : null;
+      const execution: ExecutionObservation | null =
+        executionHandle !== null
+          ? readExecutionObservation(executionHandle)
+          : executionCode === null
+            ? null
+            : { asOf: null, code: executionCode };
+      const projection = executionHandle === null ? unobservedProjection() : readProjectionFor(executionHandle);
+
+      const result = query.run({ collaboration: collaborationHandle, remote: remoteView, execution: executionHandle });
+      const withGap: CollaborationObservation | null =
+        collaboration !== null && result.collaborationGap !== undefined && collaboration.completeness !== "unavailable"
+          ? { ...collaboration, completeness: "partial", code: result.collaborationGap }
+          : collaboration;
+      const storeRevision = withGap !== null && withGap.completeness !== "unavailable" ? withGap.revision : null;
+      const catalogRevision = withGap !== null && withGap.completeness !== "unavailable" ? withGap.catalogRevision : null;
+
+      if (collaborationHandle !== null) collaborationHandle.db.exec("commit");
+      if (executionHandle !== null) executionHandle.db.exec("commit");
+      return {
+        data: result.data,
+        projection,
+        storeRevision,
+        catalogRevision,
+        collaboration:
+          withGap ??
+          (scope === null
+            ? null
+            : {
+                scope,
+                ...(remoteSelection === null ? {} : { source: "remote" as const, ...remoteSelection }),
+                completeness: "unavailable",
+                asOf: null,
+                authority: null,
+                code: collaborationCode ?? "collaboration.not-initialized",
+              }),
+        execution,
+      };
+    } catch (error) {
+      for (const db of [collaborationHandle?.db, executionHandle?.db]) {
+        if (db === undefined) continue;
+        try {
+          db.exec("rollback");
+        } catch {
+          // note: connection-level failure during rollback -- nothing was committed
+        }
       }
       throw error;
     }
   } finally {
-    handle.close();
+    collaborationHandle?.close();
+    executionHandle?.close();
   }
+}
+
+/**
+ * invariant: The projection health this execution read discloses. A store that predates
+ * migration 3 is refused with the actionable upgrade path: every
+ * execution-reading view states projection health, so a missing table is a
+ * schema fact, never an empty view.
+ */
+function readProjectionFor(handle: StoreHandle): ReadProjection {
+  const table = handle.db
+    .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'projection_meta'")
+    .get() as { n?: number } | undefined;
+  if (!table?.n) {
+    throw new ProjectionError(
+      "projection.schema-outdated",
+      `The store at schema version ${handle.schemaVersion} has no projection tables (migration 3 "execution-projections"). ` +
+        "Import legacy execution state and apply pending schemas with `mstar store upgrade --operator <name>`, then retry; nothing was read.",
+    );
+  }
+  return readProjectionBlock(handle.db);
 }
 
 // ---------------------------------------------------------------------------
@@ -639,6 +816,85 @@ export async function readExecutionSource(
   return { route: "execution", read: await readExecutionAuthority(context, addressed) };
 }
 
+/** note: A view's declared sources: what it opens, and what it requires. */
+type ViewSources = Pick<StoreReadQuery<unknown>, "collaboration" | "execution">;
+
+/** note: The canonical key of one issue page: the normalized filter set plus bounds. */
+function issuePageKey(filter: IssueFilter): string {
+  const { limit, offset } = paging(filter.limit, filter.offset);
+  return [
+    "issues",
+    filter.projectId ?? "*",
+    filter.disposition ?? "open",
+    filter.kind ?? "*",
+    filter.severity ?? "*",
+    filter.query === undefined || filter.query === "" ? "*" : filter.query,
+    limit,
+    offset,
+  ].join(":");
+}
+
+/** see docs/specs/architecture/overview.md - which sources each view reads and requires. */
+function viewSources(view: DashboardView, filters: DashboardFilters): ViewSources {
+  const projectId = text(filters.projectId);
+  // invariant: A project-narrowed query declares exactly the projects it contributes,
+  // so its observation covers those projects and not every selected one.
+  const narrowed = (id: string | null): readonly string[] | undefined => (id === null ? undefined : [id]);
+  const page = () => paging(filters.limit, filters.offset);
+  switch (view) {
+    case "issues": {
+      const issue = filters.issue ?? {};
+      return {
+        collaboration: { scope: { kind: "query", key: issuePageKey(issue) }, required: true, projectIds: narrowed(issue.projectId ?? null) },
+        execution: "not-requested",
+      };
+    }
+    case "issue-detail": {
+      const id = requireId(filters, "issue-detail");
+      return {
+        collaboration: {
+          scope: { kind: "query", key: `issue:${id}` },
+          required: true,
+          // note: A stable reference resolves across every selected project; a native id
+          // reads only the project it names.
+          projectIds: ISSUE_REF_PATTERN.test(id) ? undefined : narrowed(projectId),
+        },
+        execution: "not-requested",
+      };
+    }
+    case "projects":
+      return { collaboration: { scope: { kind: "query", key: "projects" }, required: true }, execution: "not-requested" };
+    case "issue-flow":
+      return { collaboration: { scope: { kind: "query", key: `issue-flow:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "not-requested" };
+    case "milestones": {
+      // see packages/engine/src/store-read.ts - a milestone grouping belongs to one project.
+      if (projectId === null) usage("the milestones view requires a project");
+      return {
+        collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
+        execution: "not-requested",
+      };
+    }
+    case "workflows": {
+      const { limit, offset } = page();
+      return { collaboration: { scope: { kind: "query", key: `workflows:${projectId ?? "*"}:${limit}:${offset}` }, required: projectId !== null, projectIds: narrowed(projectId) }, execution: "required" };
+    }
+    case "workflow-detail":
+      return { collaboration: { scope: { kind: "query", key: `workflow:${requireId(filters, "workflow-detail")}` }, required: false }, execution: "required" };
+    case "iterations": {
+      const { limit, offset } = page();
+      // invariant: Membership, attribution and the unpaged total are catalog facts: an
+      // unavailable catalog cannot be answered as an empty list.
+      return { collaboration: { scope: { kind: "query", key: `iterations:${projectId ?? "*"}:${limit}:${offset}` }, required: true, projectIds: narrowed(projectId) }, execution: "required" };
+    }
+    case "iteration-detail":
+      // note: The subject itself is a catalog row: without the catalog no id can be
+      // called absent.
+      return { collaboration: { scope: { kind: "query", key: `iteration:${requireId(filters, "iteration-detail")}` }, required: true }, execution: "required" };
+    case "overview":
+      return { collaboration: { scope: { kind: "query", key: `overview:${projectId ?? "*"}` }, required: true, projectIds: narrowed(projectId) }, execution: "required" };
+  }
+}
+
 /** One dashboard view (contract §6) as a request the read boundary can serve. */
 export function queryDashboard<V extends DashboardView>(
   view: V,
@@ -647,10 +903,13 @@ export function queryDashboard<V extends DashboardView>(
   if (!Object.hasOwn(DASHBOARD_VIEWS, view)) {
     usage(`unknown dashboard view ${JSON.stringify(String(view))}`);
   }
+  const sources = viewSources(view, filters);
   return {
     view,
     needsProjection: DASHBOARD_VIEWS[view].needsProjection,
-    run: (handle) => dashboardView(view, handle, filters) as DashboardViewData[V],
+    collaboration: sources.collaboration,
+    execution: sources.execution,
+    run: (readSources) => ({ data: dashboardView(view, readSources, filters) as DashboardViewData[V] }),
   };
 }
 
@@ -665,32 +924,168 @@ export function queryIssueFlow(projectId?: string): StoreReadQuery<IssueFlow> {
   return {
     view: "issue-flow",
     needsProjection: false,
-    run: (handle) => readIssueFlow(handle.db, scoped ?? undefined),
+    collaboration: {
+      scope: { kind: "query", key: `issue-flow:${scoped ?? "*"}` },
+      required: true,
+      projectIds: scoped === null || scoped === undefined ? undefined : [scoped],
+    },
+    execution: "not-requested",
+    run: (sources) => ({
+      data:
+        sources.remote === null
+          ? readIssueFlow(collaborationSource(sources), scoped ?? undefined)
+          : remoteIssueFlow(sources.remote, scoped ?? undefined),
+    }),
   };
 }
 
-function dashboardView(view: DashboardView, handle: StoreHandle, filters: DashboardFilters): unknown {
+/** invariant: The panel's bounded preview size; a rollup never counts by paging. */
+const OPEN_ISSUE_PREVIEW_LIMIT = 10;
+
+/**
+ * One scoped open-issue snapshot: the total, the grouping by severity and by
+ * project, and the panel's bounded preview rows. Contract §Read/Completeness:
+ * a rollup's totals are SQL aggregates over ONE collaboration snapshot (never a
+ * retry over paging tables), and the preview is never the count source.
+ */
+export type OpenIssueRollup = {
+  totalOpen: number;
+  bySeverity: Record<string, number>;
+  byProject: Record<string, number>;
+  recent: IssuePage["items"];
+};
+
+function readOpenIssueRollup(db: StoreDb, projectId?: string): OpenIssueRollup {
+  const where =
+    `where issues.disposition = 'open' and ${SWITCHED_NOT_PRESENTED_SQL}` +
+    `${projectId === undefined ? "" : " and issues.project_id = ?"}`;
+  const params = projectId === undefined ? [] : [projectId];
+  // invariant: The whole severity vocabulary is reported (zeros included), so a consumer
+  // never distinguishes "absent" from "zero" by a missing key.
+  const bySeverity: Record<string, number> = {};
+  for (const severity of ISSUE_SEVERITIES) bySeverity[severity] = 0;
+  const severities = db
+    .prepare(`select issues.severity as severity, count(*) as count from issues ${where} group by issues.severity`)
+    .all(...params) as Array<{ severity: string; count: number }>;
+  for (const row of severities) bySeverity[row.severity] = row.count;
+  const byProject: Record<string, number> = {};
+  const projects = db
+    .prepare(`select issues.project_id as projectId, count(*) as count from issues ${where} group by issues.project_id order by issues.project_id asc`)
+    .all(...params) as Array<{ projectId: string; count: number }>;
+  for (const row of projects) byProject[row.projectId] = row.count;
+  const total = db.prepare(`select count(*) as count from issues ${where}`).get(...params) as { count: number };
+  return {
+    totalOpen: total.count,
+    bySeverity,
+    byProject,
+    recent: readIssuePage(db, {
+      disposition: "open",
+      limit: OPEN_ISSUE_PREVIEW_LIMIT,
+      ...(projectId === undefined ? {} : { projectId }),
+    }).items,
+  };
+}
+
+/**
+ * The open-issue rollup as one read request: repository-wide, or one project.
+ * Every statement runs inside the request's single collaboration read
+ * transaction, so the total, the grouping and the preview cannot be joined
+ * across generations.
+ */
+export function queryOpenIssueRollup(projectId?: string): StoreReadQuery<OpenIssueRollup> {
+  // invariant: A blank id is a request shape the contract does not define: it must not
+  // answer a zero rollup for a project that was never named.
+  if (projectId !== undefined && (typeof projectId !== "string" || projectId.trim() === "")) {
+    usage("projectId must be a non-empty id");
+  }
+  const scoped = projectId === undefined ? undefined : projectId.trim();
+  // invariant: The proof names the selection it actually covers: a repository-wide rollup
+  // and any project filter are different scopes with different keys, so one
+  // summary proof can never stand for both.
+  const scope: CollaborationScope =
+    scoped === undefined ? { kind: "repository", key: "open-issues:repository" } : { kind: "project", key: scoped };
+  return {
+    view: "open-issue-rollup",
+    needsProjection: false,
+    // invariant: A project rollup declares exactly that project, so an unrelated project's
+    // evidence never refuses or contributes to it.
+    collaboration: { scope, required: true, ...(scoped === undefined ? {} : { projectIds: [scoped] }) },
+    execution: "not-requested",
+    run: (sources) => ({
+      data:
+        sources.remote === null
+          ? readOpenIssueRollup(collaborationSource(sources), scoped)
+          : readRemoteOpenIssueRollup(sources.remote, scoped),
+    }),
+  };
+}
+
+/** note: The rollup over admitted snapshots: totals are aggregates of marked open issues only. */
+function readRemoteOpenIssueRollup(view: RemoteReadView, projectId: string | undefined): OpenIssueRollup {
+  const counts = remoteResidualCounts(view, projectId);
+  return {
+    totalOpen: counts.open,
+    bySeverity: counts.bySeverity,
+    byProject: counts.byProject,
+    recent: remoteIssuePage(view, {
+      disposition: "open",
+      limit: OPEN_ISSUE_PREVIEW_LIMIT,
+      ...(projectId === undefined ? {} : { projectId }),
+    }).items,
+  };
+}
+
+/** note: The collaboration connection a required-source view reads from. */
+function collaborationSource(sources: StoreReadSources): StoreDb {
+  if (sources.collaboration === null) {
+    throw new StoreError(
+      "collaboration.not-initialized",
+      "This view requires the collaboration authority, which was not opened for this read.",
+    );
+  }
+  return sources.collaboration.db;
+}
+
+/** note: The execution connection an execution-source view reads from. */
+function executionSource(sources: StoreReadSources): StoreDb {
+  if (sources.execution === null) {
+    throw new StoreError("store.not-initialized", "This view requires the execution authority, which was not opened for this read.");
+  }
+  return sources.execution.db;
+}
+
+function dashboardView(view: DashboardView, sources: StoreReadSources, filters: DashboardFilters): unknown {
   switch (view) {
     case "issues":
-      return readIssuePage(handle.db, filters.issue ?? {});
+      return sources.remote === null
+        ? readIssuePage(collaborationSource(sources), filters.issue ?? {})
+        : remoteIssuePage(sources.remote, filters.issue ?? {});
     case "issue-detail":
-      return readIssueDetail(handle.db, requireId(filters, "issue-detail"));
+      return sources.remote === null
+        ? readIssueDetail(collaborationSource(sources), requireId(filters, "issue-detail"))
+        : remoteIssueRead(sources.remote, requireId(filters, "issue-detail"), text(filters.projectId) ?? undefined).detail;
     case "workflows":
-      return readWorkflowList(handle.db, filters);
+      return readWorkflowList(sources, filters);
     case "workflow-detail":
-      return readWorkflowDetail(handle.db, filters);
+      return readWorkflowDetail(sources, filters);
     case "iterations":
-      return readIterationList(handle.db, filters);
+      return readIterationList(sources, filters);
     case "iteration-detail":
-      return readIterationDetail(handle.db, filters);
-    case "roadmap":
-      return readRoadmap(handle.db, filters);
+      return readIterationDetail(sources, filters);
     case "projects":
-      return readProjectList(handle.db);
+      return readProjectList(sources);
     case "issue-flow":
-      return readIssueFlow(handle.db, text(filters.projectId) ?? undefined);
+      return sources.remote === null
+        ? readIssueFlow(collaborationSource(sources), text(filters.projectId) ?? undefined)
+        : remoteIssueFlow(sources.remote, text(filters.projectId) ?? undefined);
+    case "milestones": {
+      const projectId = text(filters.projectId) as string;
+      return sources.remote === null
+        ? readMilestonesOn(collaborationSource(sources), projectId)
+        : remoteMilestones(sources.remote, projectId);
+    }
     case "overview":
-      return readOverview(handle.db, filters);
+      return readOverview(sources, filters);
   }
 }
 
@@ -744,40 +1139,38 @@ function bindIssueFilter(filter: IssueFilter): { where: string; params: unknown[
     );
     params.push(filter.query, filter.query);
   }
+  // invariant: A switched record belongs to the destination authority, so the dashboard page neither
+  // returns nor counts it: the same rule a detail read refuses by name.
+  clauses.push(SWITCHED_NOT_PRESENTED_SQL);
   return { where: clauses.length ? `where ${clauses.join(" and ")}` : "", params };
 }
 
-function issuesMilestoneColumn(db: StoreDb): boolean {
-  // A store that predates migration 7 ("project-milestones") has no
-  // issues.milestone_id column; the issue reads must still serve that store
-  // instead of failing with a SQLite column error (the schema is KNOWN —
-  // 1..MIGRATIONS.length — so this is a supported read, not a downgrade).
-  return (db.prepare("pragma table_info(issues)").all() as Array<{ name?: unknown }>).some(
-    (row) => row.name === "milestone_id",
-  );
-}
-
-function issuesProjectMovesTable(db: StoreDb): boolean {
-  // Same tolerance for a store below migration 13: the ledger table does not
-  // exist yet, and its history is simply empty rather than a read failure.
-  return db.prepare("select 1 from sqlite_master where type = 'table' and name = 'issue_project_moves'").get() !== undefined;
+function collaborationRevisionOn(db: StoreDb): number {
+  const row = db.prepare("select revision from collaboration_meta where id = 1").get() as { revision?: unknown } | undefined;
+  const revision = integer(row?.revision);
+  if (revision === null) {
+    throw new StoreError(
+      "collaboration.unreadable",
+      "The collaboration authority has no readable revision; this read cannot state the revision it answered at.",
+    );
+  }
+  return revision;
 }
 
 function readIssuePage(db: StoreDb, filter: IssueFilter): IssuePage {
   const { limit, offset } = paging(filter.limit, filter.offset);
   const { where, params } = bindIssueFilter(filter);
-  const storeRevision = readMeta(db).storeRevision;
+  const storeRevision = collaborationRevisionOn(db);
   const totalRow = db.prepare(`select count(*) as n from issues ${where}`).get(...params) as { n: number };
   // The prototype's head reads `26 open across 4 projects`: the span of the result set, not
   // of the page. One extra aggregate, so a paged read can still state it.
   const spanRow = db
     .prepare(`select count(distinct project_id) as n from issues ${where}`)
     .get(...params) as { n: number };
-  const milestoneExpr = issuesMilestoneColumn(db) ? "issues.milestone_id as milestoneId" : "null as milestoneId";
   const rows = db
     .prepare(
       `select issues.id, issues.project_id as projectId, issues.title, issues.kind, issues.severity, issues.disposition,
-              issues.registered_at as registeredAt, issues.revision, ${milestoneExpr},
+              issues.registered_at as registeredAt, issues.revision, issues.milestone_id as milestoneId,
               (${ISSUE_LAST_ACTIVITY_SQL}) as lastActivity
        from issues ${where} ${ISSUE_ORDER_SQL} limit ? offset ?`,
     )
@@ -822,12 +1215,13 @@ function parseEvidenceText(json: string): string[] {
 }
 
 function readIssueDetail(db: StoreDb, id: string): IssueDetail {
-  // Same pre-migration-7 tolerance as the page read above.
-  assertIssueProvenanceSchema(db);
-  const milestoneColumn = issuesMilestoneColumn(db) ? ", milestone_id" : "";
+  // note: The collaboration lane is created complete: the same authority gate its own
+  // reader applies, with no legacy per-table schema probe.
+  assertIssueStoreActive(db);
+  const milestoneColumn = ", milestone_id";
   const issue = db
     .prepare(
-      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key${milestoneColumn} from issues where id = ?`,
+      `select id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, issue_ref${milestoneColumn} from issues where id = ?`,
     )
     .get(id) as
     | {
@@ -851,9 +1245,13 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
         url: string | null;
         identity_key: string;
         milestone_id: string | null;
+        issue_ref: string;
       }
     | undefined;
   if (!issue) throw new IssueError("issue.not-found", `Issue ${id} does not exist`);
+  // invariant: The same presentation gate the domain reader applies: a switched record belongs to
+  // the destination authority until its move publishes, so this reader refuses it the same way.
+  assertPresented(db, id);
 
   const occurrences = (
     db
@@ -923,12 +1321,12 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
   // join, which is the issue this one is not.
   const relations = db
     .prepare(
-      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue,
+      `select r.from_issue as fromIssue, r.relation, r.to_issue as toIssue, r.to_ref as toRef,
               (select i.title from issues i
                  where i.id = case when r.from_issue = ? then r.to_issue else r.from_issue end) as title
          from relations r where r.from_issue = ? or r.to_issue = ?`,
     )
-    .all(id, id, id) as Array<{ fromIssue: string; relation: string; toIssue: string; title: string | null }>;
+    .all(id, id, id) as IssueDetail["relations"];
 
   const provenance = (
     db
@@ -960,29 +1358,27 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     importedAt: row.imported_at,
   }));
 
-  const projectMoves = issuesProjectMovesTable(db)
-    ? (
-        db
-          .prepare(
-            "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
-          )
-          .all(id) as Array<{
-          from_project_id: string;
-          to_project_id: string;
-          actor: string;
-          reason: string;
-          occurred_at: string;
-          issue_revision: number;
-        }>
-      ).map((row) => ({
-        fromProject: row.from_project_id,
-        toProject: row.to_project_id,
-        actor: row.actor,
-        reason: row.reason,
-        occurredAt: row.occurred_at,
-        issueRevision: row.issue_revision,
-      }))
-    : [];
+  const projectMoves = (
+    db
+      .prepare(
+        "select from_project_id, to_project_id, actor, reason, occurred_at, issue_revision from issue_project_moves where issue_id = ? order by id asc",
+      )
+      .all(id) as Array<{
+      from_project_id: string;
+      to_project_id: string;
+      actor: string;
+      reason: string;
+      occurred_at: string;
+      issue_revision: number;
+    }>
+  ).map((row) => ({
+    fromProject: row.from_project_id,
+    toProject: row.to_project_id,
+    actor: row.actor,
+    reason: row.reason,
+    occurredAt: row.occurred_at,
+    issueRevision: row.issue_revision,
+  }));
 
   return {
     id: issue.id,
@@ -1004,6 +1400,7 @@ function readIssueDetail(db: StoreDb, id: string): IssueDetail {
     externalId: issue.external_id,
     url: issue.url,
     identityKey: issue.identity_key,
+    issueRef: issue.issue_ref,
     milestoneId: issue.milestone_id ?? null,
     occurrences,
     transitions,
@@ -1056,7 +1453,10 @@ function readIssueFlow(db: StoreDb, projectId: string | undefined): IssueFlow {
     .all(...scopeParams) as Array<{ at: string | null; imported: number }>;
 
   const openRow = db
-    .prepare(`select count(*) as n from issues ${scope ? `${scope} and` : "where"} disposition = 'open'`)
+    .prepare(
+      `select count(*) as n from issues ${scope ? `${scope} and` : "where"} disposition = 'open' and ` +
+        SWITCHED_NOT_PRESENTED_SQL,
+    )
     .get(...scopeParams) as { n: number };
 
   type Day = { captured: number; retired: number; importedCaptured: number; importedRetired: number };
@@ -1163,10 +1563,12 @@ function identityToken(kind: string, id: string): string {
   return `${kind}\u0000${id}`;
 }
 
-/** Catalog identities for a bounded key set, keyed by `kind\0id`. */
-function catalogIdentities(db: StoreDb, keys: readonly CatalogKey[]): Map<string, CatalogIdentityDTO> {
+/** invariant: Catalog identities for a bounded key set, keyed by `kind\0id`. An unopened
+ * optional catalog source contributes nothing -- the envelope says it was
+ * unavailable, so a view never turns that into a "missing link" claim. */
+function catalogIdentities(db: StoreDb | null, keys: readonly CatalogKey[]): Map<string, CatalogIdentityDTO> {
   const found = new Map<string, CatalogIdentityDTO>();
-  if (keys.length === 0) return found;
+  if (db === null || keys.length === 0) return found;
   const tuples = keys.map(() => "(?, ?)").join(", ");
   const params = keys.flatMap((key) => [key.kind, key.id]);
   const rows = db
@@ -1176,7 +1578,7 @@ function catalogIdentities(db: StoreDb, keys: readonly CatalogKey[]): Map<string
   return found;
 }
 
-function readProjectList(db: StoreDb): ProjectListDTO {
+function readProjectListOn(db: StoreDb): ProjectListDTO {
   const rows = db
     .prepare(
       `with project_ids as (
@@ -1188,6 +1590,7 @@ function readProjectList(db: StoreDb): ProjectListDTO {
        from project_ids
        left join catalog_entities catalog on catalog.kind = 'project' and catalog.id = project_ids.id
        left join issues on issues.project_id = project_ids.id and issues.disposition = 'open'
+         and ${SWITCHED_NOT_PRESENTED_SQL}
        group by project_ids.id
        order by coalesce(catalog.title, project_ids.id) asc, project_ids.id asc`,
     )
@@ -1201,9 +1604,163 @@ function readProjectList(db: StoreDb): ProjectListDTO {
   return { items, total: items.length };
 }
 
+/** invariant: A project filter is catalog data: a required read never lists a project it could not observe. */
+function readProjectList(sources: StoreReadSources): ProjectListDTO {
+  return sources.remote === null ? readProjectListOn(collaborationSource(sources)) : remoteProjectList(sources.remote);
+}
+
+/**
+ * One project's catalog row, or `null` when no catalog row backs that id.
+ *
+ * Scoped to the requested id by construction: an unreadable SIBLING project cannot turn
+ * this answer into a refusal, which is what a whole-list lookup would do in remote mode.
+ */
+export async function readProjectCatalogRow(
+  context: StoreContext,
+  projectId: string,
+): Promise<ProjectListDTO["items"][number] | null> {
+  const envelope = await withStoreRead(context, queryProjectRow(projectId));
+  return envelope.data;
+}
+
+/** see packages/engine/src/store-read.ts - a single-project catalog read: collaboration only. */
+function queryProjectRow(projectId: string): StoreReadQuery<ProjectListDTO["items"][number] | null> {
+  return {
+    view: "projects",
+    needsProjection: false,
+    collaboration: { scope: { kind: "query", key: `project:${projectId}` }, required: true, projectIds: [projectId] },
+    execution: "not-requested",
+    run: (sources) => ({
+      data:
+        sources.remote === null
+          ? projectRowOn(collaborationSource(sources), projectId)
+          : remoteProjectRow(sources.remote, projectId),
+    }),
+  };
+}
+
+/** see packages/engine/src/store-read.ts - `null` when no catalog row backs the id. */
+function projectRowOn(db: StoreDb, projectId: string): ProjectListDTO["items"][number] | null {
+  const row = db
+    .prepare(
+      `select catalog.id as id, catalog.title as title, catalog.description, catalog.lifecycle,
+              (select count(*) from issues where issues.project_id = catalog.id and issues.disposition = 'open'
+                 and ${SWITCHED_NOT_PRESENTED_SQL}) as open_issues
+       from catalog_entities catalog where catalog.kind = 'project' and catalog.id = ?`,
+    )
+    .get(projectId) as { id: string; title: string; description: string | null; lifecycle: CatalogLifecycle; open_issues: number } | undefined;
+  if (row === undefined) return null;
+  return {
+    project: { id: row.id, title: row.title, description: row.description, lifecycle: row.lifecycle },
+    openIssues: row.open_issues,
+  };
+}
+
+/** see packages/engine/src/collaboration-remote-read.ts - the same row from the admitted snapshot. */
+function remoteProjectRow(view: RemoteReadView, projectId: string): ProjectListDTO["items"][number] | null {
+  return remoteProjectListItem(view, projectId);
+}
+
+// --- Remote catalog adapters ------------------------------------------------
+//
+// note: The portable catalog a remote snapshot carries is identity and relations
+// only: no checkout path and no local timestamps. These adapters answer the
+// same shape the local joins answer, so a view has ONE composition path.
+
+function remoteIdentity(row: RemoteCatalogRow): CatalogIdentityDTO {
+  return {
+    kind: row.kind,
+    id: row.id,
+    title: row.title,
+    description: row.description,
+    rootKind: null,
+    relativePath: null,
+    documentKind: row.documentKind,
+    lifecycle: row.lifecycle,
+    revision: row.revision,
+    registeredAt: null,
+    updatedAt: null,
+    source: "remote",
+  };
+}
+
+/** note: `null` means the optional catalog source was unavailable (never "no rows"). */
+function remoteCatalogRowsFor(
+  sources: StoreReadSources,
+  required: boolean,
+  projectIds?: readonly string[],
+): readonly RemoteCatalogRow[] | null {
+  if (sources.remote === null) return null;
+  try {
+    return remoteCatalogRows(sources.remote, projectIds ?? sources.remote.projectIds);
+  } catch (error) {
+    if (required) throw error;
+    return null;
+  }
+}
+
+function catalogIdentitiesIn(
+  sources: StoreReadSources,
+  keys: readonly CatalogKey[],
+  required: boolean,
+  projectIds?: readonly string[],
+): Map<string, CatalogIdentityDTO> {
+  if (sources.remote === null) return catalogIdentities(sources.collaboration?.db ?? null, keys);
+  const rows = remoteCatalogRowsFor(sources, required, projectIds);
+  const found = new Map<string, CatalogIdentityDTO>();
+  if (rows === null || keys.length === 0) return found;
+  const wanted = new Set(keys.map((key) => identityToken(key.kind, key.id)));
+  for (const row of rows) {
+    const token = identityToken(row.kind, row.id);
+    if (wanted.has(token)) found.set(token, remoteIdentity(row));
+  }
+  return found;
+}
+
+function projectMembershipIn(
+  sources: StoreReadSources,
+  required: boolean,
+  projectIds?: readonly string[],
+): ReadonlyMap<string, ReadonlySet<string>> {
+  if (sources.remote === null) return projectMembership(sources.collaboration?.db ?? null);
+  try {
+    return remoteCatalogLinks(sources.remote, projectIds ?? sources.remote.projectIds).membership;
+  } catch (error) {
+    if (required) throw error;
+    return new Map();
+  }
+}
+
+function iterationAttributionIn(
+  sources: StoreReadSources,
+  required: boolean,
+  projectIds?: readonly string[],
+): IterationListDTO["attribution"] {
+  if (sources.remote === null) return iterationAttribution(sources.collaboration?.db ?? null);
+  try {
+    return remoteCatalogLinks(sources.remote, projectIds ?? sources.remote.projectIds).attribution;
+  } catch (error) {
+    if (required) throw error;
+    return "absent";
+  }
+}
+
+function iterationLinksIn(
+  sources: StoreReadSources,
+  kind: "plan" | "document",
+  projectIds?: readonly string[],
+): ReadonlyMap<string, readonly string[]> {
+  if (sources.remote === null) {
+    return kind === "plan" ? iterationPlanIds(sources.collaboration?.db ?? null) : iterationDocumentIds(sources.collaboration?.db ?? null);
+  }
+  const links = remoteCatalogLinks(sources.remote, projectIds ?? sources.remote.projectIds);
+  return kind === "plan" ? links.planLinks : links.documentLinks;
+}
+
 /** Project membership per catalog entity (`belongs-to` → project). */
-function projectMembership(db: StoreDb): Map<string, Set<string>> {
+function projectMembership(db: StoreDb | null): Map<string, Set<string>> {
   const membership = new Map<string, Set<string>>();
+  if (db === null) return membership;
   const rows = db
     .prepare("select from_kind, from_id, to_id from catalog_links where relation = 'belongs-to' and to_kind = 'project'")
     .all() as Array<{ from_kind: string; from_id: string; to_id: string }>;
@@ -1217,7 +1774,8 @@ function projectMembership(db: StoreDb): Map<string, Set<string>> {
 }
 
 /** Whether ANY iteration is linked `belongs-to` a project (IA §5 empty vs absent). */
-function iterationAttribution(db: StoreDb): IterationListDTO["attribution"] {
+function iterationAttribution(db: StoreDb | null): IterationListDTO["attribution"] {
+  if (db === null) return "absent";
   const linked = db
     .prepare(
       "select 1 as linked from catalog_links where relation = 'belongs-to' and from_kind = 'iteration' and to_kind = 'project' limit 1",
@@ -1227,7 +1785,7 @@ function iterationAttribution(db: StoreDb): IterationListDTO["attribution"] {
 }
 
 function belongsTo(
-  membership: Map<string, Set<string>>,
+  membership: ReadonlyMap<string, ReadonlySet<string>>,
   kind: string,
   id: string,
   projectId: string,
@@ -1337,9 +1895,14 @@ function workflowCatalogKey(workflow: { id: string; type: string }): CatalogKey 
   return { kind: workflow.type === "iteration" ? "iteration" : "plan", id: workflow.id };
 }
 
-function planBadges(plan: ProjectedPlanRow, catalog: CatalogIdentityDTO | null): DashboardBadge[] {
+/**
+ * note: Badges that depend on catalog identity are only claimed when the catalog was
+ * OBSERVED: with an unavailable optional source an absent row is unknown, not
+ * missing, and the envelope's collaboration disclosure names the gap.
+ */
+function planBadges(plan: ProjectedPlanRow, catalog: CatalogIdentityDTO | null, catalogKnown: boolean): DashboardBadge[] {
   const badges: DashboardBadge[] = [];
-  if (catalog === null) badges.push("catalog-missing");
+  if (catalogKnown && catalog === null) badges.push("catalog-missing");
   if (plan.catalog_pin_revision === null) badges.push("catalog-pin-missing");
   else if (catalog !== null && catalog.revision !== plan.catalog_pin_revision) badges.push("catalog-pin-conflict");
   return badges;
@@ -1350,9 +1913,10 @@ function toWorkflowDTO(
   plans: ProjectedPlanRow[],
   leases: ProjectedLeaseRow[],
   identities: Map<string, CatalogIdentityDTO>,
+  catalogKnown: boolean,
 ): WorkflowDTO {
   const catalog = identities.get(identityToken(workflowCatalogKey(row).kind, row.id)) ?? null;
-  const badges: DashboardBadge[] = catalog === null ? ["catalog-missing"] : [];
+  const badges: DashboardBadge[] = catalogKnown && catalog === null ? ["catalog-missing"] : [];
   return {
     id: row.id,
     type: row.type,
@@ -1393,7 +1957,7 @@ function toWorkflowDTO(
             worktreePath: lease.worktree_path,
             expiresAt: lease.expires_at,
           })),
-        badges: planBadges(plan, planCatalog),
+        badges: planBadges(plan, planCatalog, catalogKnown),
       };
     }),
     badges,
@@ -1429,7 +1993,31 @@ function readTerminalState(db: StoreDb): { unregistered: TerminalUnregisteredDTO
   }
   return { unregistered, adopted };
 }
-function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListDTO {
+/**
+ * note: The execution workflow list.
+ *
+ * `catalogProjectIds` narrows ONLY the catalog join (membership, identities and
+ * the known-catalog flag) to the projects a containing response declares, while
+ * the row filter keeps its own `filters.projectId`. The `overview` uses it so an
+ * A-scoped response never carries B's catalog titles while still answering the
+ * global workflow summary it owns.
+ */
+function readWorkflowList(
+  sources: StoreReadSources,
+  filters: DashboardFilters,
+  catalogProjectIds?: readonly string[],
+): WorkflowListDTO {
+  const db = executionSource(sources);
+  const projectId = text(filters.projectId);
+  // invariant: A project filter declares exactly that project for this read: membership,
+  // catalog identities and the known-catalog flag all come from it, so an unrelated
+  // project's gap never suppresses this project's rows or taints their stamp.
+  const scopeIds = projectId === null ? undefined : [projectId];
+  const catalogScope = catalogProjectIds ?? scopeIds;
+  // invariant: A project filter makes membership a required source. Enforcing it here
+  // covers both zero-producing returns below; only an unfiltered list is optional.
+  const membership = projectMembershipIn(sources, projectId !== null, catalogScope);
+  const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false, catalogScope) !== null : sources.collaboration !== null;
   const terminal = readTerminalState(db);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
@@ -1439,7 +2027,6 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
       ...(terminal.adopted.length === 0 ? {} : { terminalAdoptions: terminal.adopted }),
     };
   }
-  const projectId = text(filters.projectId);
 
   const plansByWorkflow = new Map<string, ProjectedPlanRow[]>();
   for (const plan of generated.plans) {
@@ -1453,7 +2040,6 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
   // The list's rows stay ACTIVE-REGISTERED only (C3): the projection now also
   // carries terminal iteration workflows for the iteration views, and the
   // membership rule is stated here rather than inherited from the row set.
-  const membership = projectMembership(db);
   const scoped = generated.workflows.filter((workflow) => {
     if (!workflow.active_registration) return false;
     if (projectId === null) return true;
@@ -1462,13 +2048,13 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
   });
 
   const page = scoped.slice(offset, offset + limit);
-  const identities = catalogIdentities(db, [
+  const identities = catalogIdentitiesIn(sources, [
     ...page.map(workflowCatalogKey),
     ...page.flatMap((workflow) => (plansByWorkflow.get(workflow.id) ?? []).map((plan) => ({ kind: "plan" as const, id: plan.plan_id }))),
-  ]);
+  ], false, catalogScope);
   return {
     items: page.map((workflow) =>
-      toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities),
+      toWorkflowDTO(workflow, plansByWorkflow.get(workflow.id) ?? [], generated.leases, identities, catalogKnown),
     ),
     total: scoped.length,
     ...(terminal.unregistered.length === 0 ? {} : { terminalUnregistered: terminal.unregistered }),
@@ -1476,17 +2062,19 @@ function readWorkflowList(db: StoreDb, filters: DashboardFilters): WorkflowListD
   };
 }
 
-function readWorkflowDetail(db: StoreDb, filters: DashboardFilters): WorkflowDTO | null {
+function readWorkflowDetail(sources: StoreReadSources, filters: DashboardFilters): WorkflowDTO | null {
+  const db = executionSource(sources);
+  const catalogKnown = sources.remote !== null ? remoteCatalogRowsFor(sources, false) !== null : sources.collaboration !== null;
   const id = requireId(filters, "workflow-detail");
   const generated = readGeneratedRows(db);
   const workflow = generated.workflows.find((row) => row.id === id);
   if (workflow === undefined) return null;
   const plans = generated.plans.filter((plan) => plan.workflow_id === id);
-  const identities = catalogIdentities(db, [
+  const identities = catalogIdentitiesIn(sources, [
     workflowCatalogKey(workflow),
     ...plans.map((plan) => ({ kind: "plan" as const, id: plan.plan_id })),
-  ]);
-  return toWorkflowDTO(workflow, plans, generated.leases, identities);
+  ], false);
+  return toWorkflowDTO(workflow, plans, generated.leases, identities, catalogKnown);
 }
 
 // ---------------------------------------------------------------------------
@@ -1494,14 +2082,15 @@ function readWorkflowDetail(db: StoreDb, filters: DashboardFilters): WorkflowDTO
 // ---------------------------------------------------------------------------
 
 /** Catalog plan rows that belong to an iteration, keyed by iteration id. */
-function iterationPlanIds(db: StoreDb): Map<string, string[]> {
+function iterationPlanIds(db: StoreDb | null): Map<string, string[]> {
+  const byIteration = new Map<string, string[]>();
+  if (db === null) return byIteration;
   const rows = db
     .prepare(
       "select from_id as planId, to_id as iterationId from catalog_links " +
         "where relation = 'belongs-to' and from_kind = 'plan' and to_kind = 'iteration'",
     )
     .all() as Array<{ planId: string; iterationId: string }>;
-  const byIteration = new Map<string, string[]>();
   for (const row of rows) {
     const list = byIteration.get(row.iterationId) ?? [];
     list.push(row.planId);
@@ -1512,14 +2101,15 @@ function iterationPlanIds(db: StoreDb): Map<string, string[]> {
 }
 
 /** Catalog document rows linked `documents` from an iteration, keyed by iterator id. */
-function iterationDocumentIds(db: StoreDb): Map<string, string[]> {
+function iterationDocumentIds(db: StoreDb | null): Map<string, string[]> {
+  const byIteration = new Map<string, string[]>();
+  if (db === null) return byIteration;
   const rows = db
     .prepare(
       "select from_id as iterationId, to_id as documentId from catalog_links " +
         "where relation = 'documents' and from_kind = 'iteration' and to_kind = 'document'",
     )
     .all() as Array<{ iterationId: string; documentId: string }>;
-  const byIteration = new Map<string, string[]>();
   for (const row of rows) {
     const list = byIteration.get(row.iterationId) ?? [];
     list.push(row.documentId);
@@ -1546,7 +2136,7 @@ function compassesByIteration(generated: GeneratedRows): Map<string, ProjectedCo
  */
 function iterationMembershipPlanIds(
   compassByIteration: Map<string, ProjectedCompassRow>,
-  linkIds: Map<string, string[]>,
+  linkIds: ReadonlyMap<string, readonly string[]>,
   iterationIds: readonly string[],
 ): Map<string, string[]> {
   const merged = new Map<string, string[]>();
@@ -1695,27 +2285,45 @@ function gateStepOf(
   return plans.length > 0 && plans.every((plan) => plan.execution?.status === "Done") ? 3 : 2;
 }
 
-function readIterationList(db: StoreDb, filters: DashboardFilters): IterationListDTO {
+/** note: The iteration identity rows the selected source holds, sorted title/id. */
+function iterationCatalogRows(sources: StoreReadSources, projectIds?: readonly string[]): CatalogIdentityDTO[] {
+  if (sources.remote !== null) {
+    const rows = remoteCatalogRowsFor(sources, true, projectIds) ?? [];
+    return rows
+      .filter((row) => row.kind === "iteration")
+      .map(remoteIdentity)
+      .sort((left, right) => (left.title < right.title ? -1 : left.title > right.title ? 1 : left.id < right.id ? -1 : 1));
+  }
+  const db = collaborationSource(sources);
+  return (db
+    .prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`)
+    .all() as IdentityRow[]).map(toIdentity);
+}
+
+function readIterationList(sources: StoreReadSources, filters: DashboardFilters): IterationListDTO {
+  const db = executionSource(sources);
   const { limit, offset } = paging(filters.limit, filters.offset);
   const generated = readGeneratedRows(db);
   const projectId = text(filters.projectId);
-  const membership = projectMembership(db);
-  const catalogRows = (
-    db
-      .prepare(`select ${IDENTITY_COLUMNS} from catalog_entities where kind = 'iteration' order by title asc, id asc`)
-      .all() as IdentityRow[]
-  ).filter((row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId));
+  // invariant: A project filter declares exactly that project for this read: membership,
+  // catalog rows, links and attribution all come from it, so another project's missing,
+  // partial or expired evidence neither refuses nor contributes to this list.
+  const scopeIds = projectId === null ? undefined : [projectId];
+  const membership = projectMembershipIn(sources, true, scopeIds);
+  const catalogRows = iterationCatalogRows(sources, scopeIds).filter(
+    (row) => projectId === null || belongsTo(membership, "iteration", row.id, projectId),
+  );
 
-  const linkPlanIds = iterationPlanIds(db);
+  const linkPlanIds = iterationLinksIn(sources, "plan", scopeIds);
   const compassByIteration = compassesByIteration(generated);
   const planIds = iterationMembershipPlanIds(compassByIteration, linkPlanIds, catalogRows.map((row) => row.id));
-  const documentIds = iterationDocumentIds(db);
+  const documentIds = iterationLinksIn(sources, "document", scopeIds);
   const page = catalogRows.slice(offset, offset + limit);
-  const identities = catalogIdentities(db, [
+  const identities = catalogIdentitiesIn(sources, [
     ...page.map((row) => ({ kind: "iteration" as const, id: row.id })),
     ...page.flatMap((row) => (planIds.get(row.id) ?? []).map((planId) => ({ kind: "plan" as const, id: planId }))),
     ...page.flatMap((row) => (documentIds.get(row.id) ?? []).map((documentId) => ({ kind: "document" as const, id: documentId }))),
-  ]);
+  ], true, scopeIds);
   return {
     items: page.map((row) =>
       composeIteration(
@@ -1734,25 +2342,26 @@ function readIterationList(db: StoreDb, filters: DashboardFilters): IterationLis
     total: catalogRows.length,
     // One list-level disclosure: whether ANY iteration is attributed to a
     // project, so a project's empty Iterations feature can tell a fact from a gap.
-    attribution: iterationAttribution(db),
+    attribution: iterationAttributionIn(sources, true, scopeIds),
   };
 }
 
-function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationDTO | null {
+function readIterationDetail(sources: StoreReadSources, filters: DashboardFilters): IterationDTO | null {
+  const db = executionSource(sources);
   const iterationId = requireId(filters, "iteration-detail");
   const generated = readGeneratedRows(db);
   const compassByIteration = compassesByIteration(generated);
-  const planIds = iterationMembershipPlanIds(compassByIteration, iterationPlanIds(db), [iterationId]).get(iterationId) ?? [];
-  const documentIds = iterationDocumentIds(db).get(iterationId) ?? [];
+  const planIds = iterationMembershipPlanIds(compassByIteration, iterationLinksIn(sources, "plan"), [iterationId]).get(iterationId) ?? [];
+  const documentIds = iterationLinksIn(sources, "document").get(iterationId) ?? [];
   const compassRow = compassByIteration.get(iterationId);
-  const identities = catalogIdentities(db, [
+  const identities = catalogIdentitiesIn(sources, [
     { kind: "iteration", id: iterationId },
     ...planIds.map((planId) => ({ kind: "plan" as const, id: planId })),
     ...documentIds.map((documentId) => ({ kind: "document" as const, id: documentId })),
-  ]);
+  ], true);
   const catalog = identities.get(identityToken("iteration", iterationId)) ?? null;
   if (catalog === null && compassRow === undefined) return null;
-  const projects = [...(projectMembership(db).get(identityToken("iteration", iterationId)) ?? [])].sort();
+  const projects = [...(projectMembershipIn(sources, true).get(identityToken("iteration", iterationId)) ?? [])].sort();
   return composeIteration(iterationId, catalog, generated, compassRow, planIds, documentIds, identities, projects);
 }
 
@@ -1761,13 +2370,16 @@ function readIterationDetail(db: StoreDb, filters: DashboardFilters): IterationD
 // ---------------------------------------------------------------------------
 
 /**
- * The aggregated "what is the state right now" read: every member is produced
+ * why: The aggregated "what is the state right now" read: every member is produced
  * inside its own `try`, so one failed reader degrades that member only, and
  * the two project-scoped members answer `not-applicable` when no project
- * resolves. All of it is read inside the one `run(handle)` transaction, so the
- * members share one store snapshot.
+ * resolves. Both required sources were opened by the boundary, each inside its
+ * own read snapshot; members that read one source keep that source's snapshot.
  */
-function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
+function readOverview(sources: StoreReadSources, filters: DashboardFilters): OverviewDTO {
+  const db = executionSource(sources);
+  const collaborationDb = sources.remote === null ? collaborationSource(sources) : null;
+  const remote = sources.remote;
   const projectId = text(filters.projectId);
   const member = <T>(read: () => T): OverviewMember<T> => {
     try {
@@ -1788,17 +2400,33 @@ function readOverview(db: StoreDb, filters: DashboardFilters): OverviewDTO {
 
   return {
     projectId,
-    workflows: projected(() => activeWorkflows(readWorkflowList(db, { limit: 50 }))),
-    residuals: member(() => readResidualCounts(db)),
+    // invariant: The workflow member joins catalog identity, so it declares the SAME project
+    // scope as the rest of this overview: an A-only response never carries B's catalog titles
+    // or is suppressed by B's evidence, while the rows keep their global summary.
+    workflows: projected(() =>
+      activeWorkflows(readWorkflowList(sources, { limit: 50 }, projectId === null ? undefined : [projectId])),
+    ),
+    residuals:
+      remote === null
+        ? member(() => readResidualCounts(collaborationDb as StoreDb))
+        : member(() => {
+            const counts = remoteResidualCounts(remote, projectId ?? undefined);
+            return { open: counts.open, bySeverity: counts.bySeverity as ResidualCounts };
+          }),
     milestones:
       projectId === null
         ? { state: "not-applicable", reason: "no project resolves for this read" }
-        : member(() => readMilestonesOn(db, projectId)),
+        : remote === null
+          ? member(() => readMilestonesOn(collaborationDb as StoreDb, projectId))
+          : member(() => remoteMilestones(remote, projectId)),
     latestIteration:
       projectId === null
         ? { state: "not-applicable", reason: "no project resolves for this read" }
-        : projected(() => readLatestIteration(db, projectId)),
-    issueFlow: member(() => readIssueFlow(db, projectId ?? undefined)),
+        : projected(() => readLatestIteration(sources, projectId)),
+    issueFlow:
+      remote === null
+        ? member(() => readIssueFlow(collaborationDb as StoreDb, projectId ?? undefined))
+        : member(() => remoteIssueFlow(remote, projectId ?? undefined)),
   };
 }
 
@@ -1832,7 +2460,9 @@ function activeWorkflows(list: WorkflowListDTO): WorkflowListDTO {
 function readResidualCounts(db: StoreDb): { open: number; bySeverity: ResidualCounts } {
   const bySeverity: ResidualCounts = { critical: 0, high: 0, medium: 0, low: 0, nit: 0 };
   const rows = db
-    .prepare("select severity, count(*) as n from issues where disposition = 'open' group by severity")
+    .prepare(
+      `select severity, count(*) as n from issues where disposition = 'open' and ${SWITCHED_NOT_PRESENTED_SQL} group by severity`,
+    )
     .all() as Array<{ severity: string; n: number }>;
   for (const row of rows) {
     if (Object.hasOwn(bySeverity, row.severity)) bySeverity[row.severity as keyof ResidualCounts] = row.n;
@@ -1845,10 +2475,10 @@ function readResidualCounts(db: StoreDb): { open: number; bySeverity: ResidualCo
  * The project's latest iteration: newest compass start date, falling back to
  * the catalog's own update, with the id ascending on a tie.
  */
-function readLatestIteration(db: StoreDb, projectId: string): IterationDTO | null {
+function readLatestIteration(sources: StoreReadSources, projectId: string): IterationDTO | null {
   // shortcut: the winner is picked from the 200-row page. upgrade: read the
   // whole iteration list, if a project ever exceeds that.
-  const list = readIterationList(db, { projectId, limit: 200 });
+  const list = readIterationList(sources, { projectId, limit: 200 });
   let latest: IterationDTO | null = null;
   let latestKey = "";
   for (const item of list.items) {
@@ -1859,37 +2489,4 @@ function readLatestIteration(db: StoreDb, projectId: string): IterationDTO | nul
     }
   }
   return latest;
-}
-
-// ---------------------------------------------------------------------------
-// Roadmap view
-// ---------------------------------------------------------------------------
-
-function readRoadmap(db: StoreDb, filters: DashboardFilters): RoadmapDTO | null {
-  const projectId = text(filters.projectId);
-  if (projectId === null) usage("the roadmap view requires filters.projectId");
-  const catalog = catalogIdentities(db, [{ kind: "project", id: projectId }]).get(identityToken("project", projectId));
-  if (catalog === undefined) return null;
-
-  let authority: RoadmapRead;
-  try {
-    authority = readRoadmapAuthorityOn(db, projectId);
-  } catch (error) {
-    if (typeof error === "object" && error !== null && "code" in error && error.code === "roadmap.project-not-found") return null;
-    throw error;
-  }
-  // The milestone grouping is authoritative store data read on the SAME
-  // handle/snapshot as the content authority: it never depends on the stored
-  // Markdown, so an existing project with absent content still answers it.
-  const milestones = readMilestonesOn(db, projectId);
-  if (authority.roadmap === null) {
-    return { projectId, catalog, authority: { state: "absent" }, content: null, milestones };
-  }
-  return {
-    projectId,
-    catalog,
-    authority: { state: "present", revision: authority.roadmap.revision, contentHash: authority.roadmap.contentHash },
-    content: authority.content,
-    milestones,
-  };
 }

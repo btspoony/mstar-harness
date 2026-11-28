@@ -12,7 +12,7 @@
  * No barrel: importers name this module by explicit relative path.
  */
 import { type Context } from '@deepseek-ai/cordis'
-import { applyEnforcement, assignmentHeaderRegion, parseAssignmentFields } from '@mstar-harness/engine'
+import { applyEnforcement, assignmentFrontmatterParse, parseAssignmentFieldsFromFrontmatter, readAssignmentSource } from '@mstar-harness/engine'
 import type { GateResult } from '@mstar-harness/engine'
 import type { PreToolDecision, ToolExecution } from '@deepseek-ai/dsh-tools'
 import { asRecord, formatViolation } from './_shared.ts'
@@ -25,12 +25,14 @@ import {
   isTeamDispatchTool,
 } from './dispatch.ts'
 import { isAssignmentShaped, resolveDispatchHard } from './dispatch-assignment.ts'
+import { hasTerminalRefusal } from './dispatch-core.ts'
 import { gateWorkflow } from './dispatch-workflow-branch.ts'
+import { handOffResolvedCarrier } from './role-persona.ts'
 
 /** The hard-mode veto reason: one line per violation + the refusal channel. */
-function denyReason(tool: string, verdict: GateResult): string {
+function denyReason(tool: string, verdict: GateResult, cause: string): string {
   return [
-    `subagent dispatch (${tool}) blocked by Enforcement: hard — the Assignment fails the dispatch gate`,
+    `subagent dispatch (${tool}) blocked by ${cause} — the dispatch gate refused it`,
     ...verdict.violations.map(formatViolation),
     'refusal channel: tools/pre-execute PreToolDecision { kind: \'deny\' }; skill: mstar-dispatch-gates',
   ].join('\n')
@@ -58,34 +60,72 @@ async function gateAssignmentText(
   hintReadOf: () => SessionHintRead,
 ): Promise<PreToolDecision | undefined> {
   const toolName = exec.name
-  // Shape guard + advisory role read run on the header region:
-  // a `## Assignment` heading or field line quoted in the task body cannot
-  // shape a non-assignment prompt or leak into the advisory role.
-  const header = assignmentHeaderRegion(prompt)
-  if (!isAssignmentShaped(header)) return undefined
-
+  // Shape guard on the raw carrier text: an inline document is read whole
+  // (the front matter scanners fence-scope themselves); a pointer line
+  // (`Assignment file: <abs>`, compass D14) is shaped by its own prefix so
+  // the source resolution verdict — success OR refusal — is always gated.
+  // The D16 legacy body-label shape is assignment-shaped too: the document
+  // must reach the gate's legacy-format refusal, never pass silently.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  if (!isAssignmentShaped(prompt) && !/^[ \t]*Assignment file:[ \t]*\S/m.test(prompt)) return undefined
+  // compass D14 — the ONE source resolution, BEFORE enforcement and the
+  // advisory role are derived: an `Assignment file: <abs>` pointer resolves
+  // to the document it names, so `enforcement: hard` inside that document
+  // hardens exactly as the inline form does, and the advisory names the
+  // document's own Execute as. The resolution RESULT threads into the
+  // core/lease/record paths below (`preResolved`), so no downstream stage
+  // ever re-reads the source: success feeds every stage the same document;
+  // a terminal source refusal stays terminal — the one refusal verdict,
+  // never a second read, never a field-violation read of the pointer line,
+  // and never a ledger row for the unresolved input.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const source = readAssignmentSource(prompt, { harnessDir })
+  const text = source.ok ? source.text : prompt
+  // ONE parse per dispatch, made HERE so every stage of this decision reads the
+  // same entries: the enforcement policy, the adapter's plan id / worktree /
+  // lease / composition legs and the advisory role. A malformed block parses
+  // ONCE to `entries: null` and its structured refusal (`parseError`) is
+  // carried into the schema layer, which reports the exact line-numbered
+  // cause — no stage ever re-parses the rejected block.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const parse = assignmentFrontmatterParse(text)
+  const entries = parse.entries
   // The adapter owns the shared dispatch-gate core; the exec context is
   // passed so the lease gate (session-id bound — see leaseGateViolations)
   // joins the SAME verdict as the field/branch/anti-recursion checks.
-  // `hard` resolves ONCE per dispatch (
-  // : the adapter's record block and this gate decision share the
-  // single resolution instead of each re-reading the compass.
-  const hard = resolveDispatchHard(harnessDir, config, prompt)
-  const result = await adapter.dispatchGate(prompt, exec, hard, hintReadOf())
+  // `hard` resolves ONCE per dispatch: the adapter's record block and this
+  // gate decision share the single resolution instead of each re-reading
+  // the compass.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const hard = resolveDispatchHard(harnessDir, config, text, entries)
+  const result = await adapter.dispatchGate(text, exec, hard, hintReadOf(), source, entries, parse.parseError)
   const verdict = applyEnforcement(result, { hard })
-  if (verdict.hardBlocked) {
+  // A terminal source refusal is a VETO, decided BEFORE enforcement, the
+  // advisory role and the preset channel: the resolver proved there is no
+  // document to dispatch on, so no `hard`/`soft` setting may soften it
+  // (ordinary violations of a resolved document keep their soft behavior).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const terminal = hasTerminalRefusal(verdict.violations)
+  if (terminal || verdict.hardBlocked) {
+    const cause = terminal ? 'a terminal assignment-source refusal' : 'Enforcement: hard'
     ctx.logger(DISPATCH_LOGGER).error(
-      `subagent dispatch (${toolName}) vetoed (Enforcement: hard):\n${verdict.violations.map(formatViolation).join('\n')}`,
+      `subagent dispatch (${toolName}) vetoed (${cause}):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    return { kind: 'deny', reason: denyReason(toolName, verdict) }
+    return { kind: 'deny', reason: denyReason(toolName, verdict, cause) }
   }
   if (!verdict.ok) {
     ctx.logger(DISPATCH_LOGGER).warn(
       `subagent dispatch (${toolName}) (advisory):\n${verdict.violations.map(formatViolation).join('\n')}`,
     )
-    const role = parseAssignmentFields(header).executeAs ?? ''
+    const role = parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? ''
     ctx.emit('mstar/dispatch-gate', { tool: toolName, role, result: verdict, hard })
   }
+  // The admitted pointer's resolved document is handed to the native start
+  // seam for THIS call (keyed by the tool call id, scoped by the
+  // `tools/execute` wrapper), so the child executes the version the gate
+  // decided on instead of reading the file a second time.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  if (source.ok) handOffResolvedCarrier(exec, source)
   return undefined
 }
 

@@ -61,6 +61,8 @@ Install through the host's native plugin manager, or this CLI's `init` flow wher
   - CLI: `npx @mstar-harness/cli init --target codex`
   - Native: `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo`
 
+Upgrading an existing 4.x install is a reviewed cutover, not an installer step; follow [`docs/migration-5.0.md`](docs/migration-5.0.md).
+
 ## Use
 
 Enter the PM once per session, then describe the work in your own words; the PM runs the process in that session.
@@ -95,24 +97,25 @@ An iteration ends only after Workflow Close Out: a closed phase, an open pull re
 | Command | When |
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey that produces prioritized, ready-to-execute improvement plans; narrow it with a category focus (`bug`, `security`, `perf`, `tech-debt`, …). |
-| `/codebase-comment-cleanup [path\|subsystem] [dry-run]` | Triage every code comment into delete / ADR / issue / keep-with-shape; the per-PR ratchet only reads comments a diff touches, so an untouched *unclassified* comment does not trip it — the whole-tree bound gate still fails a pre-existing unbounded marker. |
+| `/codebase-comment-cleanup [path\|subsystem] [dry-run]` | Triage every code comment into delete / ADR / issue / keep-with-shape; the per-PR ratchet only reads comments a diff touches, so the gate judges only what the change adds or edits and the existing corpus stays advisory. |
+| `/codebase-arch-governance [path\|subsystem] [dry-run] [rounds N]` | Converge the codebase toward the shape its current requirements would have produced, in closed batches: one lowest-total-complexity move at a time, every caller migrated, the replaced path deleted, the settled rule locked by a check. `dry-run` returns the ranked candidates and their observed baseline in the response — no audit run, report, issue or ADR write, and no editing. `rounds N` (a positive integer, one by default) bounds how many closed batches one invocation completes. |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | Pre-merge review of a PR or branch at three strengths, ending in one verdict — `ship it`, `needs fixes`, or `blocked` from the finding tally on a settled run (completed without a stop, every required domain opened, the resolved diff basis readable and complete), or the single derived `incomplete` on exactly three conditions — the run stopped before synthesis, a required domain seat never opened, or the resolved diff basis could not be read. A wall-clock overrun is not one of them: a fully covered run past its budget publishes its tally-derived verdict and declares the overrun as a note. |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | Read-only audit of the test surface → plans to delete, repair, consolidate, or relocate tests. |
 | `/amazing-e2e-check [environment] [scenarios]` | Runs browser, device, or installed-deployment scenarios you explicitly asked for, in a separate workflow. |
 
-The audit commands read and report; they do not edit your code. Two boundaries to know: `/amazing-pr-review` posts its findings to GitHub as a comment review when you give it a pull-request number — it never approves, requests changes, or merges — and `/amazing-e2e-check` runs only when you ask for it, with steps that touch a real environment requiring explicit authorization.
+The audit entries read and report; they do not edit your code — `/codebase-arch-governance` is the exception, since its default executes closed batches under the normal plan gates while `dry-run` only reports. Two boundaries to know: `/amazing-pr-review` posts its findings to GitHub as a comment review when you give it a pull-request number — it never approves, requests changes, or merges — and `/amazing-e2e-check` runs only when you ask for it, with steps that touch a real environment requiring explicit authorization.
 
 ## Workflow
 
 ![Layered delivery: from execute to Workflow Close Out — layer PRs run beside execute, only a close-delta layer depends on close, every required layer merges, then whole-chain proof and Workflow Close Out](assets/workflow.svg)
 
-The interactive version of this diagram is `assets/workflow.html` in the repository; GitHub shows the file source rather than a rendered page, so open it locally in a browser. The inline image above is the readable view. Layer PRs run beside execute; only a close-delta layer depends on close; every required layer merges, then whole-chain proof, then Workflow Close Out.
+The interactive version is `assets/workflow.html`; GitHub shows its source, so open it locally. Layer PRs run beside execute; only a close-delta layer waits for close; every required layer merges, then whole-chain proof and Workflow Close Out.
 
-The main path shows a **development** delivery. Every plan gets plan-level QC — three independent seats by default — and multi-task plans add per-task review. Hotfix/inline review keeps its lighter seat rules. **PM Acceptance** is the sole acceptance route for every scope: each required criterion maps to relevant evidence and an honest result; QC approval alone is not test proof. PM may fill a named gap with a short bounded acceptance check, not implementation, test authoring, long suites or ops. Unfixed confirmed problems remain tracked issues.
+A **development** delivery runs each plan through plan-level QC — three independent seats by default, with per-task review on multi-task plans and lighter rules for hotfix/inline — then **PM Acceptance**, the sole acceptance route: each criterion maps to real evidence, and QC approval alone is not proof. Confirmed problems left unfixed stay tracked as issues.
 
-**Scope notes.** An iteration locks its direction with you first, then runs the per-plan cycle for every plan it takes on, publishing its layered pull requests during execution and closing out once; without an iteration, the cycle runs for a single plan. A verification or report-only deliverable — an audit, for example — ends at its agreed completion, with no pull request or merge. On the development path, a plan is complete only with its evidence: plan completion, merge-ready, and merged are three different facts, and only a verified merge, followed by Workflow Close Out, ends the delivery. Merging is a separate authorization with one recorded source: under `owner-gated` you approve it or merge yourself; under `reviewed-auto` the recorded policy supplies it only through a settled, posted `ship it` report at the current PR head; under `reviewed-bot` only through the attached bot's newest passing review on that head — not the mere existence of a review. An iteration that never recorded a policy returns to Phase 1 instead of falling back to any of them. Branch cleanup stays a separate, explicit step.
+An iteration locks direction with you, runs that cycle for every plan it takes on, publishes layer PRs during execute, and closes out once; without one, the cycle runs for a single plan. A verification or report-only deliverable ends at its agreed completion, with no PR or merge. Plan completion, merge-ready and merged are different facts: delivery ends only at a verified merge plus Workflow Close Out. Merging is a separate authorization — `owner-gated`, `reviewed-auto` (a settled, posted `ship it` at the current head), or `reviewed-bot` (the attached bot's newest passing review on that head; a missing policy goes back to Phase 1). Branch cleanup is a separate post-close step.
 
-The engine checks the mechanically checkable parts of this process — workflow state transitions, branch and worktree alignment, dispatch preconditions, plan and issue bookkeeping. These checks are advisory by default: they report problems, and a project or iteration can opt into blocking enforcement with `enforcement: hard`; whether a violation can actually block depends on the host. Process state (plans, workflow records, findings, review reports) lives in the harness directory, `.mstar/` by default, which the scaffold's canonical `.gitignore` snippet ignores — the installer does not touch `.gitignore`.
+The engine checks the mechanically checkable parts: state transitions, branch/worktree alignment, dispatch preconditions, plan and issue bookkeeping. Checks are advisory unless `enforcement: hard` is set, and whether a violation can actually block depends on the host. Process state lives in `.mstar/`, ignored by the scaffold's canonical `.gitignore` snippet; the installer does not touch `.gitignore`.
 
 ## Dashboard
 
@@ -182,7 +185,8 @@ Host wiring, the issue and roadmap command families, and the details behind thes
 
 - [`docs/runtime-reference.md`](docs/runtime-reference.md) — components, storage layout, roles and skills, CLI and MCP reference.
 - [`INSTALL.md`](INSTALL.md) — install and verification per host, plus the `report` command in detail.
-- [`docs/commands.md`](docs/commands.md) — the eight slash commands: arguments, when to use, owning skill.
+- [`docs/commands.md`](docs/commands.md) — the nine slash commands: arguments, when to use, owning skill.
+- [`docs/migration-5.0.md`](docs/migration-5.0.md) — upgrading from 4.9.x to the 5.0 collaboration authority: what breaks, the cutover ladder, and refusal recovery.
 - [`CONCEPTS.md`](CONCEPTS.md) — the vocabulary the harness uses across skills and docs.
 - Release notes: [`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md). CLI flags: the **`mstar-use-cli`** skill.
 - Maintainers: [`AGENTS.md`](AGENTS.md).

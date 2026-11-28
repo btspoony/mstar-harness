@@ -9,7 +9,15 @@ applies_when:
   - adding a named role to the Morning Star role system (especially read-only review/audit seats)
   - auditing an existing agent shell permission profile
   - wiring a role across host references and the engine role map
-tags: [role-authoring, code-reviewer, permission-profile, sdd-reviewer, audit, wiring, bundle, allowlist]
+tags:
+  - role-authoring
+  - code-reviewer
+  - permission-profile
+  - sdd-reviewer
+  - audit
+  - wiring
+  - bundle
+  - allowlist
 last_updated: 2026-11-09
 ---
 

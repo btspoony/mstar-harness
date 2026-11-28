@@ -134,9 +134,14 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
     // for that cause: `details.code` is consultDeliveryEvidence's own violation
     // code, `details.required` is the row's configured acceptance gate. Re-running
     // `plan complete` only helps when the payload was the problem.
-    recovery: id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_KIND_UNREGISTERED"
-      ? "The workflow declares no delivery kind, and the kind is fixed at registration. Close it honestly with mstar workflow lifecycle --workflow <workflow-id> --status failed --reason <text>, then register a replacement workflow with the correct declared delivery kind."
-      : id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE"
+    recovery: id === "plan.complete" && code === "coordination.layer-unpublished"
+      // The refusal proves a RECORD is missing, not that a PR is: the repair is
+      // the compass row, and the same completion then succeeds.
+      // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+      ? "Record the layer row for each plan named by the refusal in the compass `## PR stack` table: a real layer PR, `\u2014` for an empty integration range, or the iteration's already-open aggregate PR reused per plan. Then retry mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json> with the same --operation id, reusing the --integration-base-sha and --integration-result-sha pair you already supplied; this is the same completion, never a bare retry that re-triggers the SHA validation."
+      : id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_KIND_UNREGISTERED"
+        ? "The workflow declares no delivery kind, and the kind is fixed at registration. Close it honestly with mstar workflow lifecycle --workflow <workflow-id> --status failed --reason <text>, then register a replacement workflow with the correct declared delivery kind."
+        : id === "plan.complete" && code === "coordination.invalid-transition" && details?.code === "PHASE6_DELIVERY_EVIDENCE_INCOMPLETE"
         // A development completion needs its compound disposition recorded
         // first; a report-only policy is fixed at registration and has no
         // fulfilment payload, so no acceptance evidence substitutes for it.
@@ -162,11 +167,18 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                     ? "Correct the source checkout and branch, then retry mstar plan prepare --workflow <workflow-id> --plan <plan-id> --worktree-path <absolute-path> --working-branch <branch> --acceptance-gate pm-acceptance."
                     : id === "plan.progress"
                       ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress '<json-progress-object>'."
-                      : id === "plan.issue-add"
-                        ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries '<json-array>'."
-                        : id === "plan.issue-close"
-                          ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition> --expect-issue <issue-revision> --file <absolute-evidence.json>."
-                          : "Delivery-route evidence and QC plus acceptance proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.",
+                      : (id === "plan.issue-add" || id === "plan.issue-close") && code.startsWith("collaboration.")
+                        // invariant: A residual is one cross-store composite: the collaboration
+                        // effect commits first and the plan row is finalized after it.
+                        // The refusal names which half is missing or moved, so the
+                        // operator reissues the SAME operation id (never a new one,
+                        // which would allocate a second issue) once that half is fixed.
+                        ? "The residual's collaboration effect or its plan finalization is incomplete. In a remote checkout the provider intent is settled first: inspect it with mstar store collaboration remote outbox-show --harness <abs> --operation <intent-id>, dispatch it and record its receipt, then reissue this same verb with the same --operation id and payload; never retry under a new operation id."
+                        : id === "plan.issue-add"
+                          ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries '<json-array>'."
+                          : id === "plan.issue-close"
+                            ? "The addressed plan issue needs its current revision and a supported disposition. Run mstar plan issue-close --workflow <workflow-id> --plan <plan-id> --issue <issue-id> --disposition <disposition> --expect-issue <issue-revision> --file <absolute-evidence.json>."
+                            : "Delivery-route evidence and QC plus acceptance proof for this plan are required. Run mstar plan complete --workflow <workflow-id> --plan <plan-id> --file <absolute-evidence.json>.",
   });
 }
 function command<I, O>(definition: CommandDefinition<I, O>): CommandDefinition<I, O> {

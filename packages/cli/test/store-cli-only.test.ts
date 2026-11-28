@@ -31,6 +31,37 @@ describe("store-level commands stay on the CLI", () => {
   }
 });
 
+describe("store collaboration lifecycle surface", () => {
+  test("store collaboration advertises its four operator verbs", () => {
+    const help = runCli(["store", "collaboration", "--help"]);
+    expect(help.exitCode).toBe(0);
+    for (const verb of ["plan", "apply", "activate", "restore"]) {
+      expect({ verb, listed: new RegExp(`^\\s+${verb}(?:\\s|$)`, "m").test(help.stdout) }).toEqual({ verb, listed: true });
+    }
+  });
+
+  test("each collaboration verb publishes its own required inputs and stays on the CLI", async () => {
+    const expectations = [
+      ["plan", ["harness"]],
+      ["apply", ["harness"]],
+      ["activate", ["harness"]],
+      ["restore", ["harness", "backup"]],
+    ] as const;
+    for (const [verb, required] of expectations) {
+      const help = runCli(["store", "collaboration", verb, "--help"]);
+      expect([verb, help.exitCode]).toEqual([verb, 0]);
+      expect([verb, help.stdout.includes(`Required inputs: ${required.join(", ")}`)]).toEqual([verb, true]);
+      const descriptor = runCli(["schema", "--command", `store.collaboration.${verb}`]);
+      expect([verb, descriptor.exitCode]).toEqual([verb, 0]);
+      const published = JSON.parse(descriptor.stdout) as {
+        data: { transport?: string; descriptor: { input: { required?: string[] } } };
+      };
+      expect([verb, published.data.transport]).toEqual([verb, "cli"]);
+      expect([verb, published.data.descriptor.input.required]).toEqual([verb, required]);
+    }
+  });
+});
+
 describe("store-level discovery", () => {
   test("family discovery marks every store member CLI-only", () => {
     // An agent that lists the family must learn the tool does not exist, not

@@ -19,10 +19,11 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { cliEnv as cliEnvBase, runCli as runCliBase, type RunResult } from "./harness";
+import { cliEnv as cliEnvBase, runCli as runCliBase, writeFixtureRepoId, type RunResult } from "./harness";
 import {
   bindExecutionSession,
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   initializeExecutionAuthority,
   initializeStore,
   mutateExecutionWorkflow,
@@ -391,6 +392,7 @@ async function basicFixture(prefix: string, registered = false): Promise<{
   git(["init", "-q"], root);
   git(["config", "user.email", "cleanup-test@example.com"], root);
   git(["config", "user.name", "Cleanup Test"], root);
+  writeFixtureRepoId(root);
   writeFileSync(join(root, "base.txt"), "base\n");
   writeFileSync(join(root, ".gitignore"), "secret.env\n");
   git(["add", "-A"], root);
@@ -930,6 +932,7 @@ async function terminalIntegrationFixture(prefix: string): Promise<{ root: strin
   git(["init", "-q"], root);
   git(["config", "user.email", "cleanup-test@example.com"], root);
   git(["config", "user.name", "Cleanup Test"], root);
+  writeFixtureRepoId(root);
   writeFileSync(join(root, "base.txt"), "base\n");
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base commit"], root);
@@ -1725,6 +1728,7 @@ async function scopeFixture(prefix: string): Promise<{
   git(["init", "-q"], root);
   git(["config", "user.email", "cleanup-test@example.com"], root);
   git(["config", "user.name", "Cleanup Test"], root);
+  writeFixtureRepoId(root);
   writeFileSync(join(root, "base.txt"), "base\n");
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base commit"], root);
@@ -2150,6 +2154,7 @@ async function activeFixture(prefix: string): Promise<ActiveFixture> {
   git(["init", "-q", "-b", "main"], root);
   git(["config", "user.email", "cleanup-test@example.com"], root);
   git(["config", "user.name", "Cleanup Test"], root);
+  writeFixtureRepoId(root);
   writeFileSync(join(root, "base.txt"), "base\n");
   git(["add", "-A"], root);
   git(["commit", "-q", "-m", "base commit"], root);
@@ -2161,6 +2166,7 @@ async function activeFixture(prefix: string): Promise<ActiveFixture> {
   // execution.not-empty against the already-active domain.
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   return { root, harnessDir, context };
 }
 
@@ -2168,6 +2174,7 @@ async function activeFixture(prefix: string): Promise<ActiveFixture> {
 async function legacyStoreFixture(prefix: string): Promise<ActiveFixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   git(["init", "-q", "-b", "main"], root);
+  writeFixtureRepoId(root);
   git(["config", "user.email", "cleanup-test@example.com"], root);
   git(["config", "user.name", "Cleanup Test"], root);
   writeFileSync(join(root, "base.txt"), "base\n");
@@ -2672,11 +2679,20 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
       expect(envelope(dry).status).toBe("ok");
       expect(decisionRows(dry)).toContain(`remove | worktree | ${fx.doneWt} | cleanup.remove.merged`);
 
-      // A recovery point of that valid legacy store, then only review_base broken.
+      // note: A recovery point of that valid legacy store, then only review_base broken.
+      // `store backup` publishes a VERIFIED PAIR (manifest + per-domain images
+      // beside it): the restore consumer takes the execution image, not the
+      // manifest path.
       const point = join(fx.root, "legacy-recovery-point.db");
       const backup = runCli(["store", "backup", "--harness", fx.root, "--out", point], fx.root);
       expect(backup.exitCode, backup.stdout).toBe(0);
-      expect(existsSync(point)).toBe(true);
+      const backupReceipt = (JSON.parse(backup.stdout) as { data?: { manifestPath?: string; execution?: { backupPath?: string } } }).data;
+      // note: The pair publishes the execution image as a SAFE SIBLING of the manifest.
+      const executionImage = backupReceipt?.manifestPath && backupReceipt.execution?.backupPath
+        ? join(dirname(backupReceipt.manifestPath), backupReceipt.execution.backupPath)
+        : undefined;
+      expect(typeof executionImage).toBe("string");
+      expect(existsSync(executionImage as string)).toBe(true);
       corruptStoredReviewBase(fx.root, "wf-1", "plan-a", "not-a-git-object-id");
 
       const refused = legacyCleanup(fx.root, "wf-1", ["--apply"]);
@@ -2699,7 +2715,7 @@ describe("mstar worktree cleanup — a legacy completion without a review base",
       // The documented recovery: preview the recovery point, then restore it.
       const previewPath = join(fx.root, "legacy-recovery-preview.json");
       const preview = runCli(
-        ["store", "execution", "restore-preview", "--harness", fx.root, "--backup", point, "--out", previewPath],
+        ["store", "execution", "restore-preview", "--harness", fx.root, "--backup", executionImage as string, "--out", previewPath],
         neutral,
       );
       expect(preview.exitCode, preview.stdout).toBe(0);

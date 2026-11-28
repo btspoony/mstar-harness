@@ -9,14 +9,16 @@
  * plus one coordinator bind), never a stub.
  */
 import { afterEach, describe, expect, it } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
   bindExecutionSession,
   decodeExecutionSessionRef,
   encodeExecutionSessionRef,
   createExecutionWorkflow,
+  ensureCollaborationAuthority,
   readExecutionState,
   initializeStore,
   registerCatalogEntity,
@@ -60,8 +62,14 @@ function storedBinding(harnessDir: string, cwd: string): WorkflowSessionBinding 
  * engine reference the bind minted (the only thing an adoption ever accepts).
  */
 async function seedNativeAuthority(harnessDir: string): Promise<string> {
+  // note: Identity is declared inside the fixture root: without a local `.mstarc`
+  // the repository probe escapes a bare temp root into `$TMPDIR` itself.
+  const seedRoot = dirname(harnessDir)
+  execFileSync('git', ['init', '-q', '-b', 'main', seedRoot], { stdio: 'ignore' })
+  await writeFile(join(seedRoot, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-clear-${seedRoot.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)
   const handle = await initializeStore({ harnessDir })
   handle.close()
+  await ensureCollaborationAuthority({ harnessDir })
   const rootToken = (await readExecutionState({ harnessDir })).token
   await registerCatalogEntity(
     { harnessDir },

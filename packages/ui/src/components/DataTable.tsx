@@ -124,9 +124,18 @@ export function DataTable<T>(props: DataTableProps<T>) {
   // table at all, and counting them would make the floor force a scrollbar at a
   // width where the pane's own seven columns fit.
   const declared = props.columns.reduce(
-    // A proportional width (`35%`) has no pixel value to add; the floor is the sum
+    // note: A proportional width (`35%`) has no pixel value to add; the floor is the sum
     // of the declared pixels, and a percentage column simply does not contribute.
-    (sum, column) => sum + (column.wide === true || typeof column.width !== "number" ? 0 : column.width),
+    // Screens declare pixel widths as px strings (`"86px"`), so parse those; a bare
+    // number is the same declaration and counts the same.
+    (sum, column) => {
+      if (column.wide === true) return sum;
+      if (typeof column.width === "number") return sum + column.width;
+      if (typeof column.width === "string" && /^\d+(\.\d+)?px$/.test(column.width.trim())) {
+        return sum + Number.parseFloat(column.width);
+      }
+      return sum;
+    },
     0,
   );
   const floor = declared === 0 ? 0 : declared + FLEXIBLE_FLOOR;

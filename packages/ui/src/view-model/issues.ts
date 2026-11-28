@@ -368,7 +368,7 @@ export function issueDetailModel(detail: IssueDetail): IssueDetailModel {
       return {
         relation: incoming ? (REVERSED_ISSUE_RELATION[relation.relation] ?? relation.relation) : relation.relation,
         // The row names the other end of the join, not this issue.
-        issue: incoming ? relation.fromIssue : relation.toIssue,
+        issue: incoming ? relation.fromIssue : (relation.toIssue ?? relation.toRef ?? ""),
         title: relation.title ?? null,
       };
     }),

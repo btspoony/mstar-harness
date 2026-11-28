@@ -9,7 +9,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { executeCommand, getCommandDefinitions } from "@mstar-harness/commands";
 import {
-  bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, executionContextFor,
+
+  bindExecutionSession, createExecutionWorkflow, encodeExecutionSessionRef, ensureCollaborationAuthority, executionContextFor,
   initializeStore, openStore, readExecutionAuthority, serializeExecutionValue,
   type ExecutionIdentity, type ExecutionSessionRef, type ExecutionToken,
 } from "@mstar-harness/engine";
@@ -306,11 +307,11 @@ describe("generated CLI adapter", () => {
     const error = new CommanderError(2, "commander.excessArguments", "too many arguments for 'show'. Expected 0 arguments but got 1");
     const envelope = mapParserError(error, ["node", "mstar", "issue", "show", "BADPOS"]);
     const details = envelope?.details;
-    // The offending positional is attributed by argv position and token — the
-    // facts a three-call recovery needs — alongside the command's own usage.
-    // The issue family publishes its shared input surface on every verb, so the
-    // `move` action's `--expect-store <n>` joins `--expect <n>` in this usage
-    // line exactly as it does for the rest of the family.
+    // why: the offending positional is attributed by argv position and token — the facts a
+    // three-call recovery needs — alongside the command's own usage, and the issue family
+    // publishes its shared input surface on every verb, so `move`'s lane and cross-authority
+    // flags join `--expect <n>` here as they do for the rest of the family; `--expect-store`
+    // stays listed although only the non-`--discard` move route requires it.
     expect(details).toMatchObject({
       diagnostics: [{
         path: "argv[4]",
@@ -318,7 +319,7 @@ describe("generated CLI adapter", () => {
         token: "BADPOS",
         code: "commander.excessArguments",
         message: error.message,
-        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --payload <json>",
+        usage: "Usage: mstar issue show --id <id> --project <id> --disposition <disposition> --kind <kind> --severity <severity> --query <text> --limit <n> --offset <n> --harness <path> --file <path> --operation-id <id> --actor <role> --expect <n> --expect-store <n> --to-authority <repo-key> --discard --input <path> --out <path> --payload <json>",
         helpRoute: "mstar issue show --help",
       }],
     });
@@ -705,11 +706,15 @@ describe("generated CLI adapter", () => {
   });
 test("workflow registration discloses missing plan identity and succeeds after the document correction", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-workflow-registration-correction-"));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
+  writeFileSync(path.join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-cli-adapter-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   const harness = path.join(root, ".mstar");
   const planFile = path.join(harness, "plans", "plan-public-registration.md");
   mkdirSync(path.dirname(planFile), { recursive: true });
   writeFileSync(planFile, "# Public registration plan\n");
   (await initializeStore({ harnessDir: harness })).close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   // A registered CLI invocation opens the store query-only. On Bun 1.4.0 the
   // just-closed writer's deferred cleanup can still remove the WAL sidecars
   // WHILE that read-only open runs, so its first open intermittently refuses
@@ -734,10 +739,10 @@ test("workflow registration discloses missing plan identity and succeeds after t
     expect(missing.status).toBe(1);
     const refusal = JSON.parse(missing.stdout) as { command: string; status: string; code: string; message?: string };
     expect(refusal).toMatchObject({ command: "workflow.register", status: "refused", code: "plan-path.identity-mismatch" });
-    expect(refusal.message).toContain("declares no plan_id header");
+    expect(refusal.message).toContain("declares no plan_id in its front matter");
     expect(refusal.message).toContain("Help: mstar workflow register --help");
 
-    writeFileSync(planFile, "# Public registration plan\n\n**plan_id:** plan-public-registration\n");
+    writeFileSync(planFile, planFrontMatter("plan-public-registration", "# Public registration plan\n"));
     const corrected = await run(args);
     expect(corrected.status).toBe(0);
     expect(JSON.parse(corrected.stdout)).toMatchObject({
@@ -906,13 +911,10 @@ test("plan payload decode returns indexed field paths in the usage envelope", as
 });
 test("generated CLI adapter decodes schema-typed numeric options and registers booleans as flags", async () => {
   const root = mkdtempSync(path.join(os.tmpdir(), "cli-typed-options-"));
-  const source = path.join(root, "roadmap.md");
-  writeFileSync(source, "# Roadmap\n");
   try {
-    const numeric = await run([
-      "roadmap", "replace", "--project", "project-a", "--file", source,
-      "--expect-project", "5", "--expect-roadmap", "5", "--operation", "replace-a", "--harness", root,
-    ]);
+    // see packages/cli/test/command-adapter.test.ts - // note: `limit`/`offset` are schema-typed numbers: a decoded value is what keeps this from being a
+    // usage refusal, whatever the store then answers about the harness it was pointed at.
+    const numeric = await run(["issue", "list", "--limit", "5", "--offset", "2", "--harness", root]);
     const numericResult = JSON.parse(numeric.stdout) as { code?: string; message?: string };
     expect(numericResult.code).not.toBe("command.invalid-input");
 
@@ -1019,6 +1021,7 @@ import { HOST_PRESENCE_BINARIES, ensureHostPresent, HostPresenceRefusal } from "
 import { OpencodeVersionProbeRefusal, probeOpencodeGeneration } from "../src/adapters/opencode-version-probe";
 import type { MutateConfigForInitOptions, ProbeCommandRunner } from "../src/types";
 import { CLI_ROOT, cliEnv, runCli } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 const runnerV2: ProbeCommandRunner = async () => "opencode v2.0.24";
 const runnerV1: ProbeCommandRunner = async () => "opencode v1.0.0";

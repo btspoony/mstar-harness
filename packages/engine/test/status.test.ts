@@ -572,12 +572,47 @@ describe("resolveCompassEnforcement — repo compass enforcement: hard (Slice 5,
     }
   });
 
+  test("a quoted compass declaration hardens exactly like the unquoted spelling", () => {
+    const root = harnessRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260808-demo", 'iteration_id: 20260808-demo\nstatus: "active"\nenforcement: "hard"\n');
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("compass frontmatter enforcement: hard → { hard: true, source: compass }", () => {
     const root = harnessRoot("mstar-compass-enf-");
     try {
       const harness = join(root, "h");
       mkdirSync(harness, { recursive: true });
       makeCompass(harness, "20260808-demo", "iteration_id: 20260808-demo\nstatus: active\nenforcement: hard\n");
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("F2: a YAML comment inside a valid compass does not hide enforcement: hard (shared reader)", () => {
+    const root = harnessRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260808-demo", "iteration_id: 20260808-demo\nstatus: active\n# policy: opt-in hard gate\nenforcement: hard\n");
+      expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  test("F2: a flat-only compass shape (trailing separator in a flow list) does not hide enforcement: hard (flat profile)", () => {
+    const root = harnessRoot("mstar-compass-enf-");
+    try {
+      const harness = join(root, "h");
+      mkdirSync(harness, { recursive: true });
+      makeCompass(harness, "20260808-demo", "iteration_id: 20260808-demo\nstatus: active\nreview_targets: [a,]\nenforcement: hard\n");
       expect(resolveCompassEnforcement(harness)).toEqual({ hard: true, source: "compass" });
     } finally {
       rmSync(root, { recursive: true, force: true });

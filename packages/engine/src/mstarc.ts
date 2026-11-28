@@ -42,6 +42,8 @@ export const MSTARC_SECTION = "config";
 export const LINEAR_SECTION = "linear";
 /** `[linear.mapping]` — optional per-value correspondence override. */
 export const LINEAR_MAPPING_SECTION = "linear.mapping";
+/** `[collaboration]` — explicit collaboration authority mode (`local|mirror|remote`) and optional origin-less id. */
+export const COLLABORATION_SECTION = "collaboration";
 /** `[config]` key declaring `{PLAN_DIR}`. */
 export const MSTARC_PLAN_DIR_KEY = "plan_dir";
 /** `[config]` key declaring the `{SDD_DIR}` per-plan base. */
@@ -93,6 +95,8 @@ export type MstarcConfig = {
   linear?: Record<string, string>;
   /** Raw `[linear.mapping]` override keys (unvalidated). */
   linearMapping?: Record<string, string>;
+  /** note: Raw `[collaboration]` keys (unvalidated; see `collaboration-identity.ts`). */
+  collaboration?: { mode?: string; repoId?: string };
 };
 
 /** String-valued `[config]` keys — the resolvers' override surface; the
@@ -129,6 +133,8 @@ export function parseMstarc(text: string): MstarcConfig {
   const out: MstarcConfig = {};
   const linear: Record<string, string> = {};
   const linearMapping: Record<string, string> = {};
+  const collaboration: { mode?: string; repoId?: string } = {};
+  let collaborationConfigured = false;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#") || line.startsWith(";")) continue;
@@ -148,6 +154,24 @@ export function parseMstarc(text: string): MstarcConfig {
       (section === LINEAR_SECTION ? linear : linearMapping)[key] = value;
       continue;
     }
+    // why: The additive `[collaboration]` section selects authority mode and an
+    // optional origin-less id; validation belongs to `collaboration-identity`.
+    // Every occurrence counts, empty included: a later blank value clears the
+    // selector instead of silently keeping the earlier one.
+    if (section === COLLABORATION_SECTION) {
+      const eq = line.indexOf("=");
+      if (eq === -1) continue;
+      const key = line.slice(0, eq).trim();
+      const value = line.slice(eq + 1).trim();
+      if (key === "mode") {
+        collaboration.mode = value;
+        collaborationConfigured = true;
+      } else if (key === "repo_id") {
+        collaboration.repoId = value;
+        collaborationConfigured = true;
+      }
+      continue;
+    }
     if (section !== MSTARC_SECTION) continue;
     const eq = line.indexOf("=");
     if (eq === -1) continue;
@@ -165,6 +189,7 @@ export function parseMstarc(text: string): MstarcConfig {
   }
   if (Object.keys(linear).length > 0) out.linear = linear;
   if (Object.keys(linearMapping).length > 0) out.linearMapping = linearMapping;
+  if (collaborationConfigured) out.collaboration = collaboration;
   return out;
 }
 

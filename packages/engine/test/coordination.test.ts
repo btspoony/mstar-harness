@@ -21,12 +21,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+
   resolveIntentRoot,
   resolveIntentTarget,
   resolveProcessHarnessDir,
 } from "../src/coordination.js";
 import { commitExecutionRegistration } from "../src/execution-registration.js";
 import { readExecutionAuthority } from "../src/execution-read.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { initializeStore, openStore } from "../src/store-db.js";
 import { createFsStore, setArtifactStore } from "../src/store.js";
 import {
@@ -34,6 +36,7 @@ import {
   git, writeText, writeJson, readJson, makeFixture, errorCodeOf, failureCode, failureOf,
   afterEachCleanup,
 } from "./support/coordination-fixtures.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 afterEach(() => {
   afterEachCleanup();
@@ -67,13 +70,15 @@ describe("registration route parity — one canonical plan pointer (E07 fold)", 
 
   test("the ACTIVE DB registration route stores the canonical row pointer", async () => {
     const dbRoot = makeFixture();
-    writeText(join(dbRoot.harness, "plans", `${ROUTE_PLAN}.md`), `# Plan ${ROUTE_PLAN}\n\n**plan_id:** ${ROUTE_PLAN}\n`);
+    writeText(join(dbRoot.harness, "plans", `${ROUTE_PLAN}.md`), planFrontMatter(ROUTE_PLAN, `# Plan ${ROUTE_PLAN}
+`));
     const rows = [{ id: ROUTE_PLAN, title: `Plan ${ROUTE_PLAN}`, file: `plans/${ROUTE_PLAN}.md` }];
     // Initialize a fresh ACTIVE authority, not a fixture's legacy FILE workflow.
     rmSync(join(dbRoot.harness, "status.json"));
     rmSync(join(dbRoot.harness, "workflows"), { recursive: true });
     const store = await initializeStore({ harnessDir: dbRoot.harness });
     store.close();
+    await ensureCollaborationAuthority({ harnessDir: dbRoot.harness });
     // `store init` activates execution authority together with the schema, so
     // the root token is read (not re-initialized) before the registration CAS.
     const initialized = await readExecutionAuthority({ harnessDir: dbRoot.harness });

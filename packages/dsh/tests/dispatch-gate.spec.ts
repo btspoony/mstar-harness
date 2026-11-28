@@ -23,7 +23,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
-import { assignmentHeaderRegion } from '@mstar-harness/engine'
+import { assignmentFrontmatterEntries, assignmentHeaderRegion } from '@mstar-harness/engine'
 import { foldedFamilyToolName, getCommandDefinitions, isCoordinatorSeatCommand } from '@mstar-harness/commands'
 import { useCleanControlRoot, bootApp, seedActiveWorkflow, seedHarness, type BootResult } from './harness.ts'
 
@@ -32,7 +32,8 @@ import * as entry from '../src/index.ts'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
-import { planIdOf } from '../src/gates/dispatch-assignment.ts'
+import { planIdOf, resolveDispatchHard, assignmentEntriesValue } from '../src/gates/dispatch-assignment.ts'
+import { readAgentFlow } from '../src/gates/agent-flow.ts'
 import { dispatchCallerOf } from '../src/gates/dispatch-core.ts'
 import { preExecuteListener } from '../src/gates/dispatch-listener.ts'
 import { DshHostAdapter } from '../src/gates/adapter.ts'
@@ -48,137 +49,171 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Fully valid writable Assignment (mirrors the opencode `completeAssignment`). */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-package-core
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
 /** Missing `Execute as` — the opencode consumer's first field-gate case. */
-const MISSING_EXECUTE_AS = `## Assignment
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
-/** Assignment-shaped but none of the three core fields and no branch form. */
-const MISSING_ALL_CORE = `## Assignment
+/** Assignment-shaped but none of the three core fields and no branch form:
+ * the core keys are present-but-empty (the shape `validateAssignmentFields`
+ * flags), so the document is Assignment-shaped AND missing all of them.
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
+const MISSING_ALL_CORE = `---
+execute_as:
+delegation:
+task_category:
+---
+
+## Assignment
 
 Do the thing.
 `
 
 /** Writable assignment with no branch form at all. */
-const MISSING_BRANCH = `## Assignment
+const MISSING_BRANCH = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 Do the thing.
 `
 
 /** Writable assignment carrying BOTH branch forms. */
-const MULTIPLE_BRANCH_FORMS = `## Assignment
+const MULTIPLE_BRANCH_FORMS = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+branch_policy: direct on main — hotfix
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
-**Branch policy**: direct on main — hotfix
+## Assignment
 
 Do the thing.
 `
 
 /** Create-form Working branch without `<base>`. */
-const CREATE_WITHOUT_BASE = `## Assignment
+const CREATE_WITHOUT_BASE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: create feature/y
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: create feature/y
+## Assignment
 
 Do the thing.
 `
 
 /** Read-only orientation role — no branch form is legitimate. */
-const SCOUT_NO_BRANCH = `## Assignment
+const SCOUT_NO_BRANCH = `---
+execute_as: scout
+delegation: n/a
+task_category: deep
+---
 
-**Execute as**: scout
-**Delegation**: n/a
-**Task category**: deep
+## Assignment
 
 Survey the codebase, report only.
 `
 
 /** Existing-branch form on a default protected branch without an exception. */
-const WORKING_BRANCH_MAIN = `## Assignment
+const WORKING_BRANCH_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 Do the thing.
 `
 
 /** `Branch policy: direct on main — <reason>` — the exception matches the gate branch. */
-const DIRECT_ON_MAIN = `## Assignment
+const DIRECT_ON_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+branch_policy: direct on main — hotfix approved by user
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Branch policy**: direct on main — hotfix approved by user
+## Assignment
 
 Do the thing.
 `
 
 /** Self-recursion: the Assignment's `Execute as` equals the dispatcher's own role. */
-const SELF_RECURSION = `## Assignment
+const SELF_RECURSION = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Self-recursion against the SHIPPED default binding (`project-manager`). */
-const SELF_DISPATCH_PROJECT_MANAGER = `## Assignment
+const SELF_DISPATCH_PROJECT_MANAGER = `---
+execute_as: project-manager
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Execute as**: project-manager
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
 
 /** Hard flag in the Assignment HEADER plus a violation (branch form missing) to harden on. */
-const HARD_HEADER_FLAG = `## Assignment
+const HARD_HEADER_FLAG = `---
+enforcement: hard
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Enforcement**: hard
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 Do the thing.
 `
 
 /** Hard flag quoted in the TASK BODY must NOT harden.*/
-const HARD_BODY_FLAG = `## Assignment
+const HARD_BODY_FLAG = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+## Assignment
 
 ## Task
 
@@ -186,12 +221,14 @@ Example: **Enforcement**: hard
 `
 
 /** Working branch on main with a BODY-QUOTED direct-on exception — the quoted exception must not nullify the protection.*/
-const BODY_QUOTED_BRANCH_POLICY = `## Assignment
+const BODY_QUOTED_BRANCH_POLICY = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: main
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: main
+## Assignment
 
 ## Task
 
@@ -200,18 +237,38 @@ The task body quotes an example header line:
 `
 
 /** A read-only header with BODY-QUOTED Working branch / Execute as examples — must not fire false denies.*/
-const BODY_QUOTED_FIELDS = `## Assignment
+const BODY_QUOTED_FIELDS = `---
+execute_as: scout
+delegation: n/a
+task_category: deep
+task_budget: XS — one orientation round
+---
 
-**Execute as**: scout
-**Delegation**: n/a
-**Task category**: deep
-**Task budget (implement / ops rounds)**: XS — one orientation round
+## Assignment
 
 ## Task
 
 The task body quotes example header lines:
 **Working branch**: main
 **Execute as**: fullstack-dev
+`
+
+/** A two-track parallel list whose SECOND branch is `main` — the folded form
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ * keeps only `feature/a`, so only a gate reading every track refuses it. */
+const TWO_TRACKS_SECOND_MAIN = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+working_branch:
+- feature/a
+- main
+---
+
+## Assignment
+
+Two parallel writable tracks.
 `
 
 /** Not an Assignment at all — must stay silent (no false positives). */
@@ -244,11 +301,12 @@ const subagentExec = (prompt: string, agent?: unknown): ToolExecution =>
 const defaultAllow = (): Promise<PreToolDecision> => Promise.resolve<PreToolDecision>({ kind: 'allow' })
 
 /**
- * The CALLING sessions the anti-recursion caller derivation reads (F7): a ROOT
+ * The CALLING sessions the anti-recursion caller derivation reads: a ROOT
  * session carries no `header.parentSession` (the coordinator seat), an
  * in-process subagent child stamps it at creation. Neither carries a durable
  * id/cwd, so the session-hint derivation stays as cheap as the agent-less
  * shapes these tests used before.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 const rootAgent = { session: { header: {} } }
 const childAgent = { session: { header: { parentSession: 'root-session' } } }
@@ -308,7 +366,7 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(anti!.severity).toBe('critical')
   })
 
-  it('missing Execute as → advisory with assignment.field.missing-execute-as, dispatch allowed', async () => {
+  it('missing Execute as → advisory with assignment.field.execute-as, dispatch allowed', async () => {
     const app = booted = await bootApp()
     const advisories = captureAdvisories(app.ctx)
 
@@ -319,7 +377,7 @@ describe('dispatch gate — warn (default) mode', () => {
     expect(advisories[0]!.tool).toBe('subagent')
     expect(advisories[0]!.role).toBe('')
     expect(advisories[0]!.hard).toBe(false)
-    expect(violationCodes(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(violationCodes(advisories[0])).toContain('assignment.field.execute-as')
   })
 
   it('missing branch form → advisory with assignment.field.branch-missing', async () => {
@@ -451,7 +509,7 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
 
     expect(secondRan).toBe(false) // deny without next() short-circuits the waterfall
     expect(decision.kind).toBe('deny')
-    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.missing-execute-as')
+    expect(decision.kind === 'deny' && decision.reason).toContain('assignment.field.execute-as')
     expect(advisories).toHaveLength(0) // the veto is the signal; advisory is warn-mode only
   })
 
@@ -592,7 +650,10 @@ describe('dispatch gate — hard mode (Config enforcement: hard)', () => {
   })
 })
 
-/* ---------------------------------- F7: derived caller ---------------------------------- */
+/**
+ * ---------------------------------- derived caller ----------------------------------
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ */
 
 /* -------------------- boot diagnostic: explicit soft vs a repo hard arm -------------------- */
 
@@ -626,7 +687,7 @@ describe('boot enforcement diagnostic — Config soft suppresses a repo/compass 
   })
 })
 
-describe('F7 — the anti-recursion caller is DERIVED from the calling session, never invented', () => {
+describe('the anti-recursion caller is DERIVED from the calling session, never invented', () => {
   it('dispatchCallerOf: a ROOT session reads the explicit binding verbatim (or the coordinator); a child/unreadable session is EMPTY', () => {
     expect(dispatchCallerOf({ dispatchBinding: 'fullstack-dev' }, rootAgent)).toBe('fullstack-dev')
     // An explicitly blank value on a ROOT session stays blank — never replaced
@@ -644,9 +705,10 @@ describe('F7 — the anti-recursion caller is DERIVED from the calling session, 
   })
 
   it('REGRESSION (reported bypass): a CHILD session with no explicit binding dispatching Execute as fullstack-dev is refused with dispatch.anti-recursion.empty-binding', async () => {
-    // Before F7 the schema default fabricated `project-manager` for every
+    // Before this derivation the schema default fabricated `project-manager` for every
     // caller, so a leaf could dispatch a same-role child and pass the
     // anti-recursion precheck. A leaf must not dispatch: the caller is empty.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
     const app = booted = await bootApp({ enforcement: 'hard' })
 
     const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE, childAgent), defaultAllow)
@@ -801,10 +863,10 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
     // missing core fields (opencode parity, 435c6fc6).
     expect(violationCodes(advisories[0]).sort()).toEqual([
       'assignment.field.branch-missing',
-      'assignment.field.missing-delegation',
-      'assignment.field.missing-execute-as',
-      'assignment.field.missing-task-category',
+      'assignment.field.delegation',
+      'assignment.field.execute-as',
       'assignment.field.task-budget-missing',
+      'assignment.field.task-category',
     ])
     // Severities match the engine contract (critical only for anti-recursion).
     expect(advisories[0]!.result.violations.every((v) => v.severity === 'high')).toBe(true)
@@ -816,7 +878,7 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
 
     await app.ctx.waterfall('tools/pre-execute', subagentExec(MISSING_EXECUTE_AS), defaultAllow)
 
-    const violation = advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.missing-execute-as')
+    const violation = advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.execute-as')
     expect(violation?.aliases).toContain('assignment.presence.missing-execute-as')
   })
 
@@ -833,17 +895,37 @@ describe('dispatch gate — parity with the opencode validated field set', () =>
       delete process.env.MSTAR_WORKING_BRANCH
     }
   })
+
+  it('a parallel list whose SECOND track is main still trips the default-branch gate', async () => {
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(TWO_TRACKS_SECOND_MAIN), defaultAllow)
+
+    // The gate reads every declared track, not just the one the folded branch
+    // form keeps — otherwise a second track on `main` ships unprotected.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    expect(violationCodes(advisories[0])).toContain('dispatch.default-branch.protected')
+  })
+
+  it('a numeric-looking main_worktree_branch keeps its written lexeme (5.0, never 5)', () => {
+    const entries = assignmentFrontmatterEntries('---\nexecute_as: fullstack-dev\nmain_worktree_branch: 5.0\n---\n')
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    expect(assignmentEntriesValue(entries, 'main_worktree_branch')).toBe('5.0')
+  })
 })
 
 /* ---------------------------------- Task 4 reviewer carry-overs (Task 6) ---------------------------------- */
 
 describe('dispatch gate — Task 4 reviewer carry-overs (explore / compass / degrade)', () => {
   /** Read-only orientation role (the reviewer note: only `scout` was fixture-covered). */
-  const EXPLORE_NO_BRANCH = `## Assignment
+  const EXPLORE_NO_BRANCH = `---
+execute_as: explore
+delegation: n/a
+task_category: deep
+---
 
-**Execute as**: explore
-**Delegation**: n/a
-**Task category**: deep
+## Assignment
 
 Survey the codebase, report only.
 `
@@ -943,22 +1025,24 @@ describe('dispatch gate — Assignment header values written as markdown code sp
     // Regression: the extractor kept the wrapping backticks, so `plan.md`
     // became `` plan.md` `` — the `.md` suffix test failed and the id was
     // carried into the ledger with the backtick, matching no registered plan.
-    expect(idOf('**Plan Path**: `/x/plans/20260101-demo.md`')).toBe('20260101-demo')
+    expect(idOf('---\nplan_path: `/x/plans/20260101-demo.md`\n---\n')).toBe('20260101-demo')
   })
 
   it('a backticked SDD dir resolves the bare directory name', () => {
-    expect(idOf('**SDD dir**: `/x/.mstar/sdd/20260101-demo`')).toBe('20260101-demo')
+    expect(idOf('---\nsdd_dir: `/x/.mstar/sdd/20260101-demo`\n---\n')).toBe('20260101-demo')
   })
 
   it('a backticked plan_id resolves verbatim', () => {
-    expect(idOf('**plan_id**: `20260101-demo`')).toBe('20260101-demo')
+    expect(idOf('---\nplan_id: `20260101-demo`\n---\n')).toBe('20260101-demo')
   })
 
   it('unbackticked values are unchanged, and a multi-span value is left literal', () => {
-    expect(idOf('**Plan Path**: /x/plans/20260101-demo.md')).toBe('20260101-demo')
+    expect(idOf('---\nplan_path: /x/plans/20260101-demo.md\n---\n')).toBe('20260101-demo')
     // Only ONE clean wrapping pair is stripped: a value that wraps several
-    // spans has backticks inside, so it is left exactly as written.
-    expect(idOf('**plan_id**: `/a`, `/b`')).toBe('`/a`, `/b`')
+    // spans has backticks inside, so it is left exactly as written. The YAML
+    // scalar is quoted so the backticks survive the document parse.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    expect(idOf('---\nplan_id: "`/a`, `/b`"\n---\n')).toBe('`/a`, `/b`')
   })
 })
 
@@ -973,16 +1057,18 @@ const OTHER_BRANCH = 'feature/somewhere-else'
 
 /** Fully valid SDD writable Assignment dispatching into the given checkout. */
 function sddAssignment(worktreePath: string, branch: string): string {
-  return `## Assignment
+  return `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+execution_mode: sdd
+working_branch: ${branch}
+worktree_path: ${worktreePath}
+plan_path: /proj/plans/${LEASE_PLAN_ID}.md
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Execution mode**: sdd
-**Working branch**: ${branch}
-**Worktree path**: ${worktreePath}
-**Plan Path**: /proj/plans/${LEASE_PLAN_ID}.md
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
@@ -1004,7 +1090,12 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
   async function seedTwoActives(app: BootResult): Promise<string> {
     const root = app.root
     execFileSync('git', ['init', '-q', '-b', 'main', root])
-    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'init'])
+    // Both checkouts live INSIDE the fixture root; ignoring them keeps the
+    // main worktree clean (a dispatch gates the checkout its session runs in).
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    writeFileSync(join(root, '.gitignore'), '.mstar/\nintegration-checkout/\nfeature-checkout/\n')
+    execFileSync('git', ['-C', root, 'add', '.gitignore'])
+    execFileSync('git', ['-C', root, '-c', 'user.name=fixture', '-c', 'user.email=fixture@example.invalid', 'commit', '-q', '-m', 'init'])
     const integrationPath = join(root, 'integration-checkout')
     const featurePath = join(root, 'feature-checkout')
     execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', 'integration/fixture', integrationPath])
@@ -1104,6 +1195,39 @@ describe('dispatch gate — D4 session-bound row-scope attribution (explicit sel
 
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(0)
+  })
+
+  describe('dispatch gate — ONE resolution per dispatch (the source cannot split decision from record)', () => {
+    // The waterfall gate chain is microtask-only (synchronous fs/sqlite reads
+    // with promise-skeleton awaits), so no timer can interleave INTO a
+    // dispatch — the deterministic mid-dispatch seam is the first resolution
+    // itself. The swap and first-refusal regressions live in
+    // host-adapter.spec.ts over `dispatchGate`'s single-resolution input.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    it('a pointer dispatch of a CLEAN document through the waterfall records exactly one consistent ledger row', async () => {
+      const app = booted = await bootApp({ dispatchBinding: 'qc-specialist' })
+      const feature = await seedTwoActives(app)
+      expect(updateWorkflowSessionBinding(app.harnessDir, 'sess-x', app.root, { excludedBeforeSeq: 0, selectedWorkflowId: 'wf-a' }).kind).toBe('written')
+      const advisories = captureAdvisories(app.ctx)
+
+      const assignmentsDir = join(app.harnessDir, 'assignments')
+      mkdirSync(assignmentsDir, { recursive: true })
+      const file = join(assignmentsDir, 'consistent-pointer.md')
+      writeFileSync(file, sddAssignment(feature, ROW_BRANCH))
+
+      const decision = await app.ctx.waterfall(
+        'tools/pre-execute',
+        subagentExec(`Assignment file: ${file}`, sessionAgent('sess-x', app.root)),
+        defaultAllow,
+      )
+
+      expect(decision).toEqual({ kind: 'allow' })
+      expect(advisories).toHaveLength(0)
+      const events = readAgentFlow(join(app.harnessDir, 'workflows', 'wf-a'), 'wf-a')?.events ?? []
+      const dispatches = events.filter((event) => event.kind === 'dispatch')
+      expect(dispatches).toHaveLength(1)
+      expect(dispatches[0]).toMatchObject({ role: 'fullstack-dev', verdict: 'ok' })
+    }, 60_000)
   })
 })
 
@@ -1303,4 +1427,561 @@ describe('leaf-seat tool boundary — coordinator actions on the folded MCP surf
     expect(reason).toContain('leaf-seat.unattributed-tool')
     expect(reason).toContain('serverName: mstar')
   })
+})
+
+/* ===========================================================================
+ * D14/D16 — the ONE assignment source: pointer parity, containment refusals
+ * and the legacy body-label refusal
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ * ========================================================================== */
+
+/** The retired body-label format of {@link VALID_WRITABLE} — same fields as
+ * `**Label**` body lines (the format front matter replaced).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/dsh-package-core
+**Task budget (implement / ops rounds)**: S — one focused implementer round
+
+Do the thing, evidence-first.
+`
+
+describe('dispatch gate — D14/D16 assignment source (pointer parity and legacy refusal)', () => {
+  /**
+   * Write one assignment file under the accepted harness home and return the pointer prompt.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+   */
+  function pointerInHome(harnessDir: string, content: string): string {
+    const dir = join(harnessDir, 'assignments')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'pointer-target.md')
+    writeFileSync(file, content)
+    return `Assignment file: ${file}`
+  }
+
+  it('a pointer under an accepted assignment home produces the SAME decision as the inline form', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const inlineAdvisories = captureAdvisories(app.ctx)
+
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    expect(inlineAdvisories).toHaveLength(1)
+    const inlineCodes = violationCodes(inlineAdvisories[0]).sort()
+
+    await app.dispose()
+    booted = undefined
+
+    const app2 = booted = await bootApp({ dispatchBinding: '' })
+    const pointerAdvisories = captureAdvisories(app2.ctx)
+    const pointer = pointerInHome(app2.harnessDir, VALID_WRITABLE)
+
+    await app2.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(pointerAdvisories).toHaveLength(1)
+    expect(violationCodes(pointerAdvisories[0]).sort()).toEqual(inlineCodes)
+    expect(violationCodes(pointerAdvisories[0])).toContain('dispatch.anti-recursion.empty-binding')
+  })
+
+  it('an out-of-home pointer is a terminal refusal — denied in the default mode, no advisory', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, VALID_WRITABLE)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${outside}`), defaultAllow)
+
+    // A source refusal is not an ordinary violation: there is no verified
+    // document, so no enforcement setting softens it and no advisory path runs.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('an out-of-home pointer under Enforcement: hard denies the dispatch', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+    const outside = join(app.root, 'outside-assignment.md')
+    writeFileSync(outside, VALID_WRITABLE)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${outside}`), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+  })
+
+  it('a gate that cannot resolve the control harness root refuses the pointer in the default mode (never skips containment)', async () => {
+    const app = booted = await bootApp()
+    // No explicit root AND an agent without a session cwd: the resolver
+    // cannot produce ANY harness dir, so containment cannot be proven.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const resolver = new HarnessResolver(undefined)
+    const config: Config = {}
+    const adapter = new DshHostAdapter(new Context(), { resolver, config })
+    const agentless = toolExec('subagent', { description: 'probe', prompt: `Assignment file: ${join(app.root, 'anywhere.md')}` })
+
+    const decision = await preExecuteListener(app.ctx, resolver, config, adapter, agentless, defaultAllow)
+
+    // Terminal source refusal: the default (soft) mode denies it too.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.path')
+    expect(decision.kind === 'deny' && decision.reason).toContain('control harness root is unavailable')
+  })
+
+  it('a readable pointer to a non-Assignment file is ONE invalid Assignment, not a silent pass', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    const pointer = pointerInHome(app.harnessDir, 'ordinary notes, not an assignment document\n')
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    // soft mode: the shape refusal is an ordinary violation
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('dispatch.assignment.shape')
+  })
+
+  it('a body-label prompt is vetoed in the default mode with both recoveries (the refusal is terminal)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    // No verified declaration exists in the retired format, so no soft setting
+    // downgrades it: the dispatch is vetoed before the advisory channel.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(decision.kind === 'deny' && decision.reason).toContain('front-matter document')
+    expect(decision.kind === 'deny' && decision.reason).toContain('Assignment file:')
+    // The schema's generic absent-fence row is superseded — one defect, one message.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    expect(decision.kind === 'deny' && decision.reason).not.toContain('document.frontmatter.absent')
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('the legacy refusal under Enforcement: hard denies the dispatch', async () => {
+    const app = booted = await bootApp({ enforcement: 'hard', dispatchBinding: '' })
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+  })
+
+  it('a pointer resolving to a legacy body-label file is vetoed with dispatch.assignment.legacy-format too', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    const pointer = pointerInHome(app.harnessDir, LEGACY_BODY_LABEL)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
+    expect(advisories).toHaveLength(0)
+  })
+})
+
+/* ===========================================================================
+ * Pointer/inline parity under the document's OWN hard enforcement
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ * ========================================================================= */
+
+describe('dispatch gate — pointer/inline hard-enforcement parity', () => {
+  /**
+   * Write one assignment file under the accepted harness home and return the pointer prompt.
+   * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+   */
+  function hardPointerInHome(harnessDir: string, content: string): string {
+    const dir = join(harnessDir, 'assignments')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'hard-parity-target.md')
+    writeFileSync(file, content)
+    return `Assignment file: ${file}`
+  }
+
+  /**
+   * Violation codes of a deny reason (the deny channel is the verdict — no advisory in hard mode).
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
+  const denyCodes = (decision: PreToolDecision): string[] =>
+    decision.kind === 'deny' ? [...decision.reason.matchAll(/\[(?:critical|high|medium|low)\] ([\w.-]+)/g)].map((match) => match[1]!) : []
+
+  it('a pointer whose document carries enforcement: hard plus a violation denies exactly as the inline form (no Config enforcement)', async () => {
+    // No `enforcement` in Config, no compass arm: the ONLY hard source is the
+    // Assignment document's own flag. The inline form denies; reading the
+    // pointer LINE (no front matter) instead of the document used to allow in
+    // warn mode.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const app = booted = await bootApp({ dispatchBinding: '' })
+
+    const inlineDecision = await app.ctx.waterfall('tools/pre-execute', subagentExec(HARD_HEADER_FLAG), defaultAllow)
+    expect(inlineDecision.kind).toBe('deny')
+
+    await app.dispose()
+    booted = undefined
+
+    const app2 = booted = await bootApp({ dispatchBinding: '' })
+    const pointerDecision = await app2.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(hardPointerInHome(app2.harnessDir, HARD_HEADER_FLAG)),
+      defaultAllow,
+    )
+
+    expect(pointerDecision.kind).toBe('deny')
+    expect(pointerDecision.kind === 'deny' && pointerDecision.reason).toContain('assignment.field.branch-missing')
+    expect(denyCodes(pointerDecision).sort()).toEqual(denyCodes(inlineDecision).sort())
+  })
+
+  it('the warn-mode advisory of a pointer violation names the document\'s own Execute as, not the pointer text', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const advisories = captureAdvisories(app.ctx)
+    // The document carries execute_as: fullstack-dev; the pointer line carries none.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const pointer = hardPointerInHome(app.harnessDir, MISSING_BRANCH)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(1)
+    expect(advisories[0]!.role).toBe('fullstack-dev')
+    expect(violationCodes(advisories[0])).toContain('assignment.field.branch-missing')
+  })
+})
+
+/* ===========================================================================
+ * Isolation shapes at the worktree L2 gate (the shared entries API)
+ * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+ * ========================================================================= */
+
+describe('dispatch gate — worktree L2 isolation shapes', () => {
+  /**
+   * Real git worktrees for the L2 probe (`git -C <path> branch --show-current`).
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
+  function trackWorktrees(root: string, branches: readonly string[]): Map<string, string> {
+    const paths = new Map<string, string>()
+    for (const branch of branches) {
+      const path = join(root, `wt-${branch.replace(/\//g, '-')}`)
+      execFileSync('git', ['-C', root, 'worktree', 'add', '-q', '-b', branch, path])
+      paths.set(branch, path)
+    }
+    return paths
+  }
+
+  /**
+   * Front-matter parallel-track document: both tracks as flow or block list values.
+   * see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+   */
+  function parallelTracksDoc(pathA: string, branchA: string, pathB: string, branchB: string, flow: boolean, hard = false): string {
+    const paths = flow ? `worktree_path: [${pathA}, ${pathB}]` : `worktree_path:\n  - ${pathA}\n  - ${pathB}`
+    const branches = flow ? `working_branch: [${branchA}, ${branchB}]` : `working_branch:\n  - ${branchA}\n  - ${branchB}`
+    return `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+${paths}
+${branches}${hard ? '\nenforcement: hard' : ''}
+---
+
+## Assignment
+
+Two parallel writable tracks.
+`
+  }
+
+  it('a flow-list parallel-track declaration enters the L2 isolation check (branch mismatch surfaces)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    // bootApp's root is already a git repo with its initial commit — add the
+    // two track worktrees to it (the L2 probe needs real checkouts on their branches).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const tracks = trackWorktrees(app.root, ['feature/track-a', 'feature/track-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(parallelTracksDoc(tracks.get('feature/track-a')!, 'feature/track-a', tracks.get('feature/track-b')!, 'feature/not-track-b', true)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    // A flow-list `worktree_path` is the parallel declaration: track B is
+    // declared on the WRONG branch, so the mismatch can only surface when the
+    // gate reads the list as two tracks — before the shared entries API the
+    // flow array read as one scalar and the gate skipped isolation entirely.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    expect(violationCodes(advisories[0])).toContain('worktree.l2.branch-mismatch')
+  }, 60_000)
+
+  it('a block-list parallel-track declaration enters the same L2 isolation check (branch mismatch surfaces)', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/block-a', 'feature/block-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    // Track B declared on the WRONG branch: only a gate that reads the block
+    // list as two tracks can detect it.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(parallelTracksDoc(tracks.get('feature/block-a')!, 'feature/block-a', tracks.get('feature/block-b')!, 'feature/not-block-b', false)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('worktree.l2.branch-mismatch')
+  }, 60_000)
+
+  it('a correctly paired two-track list raises no branch-field or track violation', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/ok-a', 'feature/ok-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      subagentExec(parallelTracksDoc(tracks.get('feature/ok-a')!, 'feature/ok-a', tracks.get('feature/ok-b')!, 'feature/ok-b', true)),
+      defaultAllow,
+    )
+
+    expect(decision).toEqual({ kind: 'allow' })
+    // The list IS the schema's own parallel shape: the shared field/branch
+    // gate accepts it (no branch presence/multiple row) and the L2 pairing
+    // finds both tracks on their declared branches.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const codes = violationCodes(advisories[0])
+    expect(codes.filter((code) => code.startsWith('assignment.field.branch') || code.startsWith('worktree.l2.'))).toEqual([])
+    expect(codes).not.toContain('document.frontmatter.invalid')
+  }, 60_000)
+
+  it('a correctly paired two-track declaration under HARD enforcement is admitted with no veto', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/hard-a', 'feature/hard-b'])
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall(
+      'tools/pre-execute',
+      // A ROOT session supplies the caller identity: a hard dispatch must clear
+      // the anti-recursion binding too, not only the track checks.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      subagentExec(parallelTracksDoc(tracks.get('feature/hard-a')!, 'feature/hard-a', tracks.get('feature/hard-b')!, 'feature/hard-b', true, true), rootAgent),
+      defaultAllow,
+    )
+
+    // Genuinely hard (the document's own flag vetoes ANY violation), so an
+    // allow proves the pair is clean rather than soft mode hiding a refusal.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  }, 60_000)
+
+  it('a pointed control-write assignment resolves worktree_path from the POINTED file, while Git discovery stays on the checkout', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const branch = execFileSync('git', ['-C', app.root, 'branch', '--show-current'], { encoding: 'utf8' }).trim()
+    // `<app.root>/.mstar/assignments/../..` IS the control checkout: only the
+    // pointed file's own directory makes that relative path resolve onto it.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const doc = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — control write
+write_domain: control
+worktree_path: ../..
+working_branch: ${branch}
+control_write_paths:
+  - .mstar/status.json
+---
+
+## Assignment
+
+Update control state.
+`
+    const pointed = join(assignmentsDir, 'control-relative.md')
+    writeFileSync(pointed, doc)
+    const advisories = captureAdvisories(app.ctx)
+    const priorCwd = process.cwd()
+    try {
+      // The control checkout is the checkout the gate inspects: run from it,
+      // exactly as a session in that repo does.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+      process.chdir(app.root)
+      const viaPointer = await app.ctx.waterfall('tools/pre-execute', subagentExec(`Assignment file: ${pointed}`), defaultAllow)
+      expect(viaPointer).toEqual({ kind: 'allow' })
+      expect(violationCodes(advisories[advisories.length - 1])).not.toContain('dispatch.control-write.worktree-not-control')
+      advisories.length = 0
+
+      // Negative control: the SAME document inline has no pointed directory,
+      // so the relative path resolves against the checkout and misses it.
+      // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+      await app.ctx.waterfall('tools/pre-execute', subagentExec(doc), defaultAllow)
+      expect(violationCodes(advisories[advisories.length - 1])).toContain('dispatch.control-write.worktree-not-control')
+    } finally {
+      process.chdir(priorCwd)
+    }
+  }, 60_000)
+
+  it('a pointed control write anchors Git discovery on the SESSION checkout, not the process cwd', async () => {
+    const app = booted = await bootApp({ dispatchBinding: '' })
+    const assignmentsDir = join(app.harnessDir, 'assignments')
+    mkdirSync(assignmentsDir, { recursive: true })
+    const branch = execFileSync('git', ['-C', app.root, 'branch', '--show-current'], { encoding: 'utf8' }).trim()
+    const doc = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — control write
+write_domain: control
+worktree_path: ../..
+working_branch: ${branch}
+control_write_paths:
+  - .mstar/status.json
+---
+
+## Assignment
+
+Update control state.
+`
+    const pointed = join(assignmentsDir, 'control-session.md')
+    writeFileSync(pointed, doc)
+    const advisories = captureAdvisories(app.ctx)
+    const pointer = `Assignment file: ${pointed}`
+
+    // The process runs in the suite's clean control fixture repo — a DIFFERENT
+    // checkout. An exec-less dispatch (no session) still anchors there, so the
+    // pointed worktree is not that control root.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer), defaultAllow)
+    expect(violationCodes(advisories[advisories.length - 1])).toContain('dispatch.control-write.worktree-not-control')
+
+    // A session in app.root inspects ITS OWN checkout instead: the same
+    // document is clean against the control root it names, while the process
+    // cwd never enters the decision.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    advisories.length = 0
+    const session = { session: { header: { cwd: app.root } } }
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(pointer, session), defaultAllow)
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[advisories.length - 1])).not.toContain('dispatch.control-write.worktree-not-control')
+  }, 60_000)
+
+  it('the enforcement decision reads the caller parse instead of reparsing the document', () => {
+    // The TEXT declares no enforcement flag; the supplied parse does. A fresh
+    // parse of the text would answer soft, so only reuse reads hard — the
+    // default dsh path hands its one parse to this decision.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const silent = '---\nexecute_as: fullstack-dev\n---\n'
+    const entries = assignmentFrontmatterEntries('---\nexecute_as: fullstack-dev\nenforcement: hard\n---\n')
+    expect(resolveDispatchHard(null, {} as Config, silent, entries)).toBe(true)
+    expect(resolveDispatchHard(null, {} as Config, silent)).toBe(false)
+  })
+
+  it('duplicate worktree_path keys refuse as document.frontmatter.invalid instead of entering isolation', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/dupe-a', 'feature/dupe-b'])
+    const advisories = captureAdvisories(app.ctx)
+    // The retired parallel grammar: repeated keys. The shared entries parser
+    // refuses the whole block — the schema layer reports the malformed
+    // document rather than the worktree gate silently pairing the first keys.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const prompt = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+worktree_path: ${tracks.get('feature/dupe-a')!}
+worktree_path: ${tracks.get('feature/dupe-b')!}
+working_branch: feature/dupe-a
+---
+
+## Assignment
+
+Two parallel writable tracks.
+`
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.invalid')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
+    // The refusal is the listener parse's ONE structured diagnostic, carried
+    // through the adapter/core/composition into the schema layer — it still
+    // names the document line and the recovery, never a second read of the
+    // rejected block.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const invalid = advisories[0]!.result.violations.find((v) => v.code === 'document.frontmatter.invalid')!
+    expect(invalid.message).toContain('assignment:7:')
+    expect(invalid.message).toContain('duplicate key')
+    expect(invalid.fix).toContain('remove this repeated')
+  }, 60_000)
+
+  it('an unterminated fence declares nothing at the worktree gate — schema refusal only, no track pairing', async () => {
+    const app = booted = await bootApp({ dispatchBinding: 'project-manager' })
+    const tracks = trackWorktrees(app.root, ['feature/unterm-a', 'feature/unterm-b'])
+    const advisories = captureAdvisories(app.ctx)
+    // The opening fence never closes: every field line below is inert. Before
+    // the shared entries API the local scanner still read the lines as root
+    // keys and could pair tracks out of a malformed document.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const prompt = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+task_budget: S — parallel tracks
+worktree_path: [${tracks.get('feature/unterm-a')!}, ${tracks.get('feature/unterm-b')!}]
+working_branch: [feature/unterm-a, feature/unterm-b]
+
+## Assignment
+
+Two parallel writable tracks.
+`
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.absent')
+    expect(violationCodes(advisories[0]).filter((code) => code.startsWith('worktree.l2.'))).toEqual([])
+  }, 60_000)
+})
+
+describe('dispatch gate — the ACTIVE-workflow ledger records only a declared document (QC3-08)', () => {
+  const flowEvents = (app: BootResult) =>
+    readAgentFlow(join(app.harnessDir, 'workflows', 'wf-1'), 'wf-1')?.events ?? []
+
+  it('an unterminated fence is refused by the schema and writes NO ledger row', async () => {
+    const app = booted = await bootApp({ seedV2: true })
+    const advisories = captureAdvisories(app.ctx)
+    // Parseable YAML under an opening fence that never closes: the entries
+    // parser reads execute_as / task_category, but the document declares no
+    // front matter — the schema refuses it (`document.frontmatter.absent`),
+    // so no role or category may reach the ledger. The header must stay
+    // parseable (no body text inside it), or the entries come back `null`
+    // and the parse refusal masks the missing fence.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const prompt = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+`
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(prompt), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(violationCodes(advisories[0])).toContain('document.frontmatter.absent')
+    expect(flowEvents(app).filter((event) => event.kind === 'dispatch')).toHaveLength(0)
+
+    // The guard is the UNDECLARED document only: the same fields under a
+    // closed fence record their one row.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    await app.ctx.waterfall('tools/pre-execute', subagentExec(VALID_WRITABLE), defaultAllow)
+    const dispatches = flowEvents(app).filter((event) => event.kind === 'dispatch')
+    expect(dispatches).toHaveLength(1)
+    expect(dispatches[0]).toMatchObject({ role: 'fullstack-dev', taskCategory: 'logic' })
+  }, 60_000)
 })

@@ -12,10 +12,11 @@
  * `knowledge` carried rather than removed, and degraded ≠ empty per member.
  */
 import { afterEach, describe, expect, it, spyOn } from 'bun:test'
-import { mkdir, mkdtemp, rm } from 'node:fs/promises'
+import { execFileSync } from 'node:child_process'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { initializeStore } from '@mstar-harness/engine'
+import { ensureCollaborationAuthority, initializeStore } from '@mstar-harness/engine'
 import * as engine from '@mstar-harness/engine'
 import { readPanelSnapshot, type PanelRetainedRead } from '../src/panel/read-panel-snapshot.ts'
 import type { PanelSnapshot, PanelSnapshotRead } from '../src/panel/panel-snapshot.ts'
@@ -35,6 +36,12 @@ async function activeHarness(): Promise<string> {
   await mkdir(harnessDir, { recursive: true })
   const handle = await initializeStore({ harnessDir })
   handle.close()
+  // invariant: The panel read resolves the repository lane: the fixture repo must carry
+  // a declared identity (bare temp dirs have no origin and no parent .mstarc),
+  // and the lane itself must exist and be ACTIVE before any snapshot read.
+  await execFileSync('git', ['init', '-q', '-b', 'main', root], { stdio: 'ignore' })
+  await writeFile(join(root, '.mstarc'), `[collaboration]\nmode=local\nrepo_id=dsh-panel-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').slice(-110)}\n`)
+  await ensureCollaborationAuthority({ harnessDir })
   return harnessDir
 }
 

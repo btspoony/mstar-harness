@@ -21,7 +21,7 @@
  * `skills/mstar-sdd/references/sticky-implementer-session.md` +
  * SKILL.md red flag "Resume implementer without host_agent_id".
  * - Harness root: fixed at `<main worktree>/.mstar` (ADR
- * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`);
+ * `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`);
  * `MSTAR_HARNESS_DIR` is ignored by the engine and `opts.harnessDir`
  * must equal the fixed root.
  */
@@ -32,10 +32,12 @@ import { tmpdir } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { registerCatalogEntity } from "../src/catalog.js";
+import { ensureCollaborationAuthority } from "../src/store-activation.js";
 import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } from "../src/execution-store.js";
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import {
+
   SddScriptError,
   assertBaseSha,
   checkSddAction,
@@ -51,6 +53,9 @@ import {
   type SddExecutionContext,
 } from "../src/sdd.js";
 import { HarnessRootRetiredError } from "../src/index.js";
+import { DocumentFrontmatterError, extractFrontmatterAndBody, parseDocumentFrontmatterEntries } from "../src/document-frontmatter.js";
+import { validateDocumentFrontmatter } from "../src/document-schema.js";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const MSTAR_CONTROL_ROOT = "MSTAR_CONTROL_ROOT";
 const MSTAR_HARNESS_DIR = "MSTAR_HARNESS_DIR";
@@ -62,12 +67,13 @@ const ambientEnvValues = new Map<string, string | undefined>(
   AMBIENT_ENV_KEYS.map((key) => [key, process.env[key]]),
 );
 
-// Env pinning : `sddWorkspace` reads MSTAR_CONTROL_ROOT and
-// MSTAR_HARNESS_DIR ahead of probing, and taskBrief/reviewPackage read
-// SDD_DIR — an ambient shell export would redirect fixture resolution and
-// fail these tests spuriously (or worse, resolve against the developer's
-// real control worktree). Pin all three to undefined before every test and
-// restore the ambient values once at the end of the suite.
+// why: an ambient MSTAR_CONTROL_ROOT / SDD_DIR export would redirect fixture
+// resolution and fail these tests spuriously (or worse, resolve against the
+// developer's real control worktree), so pin all three to undefined before
+// every test and restore the ambient values once at the end of the suite.
+// `sddWorkspace` reads only MSTAR_CONTROL_ROOT as its root selector
+// (MSTAR_HARNESS_DIR is retired and ignored); taskBrief/reviewPackage read
+// SDD_DIR.
 beforeEach(() => {
   for (const key of AMBIENT_ENV_KEYS) delete process.env[key];
 });
@@ -115,6 +121,19 @@ function gitFixture(root: string): { base: string; head: string } {
   git(["commit", "-q", "-m", "head commit"], root);
   const head = git(["rev-parse", "HEAD"], root);
   return { base, head };
+}
+
+/** A written brief split by the shared reader: the parsed header values and
+ * the body below the fence.
+ * see docs/knowledge/conventions/brief-acceptance-declarations.md
+ */
+function splitBrief(content: string): { header: Map<string, unknown>; body: string } {
+  const { frontmatter, body } = extractFrontmatterAndBody(content);
+  const header = new Map<string, unknown>();
+  for (const [key, entry] of parseDocumentFrontmatterEntries(frontmatter, "brief")) {
+    header.set(key, entry.value);
+  }
+  return { header, body };
 }
 
 function errOf(fn: () => unknown): SddScriptError {
@@ -539,19 +558,35 @@ describe("sddWorkspace — SDD dir resolution (SKILL.md § Per-task loop + § CL
 });
 
 describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CLI)", () => {
+  /** The fixture plan body behind a valid front matter fence (a brief without
+   * `plan_id` is refused, so every extraction case needs one).
+   * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+   */
+  function samplePlan(dir: string): string {
+    const plan = join(dir, "sample-plan.md");
+    writeFileSync(plan, planFrontMatter("sample-plan", readFileSync(SAMPLE_PLAN, "utf8")));
+    return plan;
+  }
+
   test("extracts from the matching '## Task N' heading; fenced headings and number boundaries ignored", () => {
     const out = tmpRoot("sdd-brief-");
     try {
+      const plan = samplePlan(out);
       const file = join(out, "task-2-brief.md");
-      const written = taskBrief(SAMPLE_PLAN, 2, file);
+      const written = taskBrief(plan, 2, file);
       expect(written).toBe(file);
-      const content = readFileSync(file, "utf8");
-      expect(content.startsWith("### Task 2: second task\n")).toBe(true);
-      expect(content).not.toContain("hidden behind a fence");
-      expect(content).not.toContain("Task 1: first task");
+      const { header, body } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("plan_id")).toBe("sample-plan");
+      expect(header.get("task")).toBe(2);
+      // The body is the Task 2 section: it opens at that heading and the
+      // fenced Task 2 example inside it is slice content, not a boundary.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+      expect(body.slice(0, body.indexOf("\n"))).toBe("### Task 2: second task");
+      expect(body).not.toContain("Task 1: first task");
+      expect(body).not.toContain("hidden behind a fence");
       const task10 = join(out, "task-10-brief.md");
-      taskBrief(SAMPLE_PLAN, 10, task10);
-      expect(readFileSync(task10, "utf8")).toContain("### Task 10: tenth task");
+      taskBrief(plan, 10, task10);
+      expect(splitBrief(readFileSync(task10, "utf8")).body).toContain("### Task 10: tenth task");
     } finally {
       rmSync(out, { recursive: true, force: true });
     }
@@ -593,19 +628,292 @@ describe("taskBrief — task brief extraction (SKILL.md § Per-task loop + § CL
   test("default out path uses SDD_DIR/task-N-brief.md and creates SDD_DIR", () => {
     const out = tmpRoot("sdd-brief-");
     try {
+      const plan = samplePlan(out);
       const sddDir = join(out, "sdd", "sub");
       withEnv(SDD_DIR, sddDir, () => {
-        const file = taskBrief(SAMPLE_PLAN, 1);
+        const file = taskBrief(plan, 1);
         expect(file).toBe(join(sddDir, "task-1-brief.md"));
         expect(existsSync(file)).toBe(true);
       });
       withEnv(SDD_DIR, undefined, () => {
-        const err = errOf(() => taskBrief(SAMPLE_PLAN, 1));
+        const err = errOf(() => taskBrief(plan, 1));
         expect(err.exitCode).toBe(2);
         expect(err.message).toMatch(/set SDD_DIR or pass OUTFILE/);
       });
     } finally {
       rmSync(out, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("taskBrief — brief front matter (plan_id / task / files)", () => {
+  const BODY = [
+    "### Task 1: first",
+    "",
+    "**Files:**",
+    "- Create: `src/one.ts`",
+    "",
+    "### Task 2: second",
+    "",
+    "**Files:**",
+    "- Create: `src/b.ts`",
+    "- Modify: `src/a.ts` (only `taskBrief`)",
+    "- Create: `src/b.ts`",
+    "- Check: `not-a-file.md`",
+    "",
+    "A fenced example is not an ownership entry:",
+    "",
+    "```text",
+    "- Create: `other-task.ts`",
+    "- Modify: `src/b.ts`",
+    "```",
+    "",
+    "Body of task two.",
+    "",
+    "### Task 3: third",
+    "",
+    "No file entries in this task.",
+    "",
+  ].join("\n");
+  const PLAN = planFrontMatter("plan-brief-fixture", BODY);
+
+  function writePlan(content = PLAN): { dir: string; plan: string } {
+    const dir = tmpRoot("sdd-brief-fm-");
+    const plan = join(dir, "plan.md");
+    writeFileSync(plan, content);
+    return { dir, plan };
+  }
+
+  test("Task 2 brief declares plan_id, task and its own files in source order without duplicates", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      // A described entry (`- Modify: `src/a.ts` (only `taskBrief`)`) yields the
+      // path alone; a fenced example is not an entry; another task's file and
+      // an unrecognized label are not this task's files.
+      // see docs/knowledge/conventions/brief-acceptance-declarations.md
+      expect(header.get("plan_id")).toBe("plan-brief-fixture");
+      expect(header.get("task")).toBe(2);
+      expect(header.get("files")).toEqual(["src/b.ts", "src/a.ts"]);
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-2-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the body after the header is the Task 2 section and stops at the next Task heading", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const { body } = splitBrief(readFileSync(file, "utf8"));
+      // Fence and heading boundaries: the section opens at its own heading,
+      // keeps the fenced example inside it, and ends before Task 3.
+      // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+      expect(body.startsWith("### Task 2: second\n")).toBe(true);
+      expect(body).toContain("Body of task two.");
+      expect(body).toContain("```text");
+      expect(body).not.toContain("### Task 3: third");
+      expect(body).not.toContain("No file entries in this task.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a tilde-fenced example is not an ownership entry and hides no heading boundary", () => {
+    // Both fence kinds are examples: a `Modify:` line inside `~~~` is not a
+    // task file, and a `### Task 3` heading inside `~~~` does not open a new
+    // slice. Tracking only backticks read both as real content.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+    const body = [
+      "### Task 1: only",
+      "",
+      "**Files:**",
+      "- Create: `src/real.ts`",
+      "",
+      "~~~text",
+      "- Modify: `src/quoted.ts`",
+      "### Task 2: quoted heading",
+      "~~~",
+      "",
+      "Body.",
+      "",
+    ].join("\n");
+    const { dir, plan } = writePlan(planFrontMatter("tilde-fence-plan", body));
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const { header, body: briefBody } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("files")).toEqual(["src/real.ts"]);
+      expect(briefBody).toContain("### Task 2: quoted heading");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an indented fence is an indented code block, so it hides no later task", () => {
+    // Four or more columns of indent make it an INDENTED CODE BLOCK, not a
+    // fence: the marker neither opens nor closes one, and the block ends at
+    // the first less-indented line — there is no closing marker to find.
+    // Reading the opener as a fence left the tracker open for the rest of the
+    // document, so `### Task 2` was never seen and its brief refused although
+    // the heading is right there.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const body = [
+      "### Task 1: only",
+      "",
+      "    ```text",
+      "    - Create: `src/sample.ts`",
+      "",
+      "Body of task one.",
+      "",
+      "### Task 2: real",
+      "",
+      "**Files:**",
+      "- Create: `src/two.ts`",
+      "",
+      "Body of task two.",
+      "",
+    ].join("\n");
+    const { dir, plan } = writePlan(planFrontMatter("indented-fence-plan", body));
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      const { header, body: briefBody } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("task")).toBe(2);
+      expect(header.get("files")).toEqual(["src/two.ts"]);
+      expect(briefBody).toContain("Body of task two.");
+      expect(briefBody).not.toContain("Body of task one.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("an indented tilde fence is an indented code block too", () => {
+    // The same rule for `~~~`: the two characters are one fence grammar, so an
+    // indented opener is an indented code block in both spellings.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const body = [
+      "### Task 1: only",
+      "",
+      "    ~~~text",
+      "    ### Task 2: quoted heading",
+      "",
+      "Body of task one.",
+      "",
+      "### Task 2: real",
+      "",
+      "Body of task two.",
+      "",
+    ].join("\n");
+    const { dir, plan } = writePlan(planFrontMatter("indented-tilde-plan", body));
+    try {
+      const file = join(dir, "task-2-brief.md");
+      taskBrief(plan, 2, file);
+      expect(splitBrief(readFileSync(file, "utf8")).body).toContain("Body of task two.");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a task without Files entries writes no files key", () => {
+    const { dir, plan } = writePlan();
+    try {
+      const file = join(dir, "task-3-brief.md");
+      taskBrief(plan, 3, file);
+      const { header } = splitBrief(readFileSync(file, "utf8"));
+      expect(header.get("plan_id")).toBe("plan-brief-fixture");
+      expect(header.get("task")).toBe(3);
+      expect(header.has("files")).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan without a declared plan_id is refused before any write", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const file = join(dir, "task-1-brief.md");
+      const err = errOf(() => taskBrief(plan, 1, file));
+      expect(err.exitCode).toBe(1);
+      expect(err.message).toContain("plan_id");
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a blank plan_id is refused before any write", () => {
+    for (const declaration of ['plan_id: ""', 'plan_id: "   "']) {
+      const { dir, plan } = writePlan(`---\n${declaration}\n---\n\n### Task 1: only\n\n- [ ] step\n`);
+      try {
+        const file = join(dir, "task-1-brief.md");
+        const err = errOf(() => taskBrief(plan, 1, file));
+        expect(err.exitCode).toBe(1);
+        expect(existsSync(file)).toBe(false);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a plan without a declared plan_id does not create the default SDD directory", () => {
+    const { dir, plan } = writePlan("# Plan\n\n### Task 1: only\n\n- [ ] step\n");
+    try {
+      const sddDir = join(dir, "missing", "sdd");
+      withEnv(SDD_DIR, sddDir, () => {
+        const err = errOf(() => taskBrief(plan, 1));
+        expect(err.exitCode).toBe(1);
+        expect(existsSync(sddDir)).toBe(false);
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a plan_id that reads as another scalar shape round-trips as its own text", () => {
+    const { dir, plan } = writePlan(`---\nplan_id: "null"\n---\n\n### Task 1: only\n\n- [ ] step\n`);
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      expect(header.get("plan_id")).toBe("null");
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-1-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file entry the reader would decode as a flow array stays its own path", () => {
+    const body = "### Task 1: only\n\n- Modify: `[draft].md`\n";
+    const { dir, plan } = writePlan(planFrontMatter("plan-brief-fixture", body));
+    try {
+      const file = join(dir, "task-1-brief.md");
+      taskBrief(plan, 1, file);
+      const content = readFileSync(file, "utf8");
+      const { header } = splitBrief(content);
+      expect(header.get("files")).toEqual(["[draft].md"]);
+      expect(validateDocumentFrontmatter("sdd-brief", content, "task-1-brief").ok).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a task-shaped front matter comment is not a body task", () => {
+    const { dir, plan } = writePlan(
+      "---\nplan_id: plan-brief-fixture\n# Task 1: draft\n---\n\n# Plan\n\n### Task 2: second\n\n- [ ] step\n",
+    );
+    try {
+      const file = join(dir, "task-1-brief.md");
+      const err = errOf(() => taskBrief(plan, 1, file));
+      expect(err.exitCode).toBe(3);
+      expect(existsSync(file)).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
@@ -855,6 +1163,10 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   writeFileSync(join(primary, "src", "module.ts"), "export const primary = true;\n");
   git(["add", "-A"], primary);
   git(["commit", "-q", "-m", "primary base"], primary);
+  writeFileSync(
+    join(primary, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${primary.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
 
   const control = join(root, "control");
   git(["worktree", "add", "-q", "-b", "codex/iter-integration", control], primary);
@@ -879,7 +1191,7 @@ function executionFixture(root: string, opts: { nested?: boolean; nestedHarness?
   // the title authority (the registration calls declare that same title).
   writeFileSync(
     planFile,
-    `# Plan\n\n**plan_id:** ${PLAN_ID}\n\n**Main worktree branch**: main\n\n## Task 1\n\n- implement\n`,
+    planFrontMatter(PLAN_ID, "# Plan\n\n## Task 1\n\n- implement\n"),
   );
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   mkdirSync(sddDir, { recursive: true });
@@ -917,6 +1229,7 @@ async function ensureAuthority(f: ExecutionFixture): Promise<StoreContext> {
   if (!existsSync(join(f.harnessDir, "store.db"))) {
     (await initializeStore(context)).close();
   }
+  await ensureCollaborationAuthority(context);
   return context;
 }
 
@@ -1482,8 +1795,9 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
   });
 
   test("residency expectation: recorded plan header wins, explicit branch.base is the fallback, neither refuses", async () => {
-    // Recorded plan header (the fixture plan carries "Main worktree branch:
-    // main") — resolves.
+    // Recorded plan front matter (the fixture plan declares
+    // main_worktree_branch: main in its front matter) — resolves.
+    // see docs/knowledge/conventions/plan-frontmatter-declarations.md
     const root1 = tmpRoot("sdd-ctx-mainbranch-");
     try {
       const f = executionFixture(root1);
@@ -1516,6 +1830,83 @@ describe("resolveSddExecutionContext — A3 declared-context resolution", () => 
       expect(err.message).toContain("worktree.main.expected-branch-missing");
     } finally {
       rmSync(root3, { recursive: true, force: true });
+    }
+  });
+
+  test("malformed plan front matter refuses with the parser file:line diagnostic — never the branch.base fallback", async () => {
+    // T4-01 regression: a duplicate declaration in the registered plan's
+    // front matter is a parse failure of the residency declaration surface.
+    // Even with a populated `branch.base` (the intended fallback for a
+    // genuinely absent record), the resolver must propagate the parser's
+    // file:line diagnostic instead of silently substituting the fallback —
+    // a corrupted plan can never admit dispatch against the wrong branch.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const root = tmpRoot("sdd-ctx-mainbranch-malformed-");
+    try {
+      const f = executionFixture(root);
+      writeFileSync(
+        f.planFile,
+        ["---", `plan_id: ${PLAN_ID}`, `plan_id: ${PLAN_ID}`, "---", "", "# Plan", ""].join("\n"),
+      );
+      await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "main" } });
+      const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+      expect(rejection).toBeInstanceOf(DocumentFrontmatterError);
+      const frontmatterError = rejection as DocumentFrontmatterError;
+      expect(frontmatterError.source).toBe(f.planFile);
+      expect(frontmatterError.message).toContain(`${f.planFile}:`);
+      expect(frontmatterError.message).not.toContain("worktree.branch-mismatch");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("a present-but-invalid main_worktree_branch refuses with identity-mismatch — never the branch.base fallback", async () => {
+    // CF-02 regression: `main_worktree_branch: [other]` is a present but
+    // non-scalar declaration. The snapshot fallback applies only when the key
+    // is genuinely absent, so even a populated `branch.base` must not admit
+    // the dispatch.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    for (const [name, lines] of [
+      ["list", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: [other]", "---", "", "# Plan", ""]],
+      ["unterminated fence", ["---", `plan_id: ${PLAN_ID}`, "main_worktree_branch: other", "# no closing fence"]],
+    ] as const) {
+      const root = tmpRoot(`sdd-ctx-mainbranch-invalid-${name.replace(/\s+/g, "-")}-`);
+      try {
+        const f = executionFixture(root);
+        writeFileSync(f.planFile, lines.join("\n"));
+        await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "main" } });
+        const rejection = await rejectionOf(() => resolveSddExecutionContext(contextOf(f)));
+        expect(rejection.code).toBe("plan-path.identity-mismatch");
+        expect(rejection.message).not.toContain("worktree.branch-mismatch");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("a numeric main_worktree_branch keeps its written spelling — `5.0` is compared as 5.0", async () => {
+    // CF-01 regression: the typed scalar `5` must never replace the declared
+    // spelling `5.0`; a workflow snapshot whose branch.base is the exact raw
+    // spelling resolves against the raw-text declaration. The snapshot
+    // branch.base deliberately spells the typed scalar (`5`) — resolution
+    // succeeds only when the declaration surface, not the fallback, wins.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const root = tmpRoot("sdd-ctx-mainbranch-numeric-");
+    try {
+      const f = executionFixture(root);
+      // The main worktree really is on a branch spelled `5.0` — the resolution
+      // succeeds only when the raw-text declaration, not the typed scalar `5`,
+      // reaches the residency comparison.
+      // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+      git(["branch", "-m", "main", "5.0"], f.primary);
+      writeFileSync(
+        f.planFile,
+        planFrontMatter(PLAN_ID, "# Plan\n\n## Task 1\n\n- implement\n", { main_worktree_branch: "5.0" }),
+      );
+      await seedWorkflow(f, "wf-1", [scopedRow(f)], { branch: { base: "5" } });
+      expect((await resolveSddExecutionContext(contextOf(f))).planId).toBe(PLAN_ID);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

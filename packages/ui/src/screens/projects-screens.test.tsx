@@ -1,34 +1,29 @@
-/**
- * `Projects` and `ProjectDetail` — the only place the product hierarchy is
- * expressed.
- *
- * The load-bearing assertions:
- *
- *  - the feature set is the fixed three, in order, and `Roadmap` is the default;
- *  - a project with no roadmap row renders the `absent` arm, not an empty board —
- *    and a project that *has* a roadmap with no milestones renders `empty`, which
- *    the two tests keep from collapsing into one string;
- *  - the scoped lists carry a chip naming the project, and clearing it is a model
- *    operation (the screen does not own the scope);
- *  - no envelope counter reaches either page.
- */
+/** see packages/ui/src/screens/projects-screens.test.tsx - `Projects` and `ProjectDetail` — the only place the product hierarchy is expressed. The load-bearing assertions: - the milestone rollup is the screen's default body, read from the project-scoped `overview` read's `milestones` member; - the list feature set is the fixed two, in order, and `Issues` is the default; - an empty milestone set renders the `empty` arm with the create form still offered — there is no `absent` arm and no tab, route or label named roadmap; - the scoped lists carry a chip naming the project, and clearing it is a model operation (the screen does not own the scope); - no envelope counter reaches either page. */
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { ProjectListDTO, RoadmapDTO } from "@mstar-harness/engine";
+import type { MilestoneRead, OverviewMember, ProjectListDTO } from "@mstar-harness/engine";
 
 import {
   DEFAULT_PROJECT_FEATURE,
   PROJECT_FEATURES,
+  milestonesArm,
+  milestonesModel,
   projectIdentity,
   projectListModel,
-  roadmapBody,
-  roadmapFeatureArm,
 } from "../view-model/projects.ts";
 import type { Resolved } from "../view-model/state.ts";
-import type { RoadmapModel } from "../view-model/projects.ts";
+import type { MilestonesModel, ProjectIdentity } from "../view-model/projects.ts";
 import { Projects, type ProjectsCopy } from "./Projects.tsx";
 import {
   ASSIGNABLE_ISSUE_LIMIT,
+  createMilestoneDraftStore,
+  draftAfterWrite,
+  effortInput,
+  milestoneCreateInput,
+  milestoneDraft,
+  milestonePatch,
+  withTouched,
+  nextMilestoneOrdinal,
   ProjectDetail as ProjectDetailScreen,
   type ProjectDetailCopy,
   type ProjectDetailProps,
@@ -56,58 +51,90 @@ const catalogEntry = (over: Record<string, unknown> = {}) =>
     registeredAt: "2026-08-09T02:00:00.000Z",
     updatedAt: "2026-10-23T09:42:00.000Z",
     ...over,
-  }) as NonNullable<RoadmapDTO["catalog"]>;
+  }) as ProjectListDTO["items"][number]["project"];
 
-const roadmap = (over: Partial<RoadmapDTO> = {}): RoadmapDTO => ({
+const identityRow = (over: Record<string, unknown> = {}) => {
+  const model = projectListModel({
+    data: { items: [{ project: catalogEntry(over), openIssues: 4 }], total: 1 },
+    projection,
+  });
+  if (model.rows.kind !== "populated") throw new Error("the list fixture must populate");
+  return model.rows.value[0]!;
+};
+
+const milestoneRead = (over: Partial<MilestoneRead> = {}): MilestoneRead => ({
   projectId: "engine",
-  catalog: catalogEntry(),
-  authority: { state: "present", revision: 7, contentHash: "sha256:abcd1234" },
-  content: {
-    contentMarkdown: "## Direction\n\nOne product, two hosts.",
-    frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active" as const, created_at: "2026-08-09" },
-    direction: "One product, two hosts.",
-    goals: [
-      { ordinal: 1, parentOrdinal: null, checked: true, title: "One design system", body: "" },
-      { ordinal: 2, parentOrdinal: 1, checked: false, title: "One token contract", body: "" },
-      { ordinal: 3, parentOrdinal: null, checked: false, title: "Two hosts", body: "" },
-    ],
-    milestones: ["Release the shared layer"],
-    sections: [],
-  },
-  milestones: {
-    projectId: "engine",
-    milestones: [
-      {
-        milestoneId: "9f2c4a10",
-        projectId: "engine",
-        name: "Release the shared layer",
-        target: "2026-11-07",
-        status: "active",
-        ordinal: 0,
-        revision: 2,
-        createdAt: "2026-10-01T00:00:00.000Z",
-        updatedAt: "2026-10-02T00:00:00.000Z",
-        totalIssues: 10,
-        openIssues: 4,
-        resolvedIssues: 6,
-        otherRetiredIssues: 0,
-      },
-    ],
-    issues: [
-      { id: "I-000870", title: "Tone disagrees", acceptance: "", disposition: "open", revision: 1, milestoneId: "9f2c4a10" },
-      { id: "I-000871", title: "Unassigned one", acceptance: "", disposition: "open", revision: 1, milestoneId: "" },
-    ],
-    unassignedIssues: 3,
-  },
+  milestones: [
+    {
+      milestoneId: "9f2c4a10",
+      projectId: "engine",
+      name: "Release the shared layer",
+      effortSessions: 12,
+      status: "active",
+      ordinal: 0,
+      revision: 2,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-02T00:00:00.000Z",
+      totalIssues: 10,
+      openIssues: 4,
+      resolvedIssues: 6,
+      otherRetiredIssues: 0,
+    },
+  ],
+  issues: [
+    { id: "I-000870", title: "Tone disagrees", acceptance: "", disposition: "open", revision: 1, milestoneId: "9f2c4a10" },
+    { id: "I-000871", title: "Unassigned one", acceptance: "", disposition: "open", revision: 1, milestoneId: "" },
+  ],
+  unassignedIssues: 3,
   ...over,
 });
+
+const milestoneRow = (
+  over: Partial<MilestoneRead["milestones"][number]> = {},
+): MilestoneRead["milestones"][number] => ({
+  milestoneId: "9f2c4a10",
+  projectId: "engine",
+  name: "Release the shared layer",
+  effortSessions: 12,
+  status: "active",
+  ordinal: 0,
+  revision: 2,
+  createdAt: "2026-10-01T00:00:00.000Z",
+  updatedAt: "2026-10-02T00:00:00.000Z",
+  totalIssues: 10,
+  openIssues: 4,
+  resolvedIssues: 6,
+  otherRetiredIssues: 0,
+  ...over,
+});
+
+/** see packages/ui/src/screens/projects-screens.test.tsx - The arm the screen renders for one rollup read. */
+const armOf = (read: MilestoneRead): Resolved<MilestonesModel> => milestonesArm({ state: "read", data: read });
+
+// why: a slot assertion must be met inside this milestone's own block, not anywhere on the page.
+const boardBlockOf = (html: string, milestoneId: string): string => {
+  const start = html.indexOf(`data-ms-milestone="${milestoneId}"`);
+  return start === -1 ? "" : html.slice(start, html.indexOf("</section>", start));
+};
+
+const timelineNodeOf = (html: string, nodeId: string): string => {
+  const start = html.indexOf(`data-ms-timeline-node="${nodeId}"`);
+  if (start === -1) return "";
+  const next = html.indexOf("data-ms-timeline-node=", start + 1);
+  const end = next === -1 ? html.indexOf('data-ms-milestone="', start) : next;
+  return html.slice(start, end === -1 ? undefined : end);
+};
 
 const projectsCopy: ProjectsCopy = {
   pageTitle: "Projects",
   totalMeta: (n) => `${n} ${n === 1 ? "project" : "projects"}`,
   openIssuesMeta: (n) => `${n} open ${n === 1 ? "issue" : "issues"}`,
-  headNote: "a project owns its roadmap, issues and iterations",
+  headNote: "a project owns its milestones, issues and iterations",
   tableCaption: "Projects",
+  listHeading: "Catalog projects",
+  listMeta: "Select a project to open its milestones, issues and iterations",
+  lifecycleNote: "Lifecycle is the catalog lifecycle, never the execution state.",
+  noLifecycle: "no lifecycle",
   columns: { title: "Title", id: "ID", lifecycle: "Lifecycle", openIssues: "Open", description: "Description" },
   openIssues: (count) => `${count} open`,
   noDescription: "—",
@@ -125,25 +152,24 @@ const renderList = (items: ProjectListDTO["items"], total = items.length, genera
   );
 
 const detailCopy: ProjectDetailCopy = {
-  roadmapState: "roadmap present",
-  revisionLabel: "Revision",
   openIssuesUnit: "open issues",
   breadcrumb: { label: "Breadcrumb", trail: "Projects" },
   tabLabel: "Features",
-  features: { roadmap: "Roadmap", issues: "Issues", iterations: "Iterations" },
-  roadmap: {
+  features: { issues: "Issues", iterations: "Iterations" },
+  milestones: {
     milestonesHeading: "Milestones",
     milestonesUnit: "milestones",
     unassignedUnit: "unassigned issues",
-    milestoneProgress: (done, total) => `${done}/${total}`,
     milestoneOpen: (open) => `${open} open`,
     countLabels: { open: "open", resolved: "resolved", retired: "retired without resolution", total: "total" },
-    noTarget: "no target",
+    effort: (sessions) => `${sessions} sessions`,
+    unestimated: "unestimated",
     unassigned: (count) => `${count} unassigned`,
     writes: {
       create: "Create",
       nameLabel: "Milestone name",
-      targetLabel: "Target",
+      effortLabel: "Sessions",
+      effortInvalid: "The session count must be a whole number of at least 1, or left empty.",
       statusLabel: "Status",
       edit: "Edit",
       save: "Save",
@@ -151,44 +177,49 @@ const detailCopy: ProjectDetailCopy = {
       assign: "Assign issues",
       unassign: "Unassign",
       assignCap: "Showing the first 50 unassigned open issues.",
+      assignLoading: "Loading assignable issues…",
+      assignFailed: "The assignable issues could not be read:",
+      assignRetry: "Retry",
       remove: "Remove",
       removeConfirm: "Remove this milestone?",
       refusalLead: "The store refused the change:",
     },
     timelineUnassigned: "unassigned",
     timelineUnassignedIssues: (count) => `${count} issues`,
-    absentNextStep: (features) => `Available: ${features}`,
   },
   scope: { label: (id) => `project: ${id}`, clear: "Clear the project scope" },
   absence: {
-    absent: { labelWord: "absent", heading: "Roadmap", body: "this project declares no roadmap", pointer: "x" },
-    empty: { labelWord: "empty", heading: "Milestones", body: "the roadmap has no milestones", hint: "add one" },
-    unavailable: { labelWord: "unavailable", heading: "Roadmap", body: "the read failed" },
-    "not-applicable": { labelWord: "n/a", heading: "Roadmap", body: "no project resolves" },
+    empty: { labelWord: "empty", heading: "Milestones", body: "no milestones yet", hint: "add one" },
+    unavailable: { labelWord: "unavailable", heading: "Milestones", body: "the read failed" },
+    "not-applicable": { labelWord: "n/a", heading: "Milestones", body: "no project resolves" },
   },
 };
 
 const renderDetail = (
   input: {
-    roadmap?: Resolved<RoadmapModel>;
-    feature?: "roadmap" | "issues" | "iterations";
-    identity?: ReturnType<typeof projectIdentity>;
+    milestones?: Resolved<MilestonesModel>;
+    feature?: "issues" | "iterations";
+    identity?: ProjectIdentity;
     writes?: ProjectDetailProps["writes"];
     assignableIssues?: ProjectDetailProps["assignableIssues"];
+    drafts?: ProjectDetailProps["drafts"];
+    onRetryAssignable?: ProjectDetailProps["onRetryAssignable"];
   },
   onClearScope?: () => void,
 ): string =>
   renderToStaticMarkup(
     <ProjectDetailScreen
-      identity={input.identity ?? projectIdentity(catalogEntry())}
+      identity={input.identity ?? projectIdentity(identityRow())}
       feature={input.feature ?? DEFAULT_PROJECT_FEATURE}
       onFeatureChange={() => {}}
-      roadmap={input.roadmap ?? roadmapBody(roadmapFeatureArm({ data: roadmap(), projection }))}
+      milestones={input.milestones ?? armOf(milestoneRead())}
       issues={<div data-ms-scoped-list="issues" />}
       iterations={<div data-ms-scoped-list="iterations" />}
       copy={detailCopy}
       {...(input.writes === undefined ? {} : { writes: input.writes })}
       {...(input.assignableIssues === undefined ? {} : { assignableIssues: input.assignableIssues })}
+      {...(input.drafts === undefined ? {} : { drafts: input.drafts })}
+      {...(input.onRetryAssignable === undefined ? {} : { onRetryAssignable: input.onRetryAssignable })}
       onBack={() => {}}
       onClearScope={onClearScope}
     />,
@@ -227,87 +258,73 @@ describe("Projects list — the facts of §8.2", () => {
   });
 });
 
-describe("ProjectDetail — the fixed feature set", () => {
+describe("ProjectDetail — the milestone body and the fixed feature set", () => {
   const html = renderDetail({});
 
-  test("the three features render in the fixed order", () => {
-    const positions = ["Roadmap", "Issues", "Iterations"].map((label) => html.indexOf(label));
+  test("the two list features render in the fixed order", () => {
+    const positions = ["Issues", "Iterations"].map((label) => html.indexOf(label));
     expect(positions.every((position) => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((a, b) => a - b));
-    expect(html.match(/role="tab"/g)?.length).toBe(3);
+    expect(html.match(/role="tab"/g)?.length).toBe(2);
   });
 
-  test("Roadmap is the default for every project, by constant not by content", () => {
-    expect(DEFAULT_PROJECT_FEATURE).toBe("roadmap");
-    expect(PROJECT_FEATURES).toEqual(["roadmap", "issues", "iterations"]);
-    // The default renders the roadmap body even though Issues has more content.
-    expect(html).toContain('data-ms-feature="roadmap"');
+  test("Issues is the default for every project, by constant not by content", () => {
+    expect(DEFAULT_PROJECT_FEATURE).toBe("issues");
+    expect(PROJECT_FEATURES).toEqual(["issues", "iterations"]);
+    expect(html).toContain('data-ms-feature="issues"');
     expect(html).toContain('aria-selected="true"');
   });
 
-  test("it never auto-selects a feature that has content", () => {
-    const withEmptyRoadmap = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ authority: { state: "absent" }, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
-    });
-    // The roadmap is absent and Issues would have content — the tab must not move.
-    expect(withEmptyRoadmap).toContain('data-ms-absence="absent"');
-    expect(withEmptyRoadmap).not.toContain('data-ms-scoped-list="issues"');
+  test("NEGATIVE: no tab, route or label named roadmap survives", () => {
+    expect(html).not.toContain("Roadmap");
+    expect(html).not.toContain("roadmap");
   });
 
-  test("the identity head carries id, lifecycle and the harness-relative path", () => {
-    expect(html).toContain("projects:engine");
+  test("the milestone rollup is the default body, on every feature", () => {
+    expect(html).toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-milestone-timeline=""');
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The body is not a tab: selecting the other feature keeps it mounted.
+    expect(renderDetail({ feature: "iterations" })).toContain('data-ms-milestones=""');
+  });
+
+  test("it never auto-selects a feature that has content", () => {
+    const empty = renderDetail({ milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })) });
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The milestone set is empty and Issues would have content — the tab must not move.
+    expect(empty).toContain('data-ms-absence="empty"');
+    expect(empty).toContain('data-ms-feature="issues"');
+  });
+
+  test("the identity head carries id, lifecycle and the list's own title", () => {
     expect(html).toContain("Engine");
+    expect(html).toContain("active");
     expect(html).toContain('aria-current="page"');
   });
 
-  test("NEGATIVE: no counter from the read envelope and no document block", () => {
-    // The counters belong to the read envelope, not the record; the authority row
-    // (with its content hash) is one of the document blocks Task 3 removed.
+  test("NEGATIVE: no counter from the read envelope", () => {
     for (const removed of ["storeRevision", "catalogRevision", "builtAt", "checkedAt", "sha256:abcd1234"]) {
       expect(html).not.toContain(removed);
     }
   });
 });
 
-describe("ProjectDetail — the header direction and the removed document blocks (plan Task 3)", () => {
+describe("ProjectDetail — the header description", () => {
   const html = renderDetail({});
 
-  test("the roadmap's direction sits in the header, above the identity meta", () => {
+  test("the project's description sits in the header, above the identity meta", () => {
     expect(html).toContain('data-ms-direction=""');
-    // Above the identity meta line: the direction precedes the head's meta.
-    expect(html.indexOf("One product, two hosts.")).toBeLessThan(html.indexOf("Revision"));
+    expect(html).toContain("Store, projection and gates");
+    // see packages/ui/src/screens/projects-screens.test.tsx - // Above the identity meta line: the description precedes the head's meta.
+    expect(html.indexOf("Store, projection and gates")).toBeLessThan(html.indexOf("detail-meta"));
     expect(html).not.toContain("<details");
   });
 
-  test("no roadmap direction falls back to the catalog description; neither renders nothing", () => {
-    const fallback = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: { ...roadmap().content!, direction: null } }),
-          projection,
-        }),
-      ),
-    });
-    expect(fallback).toContain('data-ms-direction=""');
-    expect(fallback).toContain("Store, projection and gates");
-  });
-
-  test("NEGATIVE: the catalog-identity, roadmap-authority, stored-markdown and stored-facts blocks are gone", () => {
-    for (const gone of ["Catalog identity", "Roadmap authority", "Stored facts", "data-ms-roadmap-markdown", "Content hash"]) {
-      expect(html).not.toContain(gone);
-    }
-    // The roadmap-presence chip and location line stay.
-    expect(html).toContain("roadmap present");
-    expect(html).toContain("projects:engine");
+  test("no description renders nothing, not a dash", () => {
+    const bare = renderDetail({ identity: projectIdentity(identityRow({ description: null })) });
+    expect(bare).not.toContain('data-ms-direction=""');
   });
 });
 
-describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
+describe("ProjectDetail — the milestone timeline", () => {
   const html = renderDetail({});
 
   test("one node per milestone plus the trailing unassigned node", () => {
@@ -318,81 +335,113 @@ describe("ProjectDetail — the milestone timeline (plan Task 3)", () => {
   });
 
   test("a node carries the retired-over-total pair and the open count", () => {
-    // The fixture's milestone: 10 total, 4 open → 6/10 · 4 open.
-    expect(html).toContain("6/10");
+    // why: the fixture's milestone is 10 total, 4 open → 6/10 · 4 open, asserted inside ITS node.
+    const node = timelineNodeOf(html, "9f2c4a10");
+    expect(node).toContain("6/10");
+    expect(node).toContain("4 open");
   });
 
-  test("missing targets sort last, before the unassigned node", () => {
-    const withLateTarget = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            milestones: {
-              projectId: "engine",
-              milestones: [
-                {
-                  milestoneId: "no-target",
-                  projectId: "engine",
-                  name: "No target milestone",
-                  target: null,
-                  status: "planned",
-                  ordinal: 1,
-                  revision: 1,
-                  createdAt: "2026-10-01T00:00:00.000Z",
-                  updatedAt: "2026-10-01T00:00:00.000Z",
-                  totalIssues: 0,
-                  openIssues: 0,
-                  resolvedIssues: 0,
-                  otherRetiredIssues: 0,
-                },
-                {
-                  milestoneId: "early",
-                  projectId: "engine",
-                  name: "Early milestone",
-                  target: "2026-10-01",
-                  status: "delivered",
-                  ordinal: 0,
-                  revision: 1,
-                  createdAt: "2026-10-01T00:00:00.000Z",
-                  updatedAt: "2026-10-01T00:00:00.000Z",
-                  totalIssues: 2,
-                  openIssues: 0,
-                  resolvedIssues: 2,
-                  otherRetiredIssues: 0,
-                },
-              ],
-              issues: [],
-              unassignedIssues: 1,
-            },
-          }),
-          projection,
+  test("nodes follow the store's ordinal order, then the unassigned node", () => {
+    // why: a and b share ordinal 1 and are entered in NON-id order (b before a), so a
+    // stable ordinal-only sort would render c, b, a — the id tie-break is the only
+    // way the asserted order c, a, b arises. The other single-key alternatives also
+    // disagree: by id ascending a, b, c; by id descending c, b, a; by effort
+    // ascending b(3), c(4), a(5); by effort descending a(5), c(4), b(3).
+    const ordered = renderDetail({
+      milestones: armOf(
+        milestoneRead({
+          milestones: [
+            milestoneRow({
+              milestoneId: "b-position",
+              name: "Third position",
+              effortSessions: 3,
+              status: "active",
+              ordinal: 1,
+              totalIssues: 0,
+              resolvedIssues: 0,
+              openIssues: 0,
+            }),
+            milestoneRow({
+              milestoneId: "a-position",
+              name: "Second position",
+              effortSessions: 5,
+              status: "planned",
+              ordinal: 1,
+              totalIssues: 0,
+              resolvedIssues: 0,
+              openIssues: 0,
+            }),
+            milestoneRow({
+              milestoneId: "c-position",
+              name: "First position",
+              effortSessions: 4,
+              status: "delivered",
+              ordinal: 0,
+              totalIssues: 2,
+              resolvedIssues: 2,
+              openIssues: 0,
+            }),
+          ],
+          issues: [],
+          unassignedIssues: 1,
         }),
       ),
     });
-    const early = withLateTarget.indexOf('data-ms-timeline-node="early"');
-    const late = withLateTarget.indexOf('data-ms-timeline-node="no-target"');
-    const unassigned = withLateTarget.indexOf('data-ms-timeline-node="unassigned"');
-    expect(early).toBeGreaterThan(-1);
-    expect(early).toBeLessThan(late);
-    expect(late).toBeLessThan(unassigned);
-    // A milestone with no issues still renders its node, as the planned status shows.
-    expect(withLateTarget).toContain("No target milestone");
+    const c = ordered.indexOf('data-ms-timeline-node="c-position"');
+    const a = ordered.indexOf('data-ms-timeline-node="a-position"');
+    const b = ordered.indexOf('data-ms-timeline-node="b-position"');
+    const unassigned = ordered.indexOf('data-ms-timeline-node="unassigned"');
+    expect(c).toBeGreaterThan(-1);
+    expect(c).toBeLessThan(a);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(unassigned);
+    expect(timelineNodeOf(ordered, "c-position")).toContain("4 sessions · delivered");
+    expect(timelineNodeOf(ordered, "a-position")).toContain("5 sessions · planned");
+    // invariant: the trailing node is the unassigned issues only — no effort line, no estimate word.
+    const trailing = timelineNodeOf(ordered, "unassigned");
+    expect(trailing).toContain("1 issues");
+    expect(trailing).not.toContain("session");
+    expect(trailing).not.toContain("unestimated");
+  });
+
+  test("an unestimated milestone says so in its own node", () => {
+    const page = renderDetail({
+      milestones: armOf(
+        milestoneRead({
+          milestones: [milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, status: null, totalIssues: 0 })],
+          issues: [],
+          unassignedIssues: 0,
+        }),
+      ),
+    });
+    const node = timelineNodeOf(page, "never");
+    expect(node).toContain("unestimated");
+    expect(node).not.toContain("0 sessions");
   });
 });
 
-describe("ProjectDetail — the Roadmap feature", () => {
+describe("ProjectDetail — the milestone board", () => {
   const html = renderDetail({});
 
-  test("the direction is header text, not a disclosure", () => {
-    expect(html).toContain("One product, two hosts.");
-    expect(html).not.toContain("<details");
-  });
-
-  test("the milestone board carries status, target, the four tallies and its issues", () => {
-    expect(html).toContain('data-ms-milestone="9f2c4a10"');
-    expect(html).toContain("Release the shared layer");
-    expect(html).toContain("2026-11-07");
-    expect(html).toContain("I-000870");
+  test("the board carries status, effort sessions, the four tallies and its issues", () => {
+    // why: every slot is asserted inside this milestone's own block — the timeline node
+    // prints the same effort line, so a page-wide search would pass with the board slot gone.
+    const block = boardBlockOf(html, "9f2c4a10");
+    expect(block).not.toBe("");
+    expect(block).toContain("Release the shared layer");
+    expect(block).toContain(">active<");
+    // why: a kept attribute with no rendered count must still fail, so the cell's own hook AND the
+    // number it prints are both asserted - the display renders the bare count (`sessionsLabel` is
+    // the write form's label only).
+    const effortSessions = 12;
+    const effortAt = block.indexOf("data-ms-effort");
+    expect(effortAt).toBeGreaterThan(-1);
+    expect(block).toContain(`data-ms-effort="${effortSessions}"`);
+    const effortClose = block.indexOf("</span>", effortAt) + "</span>".length;
+    // why: the cell prints the count inside the localized effort copy, so the assertion is the
+    // number itself - asserting a bare `>12<` would encode one surface's wording.
+    expect(block.slice(effortAt, effortClose)).toContain(String(effortSessions));
+    expect(block).toContain("I-000870");
     // The prototype's row states four tallies, each its own number-and-label pair. Assert
     // the numbers through their own hooks: labels alone would pass even if every count
     // rendered as zero, and `retired without resolution` contains `resolved`.
@@ -403,129 +452,75 @@ describe("ProjectDetail — the Roadmap feature", () => {
       ["retired", "0"],
       ["total", "10"],
     ] as const) {
-      expect(html).toContain(`data-ms-count="${key}" data-ms-count-value="${value}"`);
+      expect(block).toContain(`data-ms-count="${key}" data-ms-count-value="${value}"`);
     }
+  });
+
+  test("an unestimated milestone says so on the board row, and the estimate never leaks to another row", () => {
+    const page = renderDetail({
+      milestones: armOf(
+        milestoneRead({
+          milestones: [
+            milestoneRow({ milestoneId: "never", name: "Never estimated", effortSessions: null, status: null, totalIssues: 0 }),
+            milestoneRow({ milestoneId: "estimated", name: "Estimated", effortSessions: 4, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+          ],
+          issues: [],
+          unassignedIssues: 0,
+        }),
+      ),
+    });
+    expect(boardBlockOf(page, "never")).toContain("unestimated");
+    expect(boardBlockOf(page, "estimated")).toContain("4 sessions");
+    expect(boardBlockOf(page, "estimated")).not.toContain("unestimated");
   });
 
   test("the unassigned count is stated once, as a count", () => {
     expect(html).toContain('data-ms-unassigned="3"');
     expect(html).toContain("3 unassigned");
   });
-
 });
 
-describe("ProjectDetail — no roadmap row is absent, an empty milestone set is empty", () => {
-  test("a project with no roadmap authority row and no milestone work renders the absent arm", () => {
+describe("ProjectDetail — the milestone body's arms", () => {
+  test("an empty milestone set is the empty arm — no board, no zero-width bar", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ authority: { state: "absent" }, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })),
     });
-    expect(html).toContain('data-ms-absence="absent"');
-    // Structure: no empty board, no zero-width bar.
-    expect(html).not.toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-absence="empty"');
     expect(html).not.toContain('data-ms-milestones=""');
     expect(html).not.toContain("progressbar");
-    // The continuation is offered: the two features that do have content.
-    expect(html).toContain("Issues · Iterations");
-    // Greptile 5: with no roadmap direction available, the header states the
-    // CATALOG description — an absent roadmap does not erase what the project is.
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The header still states the catalog description.
     expect(html).toContain('data-ms-direction=""');
     expect(html).toContain("Store, projection and gates");
   });
 
-  test("a null roadmap read is absent too — never unreadable", () => {
-    // The contract's answer: a failed read answers `unavailable`, so a null
-    // payload can only mean the project declares no roadmap.
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: null, projection })) });
-    expect(html).toContain('data-ms-absence="absent"');
-    expect(html).not.toContain('data-ms-absence="unavailable"');
-  });
-
-  test("a roadmap that exists with no milestones and no goals is empty, not absent", () => {
+  test("unassigned issues alone populate the body", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            content: null,
-            milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-          }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 4 })),
     });
-    expect(html).toContain('data-ms-absence="empty"');
-    expect(html).toContain("the roadmap has no milestones");
-    expect(html).not.toContain('data-ms-absence="absent"');
-  });
-
-  test("a roadmap with only a direction keeps rendering it (E)", () => {
-    // Before the fix this answered `empty` because goals and milestones were both
-    // absent — hiding content the reader can act on behind "nothing here".
-    const onlyDirection = roadmap({
-      content: {
-        contentMarkdown: "",
-        frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
-        direction: "One product, two hosts.",
-        goals: [],
-        milestones: [],
-        sections: [],
-      },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: onlyDirection, projection })) });
-    expect(html).toContain('data-ms-feature="roadmap"');
-    expect(html).toContain("One product, two hosts.");
     expect(html).not.toContain('data-ms-absence="empty"');
+    expect(html).toContain('data-ms-unassigned="4"');
   });
 
-  test("a roadmap whose only content was the stored document is now the empty arm (Task 3)", () => {
-    // The stored markdown panel is gone; with nothing rendered the page says empty.
-    const onlyMarkdown = roadmap({
-      content: {
-        contentMarkdown: "## Notes\n\nStored direction lives here.",
-        frontmatter: { project_id: "engine", title: "Engine roadmap", status: "active", created_at: "2026-08-09" },
-        direction: null,
-        goals: [],
-        milestones: [],
-        sections: [],
-      },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: onlyMarkdown, projection })) });
-    expect(html).not.toContain('data-ms-roadmap-markdown=""');
-    expect(html).toContain('data-ms-absence="empty"');
-  });
-
-  test("a truly empty roadmap is still the empty arm (E)", () => {
-    const nothing = roadmap({
-      content: null,
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: nothing, projection })) });
-    expect(html).toContain('data-ms-absence="empty"');
-  });
-
-  test("a failed read is unavailable, carrying the store's message", () => {
-    // A real failure: the payload is missing, not merely unprojected.
+  test("a not-applicable member renders its own arm with the store's reason", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: undefined as never, projection: { ...projection, generation: null } })),
+      milestones: milestonesArm({ state: "not-applicable", reason: "no project resolves for this read" }),
+    });
+    expect(html).toContain('data-ms-absence="not-applicable"');
+    expect(html).toContain("no project resolves for this read");
+  });
+
+  test("an unavailable member renders its own arm, carrying the store's message", () => {
+    const html = renderDetail({
+      milestones: milestonesArm({ state: "unavailable", reason: "the milestone read could not be completed" }),
     });
     expect(html).toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("could not be completed");
+    expect(html).toContain("the milestone read could not be completed");
   });
 
-  test("a roadmap with no published generation still renders its content", () => {
-    // The roadmap is store-backed: `generation: null` on a successful read is not a
-    // failure, and treating it as one emptied the Roadmap feature.
-    const html = renderDetail({
-      roadmap: roadmapBody(roadmapFeatureArm({ data: roadmap(), projection: { ...projection, generation: null } })),
-    });
-    expect(html).not.toContain('data-ms-absence="unavailable"');
-    expect(html).toContain("One product, two hosts");
+  test("a pending read renders no arm", () => {
+    const html = renderDetail({ milestones: { kind: "loading" } });
+    expect(html).not.toContain('data-ms-absence=');
+    expect(html).not.toContain('data-ms-milestones=""');
   });
 });
 
@@ -586,9 +581,14 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
     expect(html).toContain('data-ms-milestone-assign=""');
     expect(html).toContain('data-ms-assign-issue="I-000900"');
     expect(html).toContain('data-ms-unassign-issue="I-000870"');
-    // Creation is name + target only: the engine's add verb has no status field.
+    // why: the engine's add verb has no status field, so creation is name + effort only.
     const createForm = html.slice(html.indexOf('data-ms-milestone-create=""'), html.indexOf("</form>", html.indexOf('data-ms-milestone-create=""')));
     expect(createForm).not.toContain("<select");
+    // why: the effort field keeps the raw text — a number input sanitises bad text to
+    // "" — and it is never a calendar date.
+    expect(createForm).toContain('inputMode="numeric"');
+    expect(createForm).not.toContain('type="number"');
+    expect(createForm).not.toContain('type="date"');
     expect(html).not.toContain('data-ms-assign-cap');
   });
 
@@ -643,7 +643,183 @@ describe("ProjectDetail — the milestone write controls (plan Task 4, minus rem
   });
 });
 
-describe("ProjectDetail — the write controls reach every roadmap state (Greptile 2)", () => {
+describe("ProjectDetail — the edit form's draft and patch contract", () => {
+  const stored = (): MilestonesModel["milestones"][number] => {
+    const arm = armOf(milestoneRead());
+    if (arm.kind !== "populated") throw new Error("the milestone fixture must read as populated");
+    return arm.value.milestones[0]!;
+  };
+
+  // why: the component-level sequence (clear → cancel → reopen → Save) is not expressible
+  // in this package — the suite renders with react-dom/server and has no DOM runtime.
+  // Each case below names the draft/patch contract it actually drives.
+  test("reopening after a discarded draft reseeds from the milestone, so a rename-only patch carries no effortSessions", () => {
+    const milestone = stored();
+    expect(milestone.effortSessions).toBe(12);
+    // why: cancel throws the draft away, so reopening seeds a NEW draft from the
+    // milestone — the value the stale draft held (empty) cannot come back.
+    const reopened = milestoneDraft(milestone);
+    expect(reopened).toEqual({
+      name: "Release the shared layer",
+      effort: "12",
+      status: "active",
+      touched: new Set(),
+    });
+    const patch = milestonePatch(milestone, { ...reopened, name: "Renamed", touched: withTouched(reopened.touched, "name") });
+    expect(patch).toEqual({ name: "Renamed" });
+    expect("effortSessions" in patch).toBe(false);
+  });
+
+  test("an emptied effort field contributes the explicit null to the patch", () => {
+    const milestone = stored();
+    const patch = milestonePatch(milestone, {
+      ...milestoneDraft(milestone),
+      effort: "",
+      touched: withTouched(milestoneDraft(milestone).touched, "effort"),
+    });
+    expect(patch).toEqual({ effortSessions: null });
+  });
+
+  test("a refresh shows the milestone's own value for every field the operator did not touch", () => {
+    // why: keeping a stale displayed value is worse than losing the seed — an editor showing the
+    // old status makes selecting that same option a no-op, so the operator's choice never travels.
+    const milestone = stored();
+    const touchedOnlyEffort = withTouched(new Set(), "effort");
+    const kept = { name: "Renamed", effort: "20", status: "delivered", touched: [...touchedOnlyEffort] };
+    // note: the refreshed milestone another writer left behind.
+    const refreshed = { ...milestone, name: "Renamed upstream", status: "delivered" } as typeof milestone;
+    const seeded = {
+      name: kept.touched.includes("name") ? kept.name : refreshed.name,
+      effort: kept.touched.includes("effort") ? kept.effort : "",
+      status: kept.touched.includes("status") ? kept.status : (refreshed.status ?? "planned"),
+    };
+    expect(seeded.name).toBe("Renamed upstream");
+    expect(seeded.status).toBe("delivered");
+    expect(milestonePatch(refreshed, { ...seeded, touched: new Set(kept.touched) })).toEqual({ effortSessions: 20 });
+  });
+
+  test("an untouched draft yields an empty patch, a changed effort the full patch", () => {
+    const milestone = stored();
+    expect(milestonePatch(milestone, milestoneDraft(milestone))).toEqual({});
+    expect(
+      milestonePatch(milestone, {
+        ...milestoneDraft(milestone),
+        effort: "20",
+        touched: withTouched(milestoneDraft(milestone).touched, "effort"),
+      }),
+    ).toEqual({ effortSessions: 20 });
+  });
+
+  test("the create form sends a count as that count and an empty field as null", () => {
+    const twelve = milestoneCreateInput("New milestone", "12", 0);
+    expect(twelve).toEqual({ kind: "input", input: { name: "New milestone", effortSessions: 12, ordinal: 0 } });
+    const unestimated = milestoneCreateInput("New milestone", "  ", 0);
+    expect(unestimated).toEqual({ kind: "input", input: { name: "New milestone", effortSessions: null, ordinal: 0 } });
+  });
+
+  test("a garbage effort text is refused, not coerced into a cleared estimate", () => {
+    // why: `0` is a whole number, so it reaches the engine, whose range validator
+    // refuses it. Only non-integer text stops at the screen — never coerced to `null`.
+    expect(effortInput("0")).toEqual({ kind: "count", sessions: 0 });
+    expect(milestoneCreateInput("New milestone", "0", 0)).toEqual({
+      kind: "input",
+      input: { name: "New milestone", effortSessions: 0, ordinal: 0 },
+    });
+    // safety: a digit string the browser's JSON encoding would turn into null (a silent
+    // clear the engine reads as legitimate) is refused before any write; "0" and
+    // in-range values still travel to the engine, which owns the range.
+    expect(effortInput("9".repeat(309))).toEqual({ kind: "invalid" });
+    expect(milestoneCreateInput("New milestone", "9".repeat(309), 0)).toEqual({ kind: "invalid" });
+    expect(effortInput("9007199254740993")).toEqual({ kind: "invalid" });
+    for (const text of ["1.5", "twelve", "12px", "-"]) {
+      expect(effortInput(text)).toEqual({ kind: "invalid" });
+      expect(milestoneCreateInput("New milestone", text, 0)).toEqual({ kind: "invalid" });
+    }
+    expect(
+      milestonePatch(stored(), {
+        ...milestoneDraft(stored()),
+        effort: "twelve",
+        touched: withTouched(milestoneDraft(stored()).touched, "effort"),
+      }),
+    ).toEqual({});
+  });
+
+  test("a NEW milestone takes one past the highest ordinal, never the count — gaps sort it last", () => {
+    // why: deletions leave gaps (ordinals 0, 2). The milestone COUNT (2) would sort
+    // the new one alongside the existing ordinal-2 work or ahead of it on the id
+    // tie-break; one past the highest ordinal (3) places it after everything.
+    const gapped = [milestoneRow({ ordinal: 0 }), milestoneRow({ milestoneId: "b-position", ordinal: 2 })];
+    expect(nextMilestoneOrdinal(gapped)).toBe(3);
+    expect(nextMilestoneOrdinal([])).toBe(0);
+    const created = milestoneCreateInput("New milestone", "12", nextMilestoneOrdinal(gapped));
+    expect(created).toEqual({ kind: "input", input: { name: "New milestone", effortSessions: 12, ordinal: 3 } });
+  });
+
+  test("the rendered timeline places the gap-created milestone last", () => {
+    const html = renderDetail({
+      milestones: armOf(
+        milestoneRead({
+          milestones: [
+            milestoneRow({ milestoneId: "first-kept", ordinal: 0, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+            milestoneRow({ milestoneId: "second-kept", ordinal: 2, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+            milestoneRow({ milestoneId: "created-after", ordinal: 3, totalIssues: 0, openIssues: 0, resolvedIssues: 0 }),
+          ],
+          issues: [],
+          unassignedIssues: 0,
+        }),
+      ),
+    });
+    const first = html.indexOf('data-ms-timeline-node="first-kept"');
+    const second = html.indexOf('data-ms-timeline-node="second-kept"');
+    const created = html.indexOf('data-ms-timeline-node="created-after"');
+    expect(first).toBeGreaterThan(-1);
+    expect(first).toBeLessThan(second);
+    expect(second).toBeLessThan(created);
+  });
+
+  test("a refused write keeps the typed draft; an accepted one clears it", () => {
+    // why: the engine refuses 0 / negative / over-range counts AFTER the operator
+    // may have edited the name and status too. The draft is theirs, not the
+    // engine's to throw away — only an accepted write closes the editor.
+    const typed = { name: "Renamed", effort: "0", status: "active" };
+    expect(draftAfterWrite(typed, { refusal: "[milestone.effort-range] Effort sessions must be a positive count." })).toEqual(typed);
+    expect(draftAfterWrite(typed, { refusal: null })).toBeNull();
+  });
+
+  test("the host's keepDraft verdict WINS over the refusal string (a conflict keeps the draft)", () => {
+    // see packages/ui/src/screens/projects-screens.test.tsx - // A revision conflict carries a refusal message AND must keep the draft; an
+    // accepted write carries neither and clears it. These two inputs agree with the
+    // refusal string, so they pin the ordinary path — the divergent cases below pin
+    // that the FIELD is the one being read.
+    const typed = { name: "Typed before the conflict", effort: "4" };
+    const conflict = { refusal: "[milestone.revision-conflict] the store moved", keepDraft: true };
+    expect(draftAfterWrite(typed, conflict)).toEqual(typed);
+    const accepted = { refusal: null, keepDraft: false };
+    expect(draftAfterWrite(typed, accepted)).toBeNull();
+  });
+
+  test("keepDraft:true with NO refusal keeps the draft — the field is read, not derived", () => {
+    // see packages/ui/src/screens/projects-screens.test.tsx - // Divergent input 1: the refusal string says nothing, yet the host states the
+    // draft survives. A consumer that dropped the `keepDraft` read would fall back to
+    // `refusal !== null` → `false` → clear, and this fails.
+    const typed = { name: "Still mine", effort: "9", status: "active" };
+    expect(draftAfterWrite(typed, { refusal: null, keepDraft: true })).toEqual(typed);
+  });
+
+  test("keepDraft:false WITH a terminal refusal clears the draft — keepDraft beats refusal !== null", () => {
+    // see packages/ui/src/screens/projects-screens.test.tsx - // Divergent input 2: a terminal refusal string is present (which the old rule read
+    // as "keep") while the host states the draft does not survive. Reading the refusal
+    // string would keep it; reading `keepDraft` clears it — so this fails if the field
+    // is ignored.
+    const typed = { name: "Typed", effort: "4" };
+    expect(
+      draftAfterWrite(typed, { refusal: "[milestone.invalid-input] Name must not be blank.", keepDraft: false }),
+    ).toBeNull();
+  });
+
+});
+
+describe("ProjectDetail — the write controls reach every answered arm", () => {
   const writes: NonNullable<ProjectDetailProps["writes"]> = {
     busy: false,
     refusal: null,
@@ -655,12 +831,7 @@ describe("ProjectDetail — the write controls reach every roadmap state (Grepti
 
   test("an EMPTY milestone set still renders the create form, so the first one is creatable", () => {
     const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })),
       writes,
     });
     // The empty arm is what a project with no milestones reads as — and the create
@@ -669,60 +840,127 @@ describe("ProjectDetail — the write controls reach every roadmap state (Grepti
     expect(html).toContain('data-ms-milestone-create=""');
   });
 
-  test("an ABSENT roadmap row still renders the create form", () => {
-    const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({
-            authority: { state: "absent" },
-            milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
-          }),
-          projection,
-        }),
-      ),
-      writes,
-    });
-    expect(html).toContain('data-ms-absence="absent"');
+  test("a populated board renders the create form beside it", () => {
+    const html = renderDetail({ writes });
+    expect(html).toContain('data-ms-milestones-arm="populated"');
     expect(html).toContain('data-ms-milestone-create=""');
-    expect(html).toContain('data-ms-roadmap-arm="absent"');
   });
 
   test("no write surface, no create form, whatever the arm", () => {
     const empty = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
+      milestones: armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })),
     });
     expect(empty).not.toContain("data-ms-milestone-create");
     expect(renderDetail({})).not.toContain("data-ms-milestone-create");
   });
 });
 
-describe("ProjectDetail — the catalog description survives the absent/empty arms (Greptile 5)", () => {
-  test("an empty roadmap shows the description the roadmap does not supply", () => {
-    const html = renderDetail({
-      roadmap: roadmapBody(
-        roadmapFeatureArm({
-          data: roadmap({ content: null, milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 } }),
-          projection,
-        }),
-      ),
-    });
-    expect(html).toContain('data-ms-direction=""');
-    expect(html).toContain("Store, projection and gates");
+describe("ProjectDetail — the host-owned draft store", () => {
+  // see packages/ui/src/screens/projects-screens.test.tsx - // why: the forms live under the milestone read, so a refresh unmounts them — the draft must
+  // be the host's, keyed per target, or the operator's typed text dies with the subtree.
+  test("the store keeps one draft per target, and clear drops only that target", () => {
+    const store = createMilestoneDraftStore();
+    expect(store.read("create")).toBeUndefined();
+    store.write("create", { name: "Typed milestone", effort: "4" });
+    store.write("m-1", { name: "Renamed", effort: "9", status: "active" });
+    expect(store.read("create")).toEqual({ name: "Typed milestone", effort: "4" });
+    expect(store.read("m-1")).toEqual({ name: "Renamed", effort: "9", status: "active" });
+    // why: a write merges into the target's entry — the name keystroke must not erase the
+    // effort the operator typed before it.
+    store.write("create", { name: "Typed milestone edited" });
+    expect(store.read("create")).toEqual({ name: "Typed milestone edited", effort: "4" });
+    store.clear("create");
+    expect(store.read("create")).toBeUndefined();
+    // invariant: clearing one target never touches another — the open editor's draft is not
+    // the create form's to lose.
+    expect(store.read("m-1")).toEqual({ name: "Renamed", effort: "9", status: "active" });
   });
 
-  test("a populated roadmap's own direction still wins over the description", () => {
-    const html = renderDetail({});
-    expect(html).toContain("One product, two hosts.");
-    expect(html).not.toContain("Store, projection and gates");
+  test("a re-mounted form seeds from the store: the draft survives the refresh", () => {
+    // why: the unmount/remount cycle itself needs a DOM runtime this suite does not have, but
+    // the mount-half of the cycle IS observable here — the first render IS the re-mounted form's
+    // open, and the input values it prints are exactly what the useState seeding produced. The
+    // draft is keyed by the page's identity: this fixture's project is `engine`.
+    const store = createMilestoneDraftStore();
+    store.write("engine:create", { name: "Typed before the conflict", effort: "4" });
+    const writes = { busy: false, refusal: null, create: () => {}, update: () => {}, assign: () => {}, remove: () => {} };
+    const html = renderDetail({ writes, drafts: store });
+    // invariant: the rendered inputs carry the typed text — removing the component's seeding
+    // turns both values empty and fails this test, because the store lookup is then dead code.
+    expect(html).toContain('value="Typed before the conflict"');
+    expect(html).toContain('value="4"');
+    // invariant: with the entry gone the form opens empty — the seed is the store entry itself,
+    // not a fallback that happens to echo it.
+    store.clear("engine:create");
+    const empty = renderDetail({ writes, drafts: store });
+    expect(empty).toContain('data-ms-milestone-create=""');
+    expect(empty).not.toContain('value="Typed before the conflict"');
+  });
+
+  test("a conflict retry sends only the field the operator touched, never a revert of the refreshed one", () => {
+    // why: the draft is seeded with every field, so a refresh that changed an untouched field
+    // would be reverted by a patch built from the stale snapshot. Only touched fields travel.
+    const milestone = stored();
+    const seeded = { ...milestoneDraft(milestone), touched: withTouched(milestoneDraft(milestone).touched, "name") };
+    const renamed = { ...seeded, name: "Renamed" };
+    // note: the refreshed milestone another writer left behind: its estimate moved to 8.
+    const refreshed = { ...milestone, effortSessions: 8 } as typeof milestone;
+    expect(milestonePatch(refreshed, renamed)).toEqual({ name: "Renamed" });
+    // note: an untouched effort field is never sent, even though its typed text no longer matches.
+    expect("effortSessions" in milestonePatch(refreshed, renamed)).toBe(false);
+    // note: touching the field is what lets it travel, and clearing it stays expressible.
+    const cleared = { ...milestoneDraft(refreshed), effort: "", touched: withTouched(milestoneDraft(refreshed).touched, "effort") };
+    expect(milestonePatch(refreshed, cleared)).toEqual({ effortSessions: null });
+  });
+
+  test("the edit editor's seed prefers the stored draft's status over the milestone's", () => {
+    // why: the operator may have changed the status dropdown before the conflict; re-seeding
+    // from the milestone would silently revert it to the stored state.
+    const milestone = stored();
+    const kept = { name: "Renamed", effort: "9", status: "delivered", touched: ["name", "effort", "status"] as const };
+    const seeded = {
+      name: kept.name,
+      effort: kept.effort,
+      status: kept.status ?? milestone.status ?? "planned",
+      touched: new Set(kept.touched),
+    };
+    expect(seeded.status).toBe("delivered");
+    expect(milestonePatch(milestone, seeded)).toEqual({ name: "Renamed", effortSessions: 9, status: "delivered" });
+  });
+
+  function stored(): MilestonesModel["milestones"][number] {
+    const arm = armOf(milestoneRead());
+    if (arm.kind !== "populated") throw new Error("the milestone fixture must read as populated");
+    return arm.value.milestones[0]!;
+  }
+});
+
+describe("milestonesArm — the one absence authority for the milestone body", () => {
+  test("a read member with work is populated; without work it is empty", () => {
+    expect(armOf(milestoneRead()).kind).toBe("populated");
+    expect(armOf(milestoneRead({ milestones: [], issues: [], unassignedIssues: 0 })).kind).toBe("empty");
+  });
+
+  test("the member's own not-applicable and unavailable states pass through", () => {
+    const notApplicable: OverviewMember<MilestoneRead> = { state: "not-applicable", reason: "no project resolves" };
+    const unavailable: OverviewMember<MilestoneRead> = { state: "unavailable", reason: "store refused" };
+    expect(milestonesArm(notApplicable)).toEqual({ kind: "not-applicable", reason: "no project resolves" });
+    expect(milestonesArm(unavailable)).toEqual({ kind: "unavailable", reason: "store refused" });
+  });
+
+  test("the model carries the rollup's own tallies and the per-milestone issue list", () => {
+    const model = milestonesModel(milestoneRead());
+    expect(model.unassignedIssues).toBe(3);
+    expect(model.milestones[0]).toMatchObject({
+      milestoneId: "9f2c4a10",
+      counts: { open: 4, resolved: 6, retired: 0, total: 10 },
+      progress: { done: 6, total: 10 },
+    });
+    expect(model.milestones[0]!.issues.map((issue) => issue.id)).toEqual(["I-000870"]);
   });
 });
 
-describe("ProjectDetail — a project with no roadmap row keeps its milestones (Greptile)", () => {
+describe("ProjectDetail — the assign picker's three arms", () => {
   const writes: NonNullable<ProjectDetailProps["writes"]> = {
     busy: false,
     refusal: null,
@@ -731,71 +969,43 @@ describe("ProjectDetail — a project with no roadmap row keeps its milestones (
     assign: () => {},
     remove: () => {},
   };
+  const offered = [{ id: "I-000900", title: "Loose end", severity: "low", revision: 3 }];
 
-  test("carried milestones lift the absent roadmap into the populated board", () => {
-    // The milestone read is independent of the stored document, so a project with no
-    // roadmap ROW can still own milestones — including one created from this page.
-    // Answering the bare `absent` arm hid them, which made the saved milestone
-    // disappear and left it uneditable.
-    const carried = roadmap({
-      authority: { state: "absent" },
-      // No roadmap ROW means no stored document either: milestones only.
-      content: null,
-      milestones: {
-        projectId: "engine",
-        milestones: [
-          {
-            milestoneId: "a1b2c3d4",
-            projectId: "engine",
-            name: "Created without a roadmap",
-            target: "2026-12-01",
-            status: "planned",
-            ordinal: 0,
-            revision: 1,
-            createdAt: "2026-10-01T00:00:00.000Z",
-            updatedAt: "2026-10-01T00:00:00.000Z",
-            totalIssues: 0,
-            openIssues: 0,
-            resolvedIssues: 0,
-            otherRetiredIssues: 0,
-          },
-        ],
-        issues: [],
-        unassignedIssues: 0,
-      },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: carried, projection })), writes });
-    // The board and the timeline both show it; the absence arm is gone.
-    expect(html).not.toContain('data-ms-absence="absent"');
-    expect(html).toContain('data-ms-milestones=""');
-    expect(html).toContain("Created without a roadmap");
-    expect(html).toContain('data-ms-timeline-node="a1b2c3d4"');
-    expect(html).toContain('data-ms-milestone="a1b2c3d4"');
-    // And it stays writable: the create form and its edit control are there.
-    expect(html).toContain('data-ms-milestone-create=""');
-    expect(html).toContain('data-ms-milestone-edit=""');
-    // No roadmap direction exists, so the header keeps the catalog description.
-    expect(html).toContain('data-ms-direction=""');
-    expect(html).toContain("Store, projection and gates");
+  test("a ready read offers the issues behind the control", () => {
+    const html = renderDetail({ writes, assignableIssues: offered });
+    expect(html).toContain('data-ms-milestone-assign=""');
+    expect(html).toContain('data-ms-assign-issue="I-000900"');
+    expect(html).not.toContain("data-ms-assign-error");
   });
 
-  test("carried UNASSIGNED issues alone also lift the arm (they are milestone work too)", () => {
-    const carried = roadmap({
-      authority: { state: "absent" },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 4 },
-    });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: carried, projection })) });
-    expect(html).not.toContain('data-ms-absence="absent"');
-    expect(html).toContain('data-ms-unassigned="4"');
+  test("a pending read says so instead of pretending the set is empty", () => {
+    const html = renderDetail({ writes, assignableIssues: { kind: "loading" } });
+    expect(html).toContain('data-ms-assign-loading=""');
+    expect(html).toContain("Loading assignable issues");
+    expect(html).not.toContain("data-ms-assign-error");
   });
 
-  test("no carried milestone work keeps the absent EmptyState", () => {
-    const bare = roadmap({
-      authority: { state: "absent" },
-      milestones: { projectId: "engine", milestones: [], issues: [], unassignedIssues: 0 },
+  test("a failed read states the cause in place and offers the retry", () => {
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The picker must not vanish (an entry the operator cannot find reads as
+    // "nothing to assign") and it must not spin forever.
+    const html = renderDetail({
+      writes,
+      assignableIssues: { kind: "failed", reason: "the store could not be read" },
+      onRetryAssignable: () => {},
     });
-    const html = renderDetail({ roadmap: roadmapBody(roadmapFeatureArm({ data: bare, projection })) });
-    expect(html).toContain('data-ms-absence="absent"');
-    expect(html).not.toContain('data-ms-milestones=""');
+    expect(html).toContain('data-ms-assign-error=""');
+    expect(html).toContain("The assignable issues could not be read:");
+    expect(html).toContain("the store could not be read");
+    expect(html).toContain('data-ms-assign-retry=""');
+    expect(html).toContain("Retry");
+    // see packages/ui/src/screens/projects-screens.test.tsx - // The control is rendered at the milestone's own actions, not above the board.
+    expect(boardBlockOf(html, "9f2c4a10")).toContain('data-ms-assign-error=""');
+  });
+
+  test("without a host retry the failure still states the cause, without a dead button", () => {
+    const html = renderDetail({ writes, assignableIssues: { kind: "failed", reason: "timeout" } });
+    expect(html).toContain('data-ms-assign-error=""');
+    expect(html).toContain("timeout");
+    expect(html).not.toContain("data-ms-assign-retry");
   });
 });

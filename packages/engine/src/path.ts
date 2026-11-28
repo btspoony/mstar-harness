@@ -8,7 +8,7 @@
  * Spec source: `skills/mstar-conventions/SKILL.md` § 路径符号 (SSOT),
  * § {SPECS_DIR} 解析（找到非空目录即停）and § Git 跟踪策略 /
  * § Plan-Writing Path Gate, plus ADR
- * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The
+ * `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`. The
  * harness root is one fixed location; `harness_dir` declarations,
  * `MSTAR_HARNESS_DIR` and the legacy `.agents/` / `.plans/` / `plans/`
  * candidates are retired in the same release and silently ignored — no
@@ -37,6 +37,7 @@ import { findMstarc, loadMstarc, MSTARC_FILE, type MstarcConfig, type MstarcStri
 import { _DEFAULT_PROJECT } from "./project.js";
 import { getArtifactStore } from "./store.js";
 import { StoreError, type StoreContext } from "./store-db.js";
+import { CollaborationIdentityError } from "./collaboration-identity.js";
 
 /**
  * Options for `resolveHarnessDir`.
@@ -344,6 +345,17 @@ export function canonicalizeNearestExisting(path: string): string {
   }
 }
 
+/** why: The `sdd` base (before the per-plan join) — the `.mstarc` `sdd_dir`
+ * declaration or `{HARNESS_DIR}/sdd`. Shared by `resolveSddDir` and
+ * `assignmentSourceHomes`.
+ * see docs/knowledge/conventions/plan-frontmatter-declarations.md
+ */
+function sddBaseDir(harnessDir: string): string {
+  const base = resolve(harnessDir);
+  const declared = mstarcDirOverride(base, "sddDir");
+  return declared !== null ? declared : join(base, "sdd");
+}
+
 /**
  * Compose `{SDD_DIR}` = `{HARNESS_DIR}/sdd/<plan-id>/` (plan-conventions
  * § 路径符号). A `.mstarc` `[config] sdd_dir` declaration replaces the
@@ -354,10 +366,7 @@ export function canonicalizeNearestExisting(path: string): string {
  */
 export function resolveSddDir(harnessDir: string, planId: string): string {
   assertSafePathComponent(planId, "planId");
-  const base = resolve(harnessDir);
-  const declared = mstarcDirOverride(base, "sddDir");
-  const sddBase = declared !== null ? declared : join(base, "sdd");
-  return join(sddBase, planId);
+  return join(sddBaseDir(harnessDir), planId);
 }
 
 /**
@@ -554,6 +563,96 @@ export function resolveReviewDir(
   opts: ResolveHarnessDirOptions = {},
 ): string {
   return resolveHarnessSubdir(startDir, opts, "reviewDir", "reviews");
+}
+
+/**
+ * Assignment source home (compass D14): a resolved base directory that may
+ * hold assignment files. The three write homes (`sdd`, `iteration`,
+ * `workflow`) are the per-identity `<base>/<id>/assignments` bases — this
+ * root is the base itself, without the identity segment; the harness home
+ * is the read-only fourth source `{HARNESS_DIR}/assignments`, complete.
+ */
+export type AssignmentSourceHome = {
+  name: "sdd" | "iteration" | "workflow" | "harness";
+  root: string;
+  write: boolean;
+};
+
+/**
+ * The write home for assignment files of the given identity (compass D6):
+ * precedence plan → iteration → workflow; no identity returns `null` (no
+ * harness path). `.mstarc` `sdd_dir` / `iteration_dir` / `workflow_dir`
+ * overrides move the base; the trailing `assignments` segment never drops.
+ * Every identity component passes `assertSafePathComponent` before joining.
+ * A resolved write home that aliases the read-only flat source
+ * `{HARNESS_DIR}/assignments` (compass D14 — e.g. `sdd_dir=.` with
+ * `planId: ".mstar"`) throws: writing there would corrupt the read-only
+ * source, and returning `null` would read as "no harness" and silently
+ * switch a caller to inline.
+ */
+export function resolveAssignmentDir(opts: {
+  harnessDir: string;
+  planId?: string;
+  iterationId?: string;
+  workflowId?: string;
+}): string | null {
+  let dir: string | null = null;
+  if (opts.planId !== undefined) dir = join(resolveSddDir(opts.harnessDir, opts.planId), "assignments");
+  else if (opts.iterationId !== undefined) {
+    assertSafePathComponent(opts.iterationId, "iterationId");
+    dir = join(resolveIterationDir(opts.harnessDir), opts.iterationId, "assignments");
+  } else if (opts.workflowId !== undefined) {
+    assertSafePathComponent(opts.workflowId, "workflowId");
+    // why: the harness dir is a caller-held fact — pass it as the verbatim
+    // `harnessDir` override so no redundant Git probe runs; `.mstarc`
+    // discovery is unchanged (the harness dir is the discovery start).
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    dir = join(resolveWorkflowDir(opts.harnessDir, { harnessDir: opts.harnessDir }), opts.workflowId, "assignments");
+  }
+  if (dir === null) return null;
+  const flatHome = join(resolve(opts.harnessDir), "assignments");
+  if (canonicalizeNearestExisting(dir) === canonicalizeNearestExisting(flatHome)) {
+    throw new Error(
+      `assignment write home must not alias the read-only flat source ${flatHome} \u2014 got ${dir}`,
+    );
+  }
+  return dir;
+}
+
+/**
+ * The three write-home bases of one harness dir, derived from ONE `.mstarc`
+ * snapshot: the per-key declaration (`sdd_dir` / `iteration_dir` /
+ * `workflow_dir`, resolved against the config file's directory) or the
+ * `{HARNESS_DIR}/<fallback>` default. A containment decision that loaded the
+ * config once cannot mix declarations from two snapshots, and a configured
+ * checkout pays one config read per decision instead of one per base.
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+function assignmentWriteBases(harnessDir: string): Array<{ name: AssignmentSourceHome["name"]; root: string }> {
+  const base = resolve(harnessDir);
+  const rc = loadMstarc(base, dirname(base));
+  const declared = (key: MstarcStringKey, fallback: string): string => {
+    const value = rc?.config[key];
+    return value ? resolve(rc!.dir, value) : join(base, fallback);
+  };
+  return [
+    { name: "sdd", root: declared("sddDir", "sdd") },
+    { name: "iteration", root: declared("iterationDir", "iterations") },
+    { name: "workflow", root: declared("workflowDir", "workflows") },
+  ];
+}
+
+/**
+ * Every assignment source home (compass D14): the three write homes plus
+ * `{HARNESS_DIR}/assignments` as the read-only fourth source. Containment
+ * checks compare against these resolved roots, never a `harnessDir`
+ * prefix — a `.mstarc` override may move a base outside the harness dir.
+ */
+export function assignmentSourceHomes(harnessDir: string): AssignmentSourceHome[] {
+  return [
+    ...assignmentWriteBases(harnessDir).map((home) => ({ name: home.name, root: home.root, write: true })),
+    { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
+  ];
 }
 
 /**
@@ -959,9 +1058,7 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
   } catch (error) {
     if (error instanceof CatalogError && error.code === "catalog.not-found") {
       // Continue to first registration.
-    } else if (error instanceof StoreError && error.code === "store.not-initialized") {
-      return;
-    } else if (error instanceof CatalogError && error.code === "store.not-active") {
+    } else if (catalogRegistrationUnavailable(error)) {
       return;
     } else {
       throw error;
@@ -981,10 +1078,29 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
       operation,
     );
   } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") return;
-    if (error instanceof CatalogError && error.code === "store.not-active") return;
+    if (catalogRegistrationUnavailable(error)) return;
     throw error;
   }
+}
+
+/**
+ * invariant: Catalog writes live on the per-repository collaboration authority, so a
+ * checkout whose scope has no resolvable origin or no active store yet has
+ * nothing to register into: scaffold creates the harness and leaves the
+ * catalog row to the store lifecycle. Only those harmless absence states defer
+ * — an invalid/unsupported mode, an unreadable or misplaced config, or any
+ * other actionable identity refusal must surface, and a real catalog verb's
+ * refusal is never relaxed.
+ */
+function catalogRegistrationUnavailable(error: unknown): boolean {
+  if (error instanceof CollaborationIdentityError && error.code === "collaboration.repo-identity-unresolved") return true;
+  if (
+    error instanceof StoreError &&
+    (error.code === "collaboration.not-initialized" || error.code === "collaboration.not-active" || error.code === "store.not-initialized")
+  ) {
+    return true;
+  }
+  return error instanceof CatalogError && error.code === "store.not-active";
 }
 
 
@@ -1003,70 +1119,34 @@ const GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 .mstar/
 `;
 
-/**
- * Legacy `.agents/` `.gitignore` snippet — verbatim embedded copy of the
- * skill's legacy equivalent (plan-conventions § Git 跟踪策略 "Legacy
- * `.agents/` 等价"), comments included. Used when the resolved harness kind
- * is `.agents`.
- */
-const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) \u2014 legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-!.agents/adr/
-!.agents/adr/**
-`;
-
 /** Harness `.gitignore` fence entries, derived from the `.mstar/` snippet (process root only). */
 const GITIGNORE_PROCESS_ENTRIES: readonly string[] = GITIGNORE_SNIPPET.split("\n")
   .filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/"))
   .map((line) => line.trim());
 
-/** Harness `.gitignore` fence entries (ignore + re-include), derived from the legacy `.agents/` snippet. */
-const GITIGNORE_PROCESS_ENTRIES_AGENTS: readonly string[] = GITIGNORE_SNIPPET_AGENTS.split("\n")
-  .filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/"))
-  .map((line) => line.trim());
-
-/**
- * Harness kind for the gitignore fence — the canonical snippet is per
- * harness layout (plan-conventions § Git 跟踪策略): `.mstar/` (default) and
- * legacy `.agents/`.
- */
-export type HarnessKind = "mstar" | "agents";
-
-/**
- * Emit the canonical `.gitignore` snippet for `kind` (plan-conventions
- * § Git 跟踪策略). The `.mstar/` kind ignores the whole process root — tracked
- * results live under `.agents/` and the tracked `.mstarc` declares that
- * layout, so the snippet carries no re-include; the legacy `.agents/` kind
- * keeps its re-includes. When the kind is unknown (omitted), both snippets
- * are emitted so either fence can be applied.
- */
-export function emitGitignoreSnippet(kind?: HarnessKind): string {
-  if (kind === "agents") return GITIGNORE_SNIPPET_AGENTS;
-  if (kind === "mstar") return GITIGNORE_SNIPPET;
-  return `${GITIGNORE_SNIPPET}${GITIGNORE_SNIPPET_AGENTS}`;
+/** Emit the canonical `.gitignore` snippet (plan-conventions § Git 跟踪策略). */
+export function emitGitignoreSnippet(): string {
+  return GITIGNORE_SNIPPET;
 }
 
 /**
  * Harness-root declaration rule: a trimmed, non-blank, non-comment line
- * matching `^!?/?\.(?:mstar|agents)(?:\/|$)`.
- * Both root spellings count, with or without a leading slash, as does a
- * negation (`!`); `.mstarc` alone does not declare. This is a mechanical
- * line scan — no escaping, glob, precedence or custom-root semantics.
+ * matching `^!?/?\.mstar(?:\/|$)`.
+ * The `.mstar/` root counts with or without a leading slash, as does a
+ * negation (`!`); `.agents/` holds tracked corpora, never the harness root,
+ * so its rules do not declare. `.mstarc` alone does not declare either. This
+ * is a mechanical line scan — no escaping, glob, precedence or custom-root
+ * semantics.
+ * see skills/mstar-conventions/references/git-tracking-and-gitignore.md
  */
-const HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+const HARNESS_ROOT_DECLARATION = /^!?\/?\.mstar(?:\/|$)/;
 
 /**
  * Whether `content` states a harness-root declaration: any trimmed non-blank,
- * non-comment line naming a `.mstar` or `.agents` harness root. Read only —
- * the lines are trimmed for recognition and the input bytes are never
- * rewritten. A declared file is author-owned: the caller must not append,
- * reorder, dedupe or normalize its contents.
+ * non-comment line naming the `.mstar` harness root. Read only — the lines
+ * are trimmed for recognition and the input bytes are never rewritten. A
+ * declared file is author-owned: the caller must not append, reorder, dedupe
+ * or normalize its contents.
  */
 export function hasHarnessRootDeclaration(content: string): boolean {
   return content
@@ -1081,19 +1161,15 @@ export function hasHarnessRootDeclaration(content: string): boolean {
 /**
  * Validate that `<root>/.gitignore` carries a harness ignore policy. An
  * authored harness-root declaration makes the file author-owned and the gate
- * passes as `gitignore.author-declared` — regardless of the DETECTED harness
- * kind, and without proposing a rewrite, normalization or canonical-completion
- * append. A file with no such declaration is undeclared: it reports the
- * canonical entries it lacks for the detected kind — `.mstar/` for a `.mstar`
- * harness, `.agents/` for a legacy `.agents` harness, the default `.mstar/`
- * set for a layout without a canonical snippet (rung-3 `.plans`/`plans`, or no
- * harness yet) — plus the fix that appends the canonical snippet. A missing
- * file stays `gitignore.missing`. Non-blocking: returns a `ValidationResult`
- * instead of throwing.
+ * passes as `gitignore.author-declared` without proposing a rewrite,
+ * normalization or canonical-completion append. A file with no such
+ * declaration is undeclared: it reports the canonical `.mstar/` entry it
+ * lacks plus the fix that appends the canonical snippet. A missing file stays
+ * `gitignore.missing`. Non-blocking: returns a `ValidationResult` instead of
+ * throwing.
  */
 export function validateGitignore(root: string): ValidationResult {
   const gitignorePath = join(resolve(root), ".gitignore");
-  const kind = detectHarnessKind(resolveHarnessDir(root));
   let content: string;
   try {
     content = readFileSync(gitignorePath, "utf8");
@@ -1103,7 +1179,7 @@ export function validateGitignore(root: string): ValidationResult {
       severity: "medium",
       code: "gitignore.missing",
       message: `no .gitignore found at ${gitignorePath}`,
-      fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
+      fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
     };
   }
   if (hasHarnessRootDeclaration(content)) {
@@ -1120,30 +1196,14 @@ export function validateGitignore(root: string): ValidationResult {
       .map((line) => line.trim())
       .filter((line) => line.length > 0),
   );
-  // Every canonical entry itself states a `.mstar/`/`.agents/` root
-  // declaration, so an undeclared file cannot hold any of them: the
-  // diagnostic lists the complete set for the detected kind (the default
-  // `.mstar/` set when the layout is unknown).
-  const canonical = kind === "agents" ? GITIGNORE_PROCESS_ENTRIES_AGENTS : GITIGNORE_PROCESS_ENTRIES;
-  const missing = canonical.filter((entry) => !lines.has(entry));
-  const label =
-    kind === "agents" ? ".agents/ set" : kind === "mstar" ? ".mstar/ set" : "either .mstar/ or .agents/ set";
+  const missing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
   return {
     ok: false,
     severity: "medium",
     code: "gitignore.missing-entries",
-    message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (${label}): ${missing.join(", ")}`,
-    fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
+    message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (.mstar/ set): ${missing.join(", ")}`,
+    fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
   };
-}
-
-/** Detect the gitignore fence kind from a resolved harness dir (basename). */
-export function detectHarnessKind(harnessDir: string | null): HarnessKind | null {
-  if (!harnessDir) return null;
-  const name = basename(resolve(harnessDir));
-  if (name === ".mstar") return "mstar";
-  if (name === ".agents") return "agents";
-  return null;
 }
 
 /**

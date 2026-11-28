@@ -460,10 +460,13 @@
 /* The pager sits INSIDE `.panel-foot`, which already carries the prototype's single
    `6px 12px` and its hairline (`prototype.html`, `.panel-foot` — one footer row, the controls
    pushed right by `margin-left: auto`). Both rules carried their own padding and border,
-   so a paged list drew a double gutter and two hairlines. */
+   so a paged list drew a double gutter and two hairlines. The foot is a flex row, so the
+   pager also needs a share of it: a shrink-wrapped flex item leaves the auto margin
+   below with no free space and the controls huddle at the leading edge. */
 .panel-foot > .pager {
   padding: 0;
   border-block-start: 0;
+  flex: 1 1 auto;
 }
 
 .panel-foot > .pager > :last-child {
@@ -549,8 +552,8 @@
    which flattened a whole section and only worked by accident, because the badge's
    inline-flex also kept the goal rows from overlapping. A block container does the same
    job without pretending a section is a label.
-   `.feature-body-arm` is the roadmap arm's wrapper: the milestone write controls sit
-   OUTSIDE the arm (so an empty or absent roadmap can still create its first
+   `.feature-body-arm` is the milestone arm's wrapper: the milestone write controls sit
+   OUTSIDE the arm (so an empty milestone set can still create its first
    milestone), and this keeps their block rhythm identical to the body's. */
 .ms-container .feature-body,
 .ms-container .feature-body-arm {
@@ -565,7 +568,7 @@
 }
 
 /*
- * `.milestone-row` used to be styled here as a one-line flex row for a roadmap goal row
+ * `.milestone-row` used to be styled here as a one-line flex row for a goal row
  * that no longer exists — no component names the class except the overview's board, whose
  * rule lives in the product sheet and wants two stacked lines. This block made the board's
  * `.milestone-foot` a flex sibling of `.milestone-top`, squeezing the progress bar to 0px

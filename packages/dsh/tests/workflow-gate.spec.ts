@@ -52,6 +52,7 @@
  * (the ledger ROW's display name is capped separately).
  */
 import { describe, expect, it, afterEach } from 'bun:test'
+import { DatabaseSync } from 'node:sqlite'
 import { realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -60,7 +61,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { PreToolDecision, ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import { SEVERITY_ORDER } from '@mstar-harness/engine'
 import { iterationViolationView } from '../src/gates/_shared.ts'
-import { bootApp, gitInit, restartSeam, seamDisposers, seedHarness, seedActiveWorkflow, FakeSessionsRegistry, type BootResult } from './harness.ts'
+import { bootApp, collaborationDbPathAt, gitInit, restartSeam, seamDisposers, seedHarness, seedActiveWorkflow, seedPendingRegistration, FakeSessionsRegistry, type BootResult } from './harness.ts'
 import type { DispatchGateAdvisory } from '../src/index.ts'
 import { DISPATCH_LOGGER } from '../src/gates/dispatch.ts'
 import { readAgentFlow } from '../src/gates/agent-flow.ts'
@@ -91,23 +92,31 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** Fully valid writable Assignment (mirrors the opencode `completeAssignment`). */
-const VALID_WRITABLE = `## Assignment
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/dsh-package-core
+task_budget: S — one focused implementer round
+---
 
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/dsh-package-core
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+## Assignment
 
 Do the thing, evidence-first.
 `
 
-/** Missing `Execute as` — the subagent field-gate's first advisory case. */
-const MISSING_EXECUTE_AS = `## Assignment
+/** Missing `Execute as` — the subagent field-gate's first advisory case. The
+ * remaining core KEYS stay in the front matter: the shape guard reads keys,
+ * so a fence without one would not even read as Assignment-shaped.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+const MISSING_EXECUTE_AS = `---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.
 `
@@ -384,7 +393,11 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     expect(decision).toEqual({ kind: 'allow' })
     expect(advisories).toHaveLength(1)
     expect(advisories[0]!.tool).toBe('subagent')
-    expect(violationCodes(advisories[0])).toContain('assignment.field.missing-execute-as')
+    expect(violationCodes(advisories[0])).toContain('assignment.field.execute-as')
+    // The retired Slice-2 alias survives on the same violation row.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(advisories[0]!.result.violations.find((v) => v.code === 'assignment.field.execute-as')?.aliases)
+      .toContain('assignment.presence.missing-execute-as')
   })
 
   it('(c) valid subagent Assignment → clean pass, silent (no workflow advisory)', async () => {
@@ -414,6 +427,52 @@ describe('workflow gate — non-workflow tools unaffected', () => {
     const decision = await app.ctx.waterfall('tools/pre-execute', toolExec('bash', { command: 'echo hi' }), defaultAllow)
 
     expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+  })
+})
+
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+
+describe('workflow gate — the retired body-label grammar refuses at the subagent surface too', () => {
+  it('a body-label Assignment is refused with dispatch.assignment.legacy-format (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: a carrier
+    // whose fields live in the retired `**Label**` grammar must reach the
+    // legacy-format refusal on the subagent surface exactly as on every
+    // other gate, never pass as a field-gate miss.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+**Working branch**: feature/x
+
+Do the thing.
+`
+    const app = booted = await bootApp()
+    const advisories = captureAdvisories(app.ctx)
+
+    // why: The control-root cleanliness gate reads the process main worktree:
+    // run the dispatch from the fixture's clean harness repo, never the
+    // ambient checkout the suite runs in.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const prev = process.cwd()
+    process.chdir(app.root)
+    let decision
+    try {
+      decision = await app.ctx.waterfall('tools/pre-execute', subagentExec(LEGACY_BODY_LABEL), defaultAllow)
+    } finally {
+      process.chdir(prev)
+    }
+
+    // Terminal: the retired format declares nothing a gate could verify, so
+    // the default (soft) mode vetoes it — no advisory is emitted.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    expect(decision.kind).toBe('deny')
+    expect(decision.kind === 'deny' && decision.reason).toContain('dispatch.assignment.legacy-format')
     expect(advisories).toHaveLength(0)
   })
 })
@@ -714,6 +773,91 @@ describe('workflow gate — P-b lease attribution', () => {
     const unbound = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
     expect(unbound).toEqual({ kind: 'allow' })
     expect(warns.length - unboundWarnSnapshot).toBe(1)
+  })
+
+  it('(j) a pending catalog registration vetoes the hard dispatch instead of degrading to unreadable', async () => {
+    // invariant: The store's own registration verdict is not the fail-open "cannot read" arm — a
+    // half-registered lifecycle must block writable fan-out under `hard`, so `ralph` cannot start
+    // work beside a lifecycle whose catalog registration never committed. The plan row here is
+    // COVERED: without the registration veto this exact call is the ordinary allow.
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-registration-pending-')
+    const harnessDir = join(ws, '.mstar')
+    await seedPbTree(harnessDir, IN_PROGRESS_WITH_LEASE)
+    seedPendingRegistration(harnessDir, 'wf-1')
+    const app = booted = await bootApp({ workflowGate: 'hard', harnessDir: null })
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('catalog.registration-pending')
+    // invariant: The veto names the recovery the operator can actually run: closing the still
+    // registered lifecycle FIRST (its journal cannot be settled while it stays active), then the
+    // journal route the seeded journal qualifies for. The seeded row carries NO identity-failure
+    // record, so `purge-registration` would refuse it and must not be offered.
+    expect(decision.reason).toContain('mstar workflow lifecycle --workflow wf-1')
+    expect(decision.reason).toContain('mstar catalog reconcile --abort --operation-id op-pending-wf-1')
+    expect(decision.reason).not.toContain('mstar catalog purge-registration')
+    expect(decision.reason.indexOf('mstar workflow lifecycle')).toBeLessThan(decision.reason.indexOf('mstar catalog reconcile'))
+    // invariant: This is not the degrade — a fail-open read would have emitted its one warn and
+    // allowed the call.
+    expect(warns.length - warnSnapshot).toBe(0)
+  })
+
+  it('(k) a CONFIRMED pending registration vetoes under the default `warn` too, with no advisory', async () => {
+    // invariant: A pending registration is the store refusing a half-registered lifecycle, not a
+    // lease red line: `warn` must not downgrade it to an advisory the call may proceed through.
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-registration-warn-')
+    const harnessDir = join(ws, '.mstar')
+    await seedPbTree(harnessDir, IN_PROGRESS_WITH_LEASE)
+    seedPendingRegistration(harnessDir, 'wf-1')
+    const app = booted = await bootApp({ workflowGate: 'warn', harnessDir: null })
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', workflowExecFrom('deploy-x', ws), defaultAllow)
+
+    expect(decision.kind).toBe('deny')
+    if (decision.kind !== 'deny') throw new Error('expected deny')
+    expect(decision.reason).toContain('catalog.registration-pending')
+    expect(advisories).toHaveLength(0)
+  })
+
+  it('(l) an UNREADABLE journal lane degrades fail-open in `warn` — it is not a registration verdict', async () => {
+    // invariant: Only the store CONFIRMING a pending registration vetoes. A journal read that
+    // cannot answer keeps the documented one-warn pass-through, so a broken collaboration lane
+    // never bricks fan-out. The plan row is COVERED: nothing else gates this call.
+    const ws = await makeHarnessWorkspace('dsh-ws-pb-registration-unreadable-')
+    const harnessDir = join(ws, '.mstar')
+    await seedPbTree(harnessDir, IN_PROGRESS_WITH_LEASE)
+    // why: A SPLIT source is what the finding describes — the execution database still serves the
+    // selected workflow, while the journal lives in the collaboration lane. Post-fence shape: the
+    // execution store no longer carries `catalog_operations`, so the verdict is a cross-file read.
+    const store = new DatabaseSync(join(harnessDir, 'store.db'))
+    try {
+      store.exec('drop table catalog_operations')
+    } finally {
+      store.close()
+    }
+    // why: A directory where the collaboration database belongs is the REAL engine channel for
+    // `collaboration.unreadable`, never a mocked reader result.
+    const lane = collaborationDbPathAt(harnessDir)
+    await rm(lane, { force: true })
+    await mkdir(lane, { recursive: true })
+    const app = booted = await bootApp({ workflowGate: 'warn', harnessDir: null })
+    const warns = captureDispatchWarns(app.ctx)
+    const warnSnapshot = warns.length
+    const advisories = captureAdvisories(app.ctx)
+
+    const decision = await app.ctx.waterfall('tools/pre-execute', ralphExecFrom('probe the codebase', ws), defaultAllow)
+
+    expect(decision).toEqual({ kind: 'allow' })
+    expect(advisories).toHaveLength(0)
+    // why: the degraded read is loud and ONE: the operator learns the lease check was skipped.
+    const added = warns.slice(warnSnapshot)
+    expect(added).toHaveLength(1)
+    expect(added[0]).toContain('cannot read the ACTIVE execution store')
   })
 })
 

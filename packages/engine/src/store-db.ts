@@ -22,7 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { closeSync, existsSync, fstatSync, fsyncSync, linkSync, lstatSync, openSync, readSync, statSync, unlinkSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { resolveProcessHarnessDir } from "./coordination.js";
 import { readDeclaredNodeFloor, warnUncheckableNodeFloor } from "./core.js";
 // Type-only import: erased at runtime, so it cannot create a cycle. The VALUE
@@ -66,6 +66,9 @@ export type StoreErrorCode =
   | "store.corrupt"
   | "store.busy"
   | "store.upgrade-attestation-missing"
+  // note: An open mirror run in a combined store is settled by the released build that owns
+  // `sync_runs` there, so the schema advance past its ceiling refuses instead of stranding it.
+  | "store.upgrade-sync-run-open"
   | "store.upgrade-state-changed"
   | "store.upgrade-staged-record-missing"
   | "store.upgrade-staged-record-malformed"
@@ -85,7 +88,67 @@ export type StoreErrorCode =
   | "store.created-handle-failed"
   | "store.upgrade-dsh-source-refused"
   | "store.upgrade-dsh-ack-unmatched"
-  | "store.upgrade-dsh-failed";
+  | "store.upgrade-dsh-failed"
+  // note: The collaboration lane's own database boundary (collaboration-store.ts):
+  // missing routed database, inert staged database, invalid/corrupt/inaccessible
+  // database, and a trusted repository/mode/store-id/epoch that does not match.
+  | "collaboration.not-initialized"
+  | "collaboration.not-active"
+  // note: An admitted older lane is read, not migrated: only `store upgrade --operator` advances it.
+  | "collaboration.upgrade-required"
+  // note: A `remote` selection's local database is a verified cache; the local domain entries
+  // refuse it because the provider, not these rows, is the authority.
+  | "collaboration.mode-unavailable"
+  | "collaboration.operation-partial"
+  // invariant: One record's staged move (cross-authority-move.ts, lane v4): its source row freezes
+  // the record from `staged` on, so a write to it is `issue.move-in-progress`, and a phase the
+  // state machine does not allow forward is `collaboration.move-phase-invalid`.
+  | "issue.move-in-progress"
+  | "collaboration.move-phase-invalid"
+  // note: One record's move into a destination that already holds a record under the same reference,
+  // whose content is not the frozen copy; refusing it is what keeps publication from losing history.
+  | "collaboration.move-destination-occupied"
+  | "collaboration.unreadable"
+  | "collaboration.stale-binding"
+  // note: Remote observation evidence: a scope the host could not verify, the snapshot gap a
+  // consumer must disclose instead of reading as empty, and a stale base revision.
+  | "collaboration.observation-incomplete"
+  | "collaboration.observation-stale"
+  // note: The remote boundary's own refusals (collaboration-remote.ts): a malformed DTO, a
+  // check that does not address the selected project, and the provider access outcomes.
+  | "remote.input-invalid"
+  | "remote.scope-mismatch"
+  | "remote.denied"
+  | "remote.revoked"
+  | "remote.unsafe-fidelity"
+  | "remote.unavailable"
+  // note: One operation id is bound to one frozen request; a different request or binding
+  // under the same id never replays and never overwrites the stored intent.
+  | "remote.operation-conflict"
+  // note: The outbox lifecycle's own refusals: an unknown or unaddressable intent, a send
+  // that the binding's state does not admit, and a business write whose effect is only
+  // durably queued (never mapped to business success).
+  | "remote.intent-not-found"
+  | "remote.dispatch-refused"
+  | "remote.effect-pending"
+  // note: A settled provider effect that does not carry the business outcome its frozen request
+  // reviewed: the composite declines instead of recording an execution binding from a guess.
+  | "remote.effect-mismatch"
+  // invariant: The one-way authority cutover (collaboration-cutover.ts): a combined or
+  // partially cut store is not runtime authority, a competing source/mode/
+  // manifest cannot win by force, pending catalog or mirror work must be
+  // settled first, and a fence without a verified recovery point never runs.
+  | "collaboration.cutover-required"
+  | "collaboration.cutover-conflict"
+  | "collaboration.cutover-not-quiescent"
+  // invariant: The fence's own durable boundary failed: a failed commit or an incomplete
+  // rollback leaves the persisted state UNCONFIRMED, so the operator must
+  // inspect it instead of retrying as if nothing happened.
+  | "collaboration.cutover-unconfirmed"
+  | "collaboration.backup-incomplete"
+  // note: The cutover activation input: an activation needs a named operator whose
+  // own attestation document is the one supplied.
+  | "store.attestation-invalid";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
 export class StoreError extends Error {
@@ -255,7 +318,7 @@ const MAX_BUSY_TIMEOUT_MS = 2147483647;
  * value is floored into that domain and falls back to the published 5000ms
  * constant when even the floor is out of it - the number the pragma uses is
  * then the number every refusal reports. */
-function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
+export function busyTimeoutMs(value = DEFAULT_BUSY_TIMEOUT_MS): number {
   const floored = Math.floor(value);
   return Number.isInteger(floored) && floored > 0 && floored <= MAX_BUSY_TIMEOUT_MS ? floored : DEFAULT_BUSY_TIMEOUT_MS;
 }
@@ -276,7 +339,7 @@ function refuseOpenFailure(error: unknown, dbPath: string, timeout = DEFAULT_BUS
 }
 
 /** Map a bounded-wait BUSY failure to the stable visible refusal. */
-function isBusyError(error: unknown): boolean {
+export function isBusyError(error: unknown): boolean {
   const err = error as { code?: string; errcode?: string | number; message?: string };
   return (
     err?.errcode === 5 ||
@@ -331,13 +394,44 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
 }
 
 /**
+ * Per-owner connection policy. Each member is opt-in and defaults to the
+ * execution lane's established behavior, so uncustomized callers keep the
+ * exact pragma order and side effects they had before.
+ */
+export type StoreConnectOptions = Readonly<{
+  /** invariant: Open a writer only when the database exists (`mode=rw`); never create it. */
+  noCreate?: boolean;
+  /** why: Keep the database's current journal mode instead of switching a writer to WAL. */
+  keepJournalMode?: boolean;
+}>;
+
+/**
  * Open a connection with the contract §2 pragma order: busy_timeout first,
  * then WAL (verified), then synchronous=FULL on writers, query_only=ON on
  * readers, and foreign_keys=ON (verified) on both.
  */
-async function connect(dbPath: string, mode: "read" | "write", timeout = DEFAULT_BUSY_TIMEOUT_MS): Promise<StoreDb> {
+export async function connect(
+  dbPath: string,
+  mode: "read" | "write",
+  timeout = DEFAULT_BUSY_TIMEOUT_MS,
+  options: StoreConnectOptions = {},
+): Promise<StoreDb> {
   const { DatabaseSync } = await loadSqliteDriver();
-  return openConnection(dbPath, mode, DatabaseSync, timeout);
+  return openConnection(dbPath, mode, DatabaseSync, timeout, options);
+}
+
+/** note: `dbPath` as a SQLite URI path: every segment percent-encoded, so `%`, `?`
+ * and `#` in a store path are addressed literally. */
+function sqliteUriPath(dbPath: string): string {
+  return resolve(dbPath).split(sep).map(encodeURIComponent).join("/");
+}
+
+/**
+ * invariant: A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
+ * missing one refuses instead of being created.
+ */
+function existingOnlyUri(dbPath: string): string {
+  return `file:${sqliteUriPath(dbPath)}?mode=rw`;
 }
 
 /** SQLite's own file header is 100 bytes: bytes 0–15 are its format magic and
@@ -357,7 +451,7 @@ const WAL_FILE_FORMAT_VERSION = 2;
  * retired file route, and it runs before any existence check, header probe or
  * driver open.
  */
-function assertAbsentOrRegularStoreFile(dbPath: string): void {
+export function assertAbsentOrRegularStoreFile(dbPath: string): void {
   let stats: Stats | undefined;
   let examineError: unknown;
   try {
@@ -433,22 +527,7 @@ function isWalFormatDatabase(header: Buffer, bytes: number): boolean {
  */
 function ensureJournalForRead(dbPath: string): void {
   if (existsSync(`${dbPath}-wal`)) return;
-  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
-  let bytes: number;
-  try {
-    const source = openSync(dbPath, "r");
-    try {
-      bytes = fstatSync(source).size;
-      if (readSync(source, header, 0, header.length, 0) < header.length) return;
-    } finally {
-      closeSync(source);
-    }
-  } catch {
-    // Not a readable store file: the open below reports its own failure, exactly
-    // as it did before this shape check existed.
-    return;
-  }
-  if (!isWalFormatDatabase(header, bytes)) return;
+  if (!walShapedStoreFile(dbPath)) return;
   let journal: number;
   try {
     journal = openSync(`${dbPath}-wal`, "wx");
@@ -458,6 +537,24 @@ function ensureJournalForRead(dbPath: string): void {
     return;
   }
   closeSync(journal);
+}
+
+/** Whether the file's own header says WAL, read WITHOUT creating anything. */
+export function walShapedStoreFile(dbPath: string): boolean {
+  const header = Buffer.alloc(DATABASE_HEADER_BYTES);
+  try {
+    const source = openSync(dbPath, "r");
+    try {
+      const bytes = fstatSync(source).size;
+      if (readSync(source, header, 0, header.length, 0) < header.length) return false;
+      return isWalFormatDatabase(header, bytes);
+    } finally {
+      closeSync(source);
+    }
+  } catch {
+    // note: Not a readable store file: the open reports its own failure.
+    return false;
+  }
 }
 
 /**
@@ -470,6 +567,7 @@ function openConnection(
   mode: "read" | "write",
   DatabaseSync: SqliteModule["DatabaseSync"],
   timeout = DEFAULT_BUSY_TIMEOUT_MS,
+  options: StoreConnectOptions = {},
 ): StoreDb {
   // node:sqlite rejects an explicit `undefined` options argument - open
   // writers without a second argument, readers with the read-only option.
@@ -481,7 +579,10 @@ function openConnection(
     // back before the read open (see the helpers).
     assertAbsentOrRegularStoreFile(dbPath);
     if (mode === "read") ensureJournalForRead(dbPath);
-    db = mode === "read" ? new DatabaseSync(dbPath, { readOnly: true }) : new DatabaseSync(dbPath);
+    db =
+      mode === "read"
+        ? new DatabaseSync(dbPath, { readOnly: true })
+        : new DatabaseSync(options.noCreate === true ? existingOnlyUri(dbPath) : dbPath);
   } catch (error) {
     if (mode === "read" && isRawCantOpen(error)) throw error;
     refuseOpenFailure(error, dbPath, timeout);
@@ -498,8 +599,10 @@ function openConnection(
         fail("query_only pragma did not hold");
       }
     } else {
-      const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
-      if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      if (options.keepJournalMode !== true) {
+        const wal = db.prepare("pragma journal_mode=wal").get() as { journal_mode?: string } | undefined;
+        if (wal?.journal_mode !== "wal") fail("WAL journal mode was not applied");
+      }
       db.exec("pragma synchronous=FULL");
       if ((db.prepare("pragma synchronous").get() as { synchronous?: number } | undefined)?.synchronous !== 2) {
         fail("synchronous=FULL was not applied");
@@ -1048,7 +1151,49 @@ function settlementSignalRefusal(signal: SettlementAttestationNeeded): StoreErro
   );
 }
 
-export type Migration = { version: number; name: string; sql: string; normalize?: (db: StoreDb, context: MigrationContext) => void };
+export type Migration = {
+  version: number;
+  name: string;
+  sql: string;
+  normalize?: (db: StoreDb, context: MigrationContext) => void;
+  /**
+   * invariant: The table this body alters, when the body cannot run without it. The cutover
+   * fence moves that table to the collaboration lane and drops the local copy, so a FENCED
+   * combined store records the version without running the body; the lane's own ladder applies
+   * the same alteration there. The same absence in an unfenced store is damage and still fails.
+   */
+  requiresTable?: string;
+};
+
+function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
+  const runs = openMirrorRuns(db);
+  if (runs.length === 0) return;
+  const named = runs
+    .map((run) => `${run.direction} run ${run.runId} for binding ${run.bindingId} (pid ${run.holderPid} on host ${JSON.stringify(run.holderHost)}, started ${run.startedAt})`)
+    .join("; ");
+  throw Object.assign(
+    new StoreError(
+      "store.upgrade-sync-run-open",
+      `The combined store at schema ${currentVersion} still holds open mirror run(s): ${named}. Migration ` +
+        `${RELEASED_COMBINED_SCHEMA_MAX + 1} is the fence the last released 4.9.x build refuses, and that build is the only one that ` +
+        `settles a run in a combined store, so advancing past schema ${RELEASED_COMBINED_SCHEMA_MAX} would strand it: after the advance ` +
+        `neither build can settle it. Nothing was modified.`,
+      { runs },
+    ),
+    {
+      // invariant: This is the ONE owner of the run-open recovery text; the CLI forwards it
+      // verbatim instead of restating it, so the two cannot drift. Both commands name the SAME
+      // absolute harness: a run settled from another checkout settles THAT store and leaves this
+      // control root's run open, so the retry would refuse again.
+      recovery:
+        "Settle or take over the open mirror run(s) the refusal names with the 4.9.x build's " +
+        "mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|-> " +
+        "(add --take-run with an empty result list for a dead holder), then retry " +
+        "mstar store upgrade --harness <same-control-root> --operator <name>; after this build's schema advance " +
+        "neither build can settle the run.",
+    },
+  );
+}
 
 /** Migration 6 - durable roadmap content authority; never import disposable projection rows. */
 export const MIGRATION_6_SQL = `
@@ -1881,6 +2026,160 @@ drop table issue_project_moves_v19_stage;
 drop table issue_sync_state_v19_stage;
 `;
 
+/**
+ * Migration 20 - the collaboration cutover fence, in two parts.
+ *
+ * It detaches the execution-side catalog pin (`catalog_execution_bindings`)
+ * from the portable catalog identity: the pin rows are copied verbatim into a
+ * table of the same shape WITHOUT the foreign key, because catalog entities
+ * move to the per-repository collaboration database and SQLite cannot express
+ * that reference across files. Nothing about a pin's value, revision, hash or
+ * operation id changes; only the constraint that cannot hold after the move is
+ * gone. The cutover resolves pinned `(kind, id)` logically.
+ *
+ * It creates the single-row fence ledger (`collaboration_cutover`) that records
+ * a completed extraction: manifest identity, the exact source generation, the
+ * target stamp and the retained verified recovery point. A fresh store carries
+ * an empty ledger; the fence writes its one row in the cutover transaction, and
+ * that row is what tells a completed fence apart from a store that never held
+ * collaboration rows. Recording this version is also the durable schema
+ * advance: a binary built before the cutover refuses the fenced file as
+ * `store.schema-unsupported` instead of reopening the moved tables.
+ */
+export const MIGRATION_20_SQL = `
+create table catalog_execution_bindings_v20_stage as select * from catalog_execution_bindings;
+drop table catalog_execution_bindings;
+create table catalog_execution_bindings(
+  workflow_id text not null,
+  catalog_kind text not null check (catalog_kind in ('iteration','plan')),
+  catalog_id text not null,
+  workflow_root_kind text not null check (workflow_root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  workflow_relative_path text not null,
+  catalog_revision integer not null,
+  input_hash text not null,
+  pin_json text not null,
+  operation_id text not null,
+  primary key (workflow_id, catalog_kind, catalog_id)
+);
+insert into catalog_execution_bindings select * from catalog_execution_bindings_v20_stage;
+drop table catalog_execution_bindings_v20_stage;
+create table if not exists collaboration_cutover(
+  id integer primary key check (id = 1),
+  manifest_id text not null,
+  manifest_digest text not null,
+  source_store_id text not null,
+  source_epoch integer not null,
+  source_schema_version integer not null,
+  source_revision integer not null,
+  source_catalog_revision integer not null,
+  target_store_id text not null,
+  target_epoch integer not null,
+  backup_path text not null,
+  fenced_at text not null
+);
+`;
+
+/**
+ * Migration 21 - the composite reservation ledger.
+ *
+ * One cross-store composite (residual add/close, registration, minimal import)
+ * cannot be one transaction across the two databases, so the admitted execution
+ * operation reserves the execution facts it will finalize and correlates them
+ * with the collaboration effect it is about to commit. This table is that
+ * reservation: the `prepared` row (scoped to the addressed plan row or workflow)
+ * is the exclusion every conflicting execution writer checks, the frozen
+ * payload/target/token are what a resume must match, and the phase records how
+ * far the operation provably got (`prepared`, `declined` with its durable
+ * deterministic cause, or `confirmed` after the execution delta committed).
+ *
+ * The partial unique index is the reservation itself: at most ONE pending
+ * composite per addressed plan row in this execution generation. A declined or
+ * confirmed row releases the plan; a failed attempt never deletes another
+ * attempt's live reservation.
+ */
+export const MIGRATION_21_SQL = `
+create table execution_collaboration_intents(
+  execution_store_id text not null,
+  execution_epoch integer not null check (execution_epoch > 0),
+  operation_id text not null,
+  kind text not null check (kind in ('residual-add','residual-close','execution-register','execution-import')),
+  request_hash text not null,
+  workflow_id text,
+  plan_id text,
+  actor text not null,
+  expected_token text not null,
+  reserved_revision integer not null check (reserved_revision > 0),
+  target_json text not null,
+  frozen_payload text not null,
+  phase text not null check (phase in ('prepared','declined','confirmed')),
+  receipt_json text,
+  cause_code text,
+  cause_message text,
+  cause_details_json text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (execution_store_id, execution_epoch, operation_id)
+);
+create unique index execution_collaboration_intents_pending_plan
+  on execution_collaboration_intents(execution_epoch, workflow_id, plan_id)
+  where phase = 'prepared' and plan_id is not null;
+`;
+
+/**
+ * Migration 22 - the `issue-move` composite kind reaches the storage CHECK.
+ *
+ * Migration 21 closed `execution_collaboration_intents.kind` to the four composite kinds and a
+ * CHECK cannot be altered, so the ledger is rebuilt with `issue-move` added. The table is
+ * referenced by nothing and references nothing, so the same stage/copy/drop/rename/restore
+ * pattern the severity and disposition rebuilds use applies unchanged: rows are copied verbatim
+ * and the pending-plan index is restored, because a live `prepared` reservation is exactly what a
+ * rebuild must not lose.
+ */
+export const MIGRATION_22_SQL = `
+create table execution_collaboration_intents_v22_stage as
+  select * from execution_collaboration_intents;
+drop table execution_collaboration_intents;
+create table execution_collaboration_intents(
+  execution_store_id text not null,
+  execution_epoch integer not null check (execution_epoch > 0),
+  operation_id text not null,
+  kind text not null check (kind in ('residual-add','residual-close','execution-register','execution-import','issue-move')),
+  request_hash text not null,
+  workflow_id text,
+  plan_id text,
+  actor text not null,
+  expected_token text not null,
+  reserved_revision integer not null check (reserved_revision > 0),
+  target_json text not null,
+  frozen_payload text not null,
+  phase text not null check (phase in ('prepared','declined','confirmed')),
+  receipt_json text,
+  cause_code text,
+  cause_message text,
+  cause_details_json text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (execution_store_id, execution_epoch, operation_id)
+);
+insert into execution_collaboration_intents select * from execution_collaboration_intents_v22_stage;
+drop table execution_collaboration_intents_v22_stage;
+create unique index execution_collaboration_intents_pending_plan
+  on execution_collaboration_intents(execution_epoch, workflow_id, plan_id)
+  where phase = 'prepared' and plan_id is not null;
+`;
+
+/**
+ * Migration 23 - a project milestone plans in standard sessions, not a calendar date.
+ * Every existing target reads as unestimated; a date is not a measure of work.
+ */
+export const MIGRATION_23_SQL = `
+alter table project_milestones add column effort_sessions integer check (
+  effort_sessions is null or
+  (typeof(effort_sessions) = 'integer' and effort_sessions >= 1)
+);
+alter table project_milestones drop column target;
+`;
+
 /** Ordered immutable migrations. Never mutate an applied entry - append only. */
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "issue-core", sql: MIGRATION_1_SQL },
@@ -1902,8 +2201,14 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 17, name: "sync-push-ledger", sql: MIGRATION_17_SQL },
   { version: 18, name: "sync-run-lease", sql: MIGRATION_18_SQL },
   { version: 19, name: "issue-obsolete-disposition", sql: MIGRATION_19_SQL },
+  { version: 20, name: "collaboration-cutover-fence", sql: MIGRATION_20_SQL },
+  { version: 21, name: "execution-collaboration-intents", sql: MIGRATION_21_SQL },
+  { version: 22, name: "execution-issue-move-intent", sql: MIGRATION_22_SQL },
+  { version: 23, name: "milestone-effort-sessions", sql: MIGRATION_23_SQL, requiresTable: "project_milestones" },
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
+
+const RELEASED_COMBINED_SCHEMA_MAX = 19;
 
 /**
  * Execution tables the migrated schema must carry - the executable form of
@@ -1932,16 +2237,16 @@ export function migrationChecksum(migration: Migration): string {
   return createHash("sha256").update(migration.sql, "utf8").digest("hex");
 }
 
-function nowRfc3339(): string {
+export function nowRfc3339(): string {
   return new Date().toISOString();
 }
 
-type AppliedMigration = { version: number; name: string; checksum: string };
+export type AppliedMigration = { version: number; name: string; checksum: string };
 
 /** Read applied migration rows. A missing table is only tolerable while
  * creating a fresh store; readers of an existing database treat it as
  * corruption. */
-function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): AppliedMigration[] {
+export function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): AppliedMigration[] {
   const present = db
     .prepare("select count(*) as n from sqlite_master where type='table' and name='schema_version'")
     .get() as { n?: number } | undefined;
@@ -1976,14 +2281,14 @@ function readAppliedMigrations(db: StoreDb, tolerateMissingTable: boolean): Appl
  * and are never compared - "same version id, different SQL" is a build
  * mismatch caught by CI, not a runtime gate.
  */
-function validateAppliedMigrations(applied: AppliedMigration[]): number {
+export function validateAppliedMigrations(applied: AppliedMigration[], migrations: readonly Migration[] = MIGRATIONS): number {
   if (applied.length === 0) {
     throw new StoreError("store.corrupt", "The store database exists but no migrations are recorded");
   }
   let max = 0;
   for (let i = 0; i < applied.length; i++) {
     const row = applied[i];
-    const compiled = MIGRATIONS.find((m) => m.version === row.version);
+    const compiled = migrations.find((m) => m.version === row.version);
     if (!compiled) {
       // The three facts are distinct and all belong in the refusal. The row's
       // own version is the FIRST the build cannot interpret; the store's schema
@@ -1995,7 +2300,7 @@ function validateAppliedMigrations(applied: AppliedMigration[]): number {
       let highestApplied = 0;
       for (const candidate of applied) if (candidate.version > highestApplied) highestApplied = candidate.version;
       let supportedMax = 0;
-      for (const migration of MIGRATIONS) if (migration.version > supportedMax) supportedMax = migration.version;
+      for (const migration of migrations) if (migration.version > supportedMax) supportedMax = migration.version;
       throw new StoreError(
         "store.schema-unsupported",
         `The store's highest applied schema version is ${highestApplied}, this build supports versions 1..${supportedMax}, ` +
@@ -2042,10 +2347,23 @@ function applyPendingMigrations(
     const prior = readAppliedMigrations(db, true);
     const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
     const pending = MIGRATIONS.filter((m) => m.version > priorMax);
+    // invariant: An open mirror run a COMBINED store holds is settled by the released build
+    // that owns `sync_runs` there, so the batch refuses BEFORE the schema passes that build's
+    // ceiling. A fresh store (no history) writes a new `sync_runs` and has none to strand.
+    if (priorMax > 0 && pending.some((migration) => migration.version > RELEASED_COMBINED_SCHEMA_MAX)) {
+      refuseOpenMirrorRuns(db, priorMax);
+    }
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
-      db.exec(migration.sql);
-      if (migration.normalize !== undefined) {
+      // invariant: A migration whose table the cutover fence moved runs only where the table is
+      // still local. The fence row is what admits the skip: an unfenced store missing the table
+      // is damage, and its body runs and fails exactly as before.
+      const movedByFence =
+        migration.requiresTable !== undefined &&
+        !tableNamesOn(db).has(migration.requiresTable) &&
+        readCollaborationFence(db) !== null;
+      if (!movedByFence) db.exec(migration.sql);
+      if (!movedByFence && migration.normalize !== undefined) {
         migration.normalize(db, {
           attestation: options.attestation, operator: options.operator, processFacts: options.processFacts, now: options.now,
         });
@@ -2132,6 +2450,203 @@ export function readStoreAuthority(db: StoreDb): StoreAuthorityRead {
     storeId: row?.store_id,
     epoch: row?.authority_epoch,
     missing: row === undefined,
+  };
+}
+
+/**
+ * A completed collaboration cutover, as the combined store records it: the
+ * exact manifest it was fenced for, the source generation that was extracted,
+ * the target stamp it was published to and the retained verified recovery
+ * point. The row's presence is the difference between "this store never held
+ * collaboration rows" and "the collaboration rows moved out of this store".
+ */
+export type CollaborationFence = Readonly<{
+  manifestId: string;
+  manifestDigest: string;
+  sourceStoreId: string;
+  sourceEpoch: number;
+  sourceSchemaVersion: number;
+  sourceRevision: number;
+  sourceCatalogRevision: number;
+  targetStoreId: string;
+  targetEpoch: number;
+  backupPath: string;
+  fencedAt: string;
+}>;
+
+/**
+ * invariant: The store's collaboration-owned tables. A store that still holds rows in any
+ * of them owns its issue/catalog authority the pre-cutover way, and a file-era
+ * import or fresh bootstrap would mint a SECOND authority beside it. The fence
+ * drops exactly these tables, so a fenced store has nothing to refuse by row
+ * count — its own refusal comes first, and names the retained pre-fence image.
+ *
+ * `issue_counter` is the allocator: a pristine store always carries its
+ * singleton row, so only a MOVED allocator counts as held authority.
+ *
+ * This lives here — the one module every store layer imports — so the bootstrap,
+ * the file-era import and the runtime binding check share ONE rule without an
+ * import cycle.
+ */
+const COLLABORATION_HELD_TABLES: readonly string[] = [
+  "issues",
+  "occurrences",
+  "relations",
+  "provenance",
+  "issue_transitions",
+  "issue_project_moves",
+  "issue_sync_state",
+  "sync_cursor",
+  "sync_runs",
+  "project_bindings",
+  "project_milestones",
+  "catalog_entities",
+  "catalog_links",
+  "catalog_operations",
+];
+
+/**
+ * invariant: The subset that carries DOMAIN AUTHORITY: every collaboration-owned table
+ * except the catalog registration journal. A journal row is pending execution
+ * state a supported verb reconciles; by itself it never makes a checkout the
+ * issue/catalog authority, so a runtime lane read must not be refused for it.
+ */
+const COLLABORATION_AUTHORITY_TABLES: readonly string[] = COLLABORATION_HELD_TABLES.filter(
+  (table) => table !== "catalog_operations",
+);
+
+/**
+ * Every collaboration AUTHORITY table this store still holds rows for, in
+ * listing order. `onHeld` reports each table the moment its row count proves it
+ * is held, so a caller's inspection cannot lose an observation it already made
+ * when a later count in the same pass throws.
+ */
+export function heldCollaborationTables(db: StoreDb, onHeld?: (table: string) => void): string[] {
+  return heldTablesAmong(db, COLLABORATION_AUTHORITY_TABLES, onHeld);
+}
+
+/** Every collaboration-owned table (authority AND journal) this store still holds rows for. */
+export function heldCollaborationSourceTables(db: StoreDb): string[] {
+  return heldTablesAmong(db, COLLABORATION_HELD_TABLES);
+}
+
+/**
+ * The open mirror runs a COMBINED store still holds, in listing order.
+ *
+ * Migration 18 created `sync_runs` for the one-way mirror, which the released
+ * 4.9.x build owns and settles in the combined store. Migration 19 is the last
+ * schema that build admits; migration 20 (the cutover fence) is the one it
+ * refuses as `store.schema-unsupported`, so an upgrade past 19 strands every
+ * open run: the settling build refuses the newer store, and this build's mirror
+ * lane refuses a combined store outright. The upgrade paths therefore read this
+ * list before the schema advance instead of discovering the loss afterwards.
+ */
+export function openMirrorRuns(db: StoreDb): Array<{
+  bindingId: string;
+  direction: string;
+  runId: string;
+  holderPid: number;
+  holderHost: string;
+  startedAt: string;
+}> {
+  if (!tableNamesOn(db).has("sync_runs")) return [];
+  const rows = db
+    .prepare("select binding_id, direction, run_id, holder_pid, holder_host, started_at from sync_runs order by binding_id, direction")
+    .all() as Array<Record<string, unknown>>;
+  return rows.map((row) => ({
+    bindingId: String(row.binding_id),
+    direction: String(row.direction),
+    runId: String(row.run_id),
+    holderPid: Number(row.holder_pid),
+    holderHost: String(row.holder_host),
+    startedAt: String(row.started_at),
+  }));
+}
+
+function heldTablesAmong(
+  db: StoreDb,
+  tablesWanted: readonly string[],
+  onHeld?: (table: string) => void,
+): string[] {
+  const tables = tableNamesOn(db);
+  const held: string[] = [];
+  for (const table of tablesWanted) {
+    if (!tables.has(table)) continue;
+    const row = db.prepare(`select count(*) as n from ${table}`).get();
+    if (row !== null && typeof row === "object" && "n" in row && typeof row.n === "number" && row.n > 0) {
+      held.push(table);
+      onHeld?.(table);
+    }
+  }
+  if (tables.has("issue_counter")) {
+    const allocator = db.prepare("select next_value from issue_counter where id = 1").get();
+    if (
+      allocator !== null &&
+      typeof allocator === "object" &&
+      "next_value" in allocator &&
+      typeof allocator.next_value === "number" &&
+      allocator.next_value > 1
+    ) {
+      held.push("issue_counter");
+      onHeld?.("issue_counter");
+    }
+  }
+  return held;
+}
+
+/**
+ * Read the fence ledger of an existing store: `null` when the file never held a
+ * cutover (including a store migrated only to an earlier schema, which has no
+ * ledger table at all), the one recorded fence otherwise. A ledger row that
+ * cannot be read as the declared shape is corrupt evidence, never an absent
+ * fence: a caller must not treat a damaged fence as permission to write.
+ */
+export function readCollaborationFence(db: StoreDb): CollaborationFence | null {
+  const present = db
+    .prepare("select count(*) as n from sqlite_master where type='table' and name='collaboration_cutover'")
+    .get() as { n?: number } | undefined;
+  if (!present?.n) return null;
+  const row = db
+    .prepare(
+      "select manifest_id, manifest_digest, source_store_id, source_epoch, source_schema_version, " +
+        "source_revision, source_catalog_revision, target_store_id, target_epoch, backup_path, fenced_at " +
+        "from collaboration_cutover where id = 1",
+    )
+    .get() as Record<string, unknown> | undefined;
+  if (row === undefined) return null;
+  const text = (value: unknown): value is string => typeof value === "string" && value !== "";
+  const count = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value);
+  if (
+    !text(row.manifest_id) ||
+    !text(row.manifest_digest) ||
+    !text(row.source_store_id) ||
+    !count(row.source_epoch) ||
+    !count(row.source_schema_version) ||
+    !count(row.source_revision) ||
+    !count(row.source_catalog_revision) ||
+    !text(row.target_store_id) ||
+    !count(row.target_epoch) ||
+    !text(row.backup_path) ||
+    !text(row.fenced_at)
+  ) {
+    throw new StoreError(
+      "store.corrupt",
+      "collaboration_cutover holds a malformed fence record; the cutover evidence cannot be verified. Nothing was " +
+        "modified; recover the store from its verified pre-fence backup.",
+    );
+  }
+  return {
+    manifestId: row.manifest_id,
+    manifestDigest: row.manifest_digest,
+    sourceStoreId: row.source_store_id,
+    sourceEpoch: row.source_epoch,
+    sourceSchemaVersion: row.source_schema_version,
+    sourceRevision: row.source_revision,
+    sourceCatalogRevision: row.source_catalog_revision,
+    targetStoreId: row.target_store_id,
+    targetEpoch: row.target_epoch,
+    backupPath: row.backup_path,
+    fencedAt: row.fenced_at,
   };
 }
 
@@ -2341,7 +2856,7 @@ function isRawCantOpen(error: unknown): boolean {
   return error !== null && typeof error === "object" && "errcode" in error && error.errcode === 14;
 }
 
-function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
+export function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
   if (error instanceof StoreError) return false;
   if (!isRawCantOpen(error)) return false;
   return existsSync(dbPath);
@@ -2352,11 +2867,11 @@ function isTransientReadOpenFailure(error: unknown, dbPath: string): boolean {
  * store pays nothing for it. This is a deliberate bounded workaround for the
  * Bun 1.4.0 `node:sqlite` collection-timed cleanup defect: it removes once the
  * runtime quiesces a closed handle's sidecars at close. */
-const READ_OPEN_ATTEMPTS = 5;
+export const READ_OPEN_ATTEMPTS = 5;
 /** Delay before the next read-open attempt. The observed window closes on the
  * runtime's next collection, which the retry's own allocation and this yield
  * reach; the whole budget stays in the low tens of milliseconds. */
-const READ_OPEN_BACKOFF_MS = 5;
+export const READ_OPEN_BACKOFF_MS = 5;
 
 /** The probe's reused read-only connection: the store file it belongs to. */
 type ProbeConnection = { dbPath: string; dev: number; ino: number; db: StoreDb };
@@ -2703,12 +3218,26 @@ async function openStoreOnce(dbPath: string, mode: "read" | "write", timeout: nu
 }
 
 /**
+ * The table names ONE connection can actually see.
+ *
+ * A recorded schema version is not a table inventory: the collaboration
+ * cutover's fence drops the moved collaboration tables while keeping the
+ * schema version, so a reader that derives "which tables exist" from the
+ * version alone asks for tables a fenced store no longer has. Every reader that
+ * enumerates tables judges presence from the connection itself.
+ */
+export function tableNamesOn(db: StoreDb): ReadonlySet<string> {
+  const rows = db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>;
+  return new Set(rows.map((row) => String(row.name)));
+}
+
+/**
  * Remove only the staging files one initialization attempt created for itself.
  * The canonical store path is never in this list: a failed or interrupted
  * create cannot unlink the store another process may already have published or
  * be reading, and a stale staging file is inert scratch that no code reads.
  */
-function removeStagingFiles(stagingPath: string): void {
+export function removeStagingFiles(stagingPath: string): void {
   for (const suffix of ["", "-journal", "-wal", "-shm"]) {
     try {
       unlinkSync(stagingPath + suffix);
@@ -2720,7 +3249,7 @@ function removeStagingFiles(stagingPath: string): void {
 
 /** The operating system's own classification of a failed step, preserved
  * verbatim so the operator diagnoses the filesystem, not a store. */
-function publicationCause(error: unknown): string {
+export function publicationCause(error: unknown): string {
   const causeCode =
     error !== null && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "";
   const message = error instanceof Error ? error.message : String(error);
@@ -2761,7 +3290,7 @@ function publicationRefusal(step: string, error: unknown, dbPath: string): Store
  * for one), the operating system's own error is preserved and disclosed as the
  * failed barrier - never swallowed into a durable success claim.
  */
-function syncDirectoryEntry(dir: string): void {
+export function syncDirectoryEntry(dir: string): void {
   const fd = openSync(dir, "r");
   try {
     fsyncSync(fd);

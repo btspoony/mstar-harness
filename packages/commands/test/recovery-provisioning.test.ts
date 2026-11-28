@@ -5,17 +5,21 @@
  * caller cannot name itself as the prior holder it replaces.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { executeCommand, type InvocationContext } from "@mstar-harness/commands";
 import {
+
+  ensureCollaborationAuthority,
   executionContextFor,
   initializeStore,
   openStore,
   readExecutionState,
   registerShippedCatalogExecution,
 } from "@mstar-harness/engine";
+import { planFrontMatter } from "../src/plan-frontmatter.test-support.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -53,10 +57,16 @@ function context(cwd: string, sessionId: string): InvocationContext {
 async function recoverableFixture(): Promise<{ root: string; harness: string; priorSession: string }> {
   const root = mkdtempSync(join(tmpdir(), "recover-provision-"));
   roots.push(root);
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(root, ".mstar");
   mkdirSync(join(harness, "plans"), { recursive: true });
-  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), `# Recover provision plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeFileSync(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Recover provision plan\n"));
   (await initializeStore({ harnessDir: harness })).close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const workflow = {
     kind: "plan" as const,
     workflowId: WORKFLOW,

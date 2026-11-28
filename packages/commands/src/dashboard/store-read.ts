@@ -21,8 +21,9 @@ export const DASHBOARD_API_VIEWS = {
   "/api/issue-flow": "issue-flow",
   "/api/workflows": "workflows",
   "/api/iterations": "iterations",
-  "/api/roadmap": "roadmap",
   "/api/projects": "projects",
+  // see packages/engine/src/store-read.ts - collaboration-only, so it answers without an execution store.
+  "/api/milestones": "milestones",
   // The aggregated read: one list-shaped route whose only filter is `project`.
   "/api/overview": "overview",
 } as const;

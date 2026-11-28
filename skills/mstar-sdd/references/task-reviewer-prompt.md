@@ -89,6 +89,6 @@ Dispatch:
 
 When budget truncation applies, insert a `## Scope` section before `### Spec Compliance` with one bullet: `- Truncated coverage: <budget reached; specific interfaces/files left unexamined>`. On a complete review omit that section entirely.
 
-The reviewer always writes that full report to `REPORT_FILE` (`${SDD_DIR}/task-N-review.md`) and returns only a compact pointer plus the assessment to PM — a completed task under `Execution mode: sdd` has no conversation-only L2 output, and `REPORT_FILE` here is never the implementer's `task-N-report.md`. The `## Scope` line is the only truncation disclosure; a truncated review keeps the `Task quality` it earned for checked scope, and PM cannot mark the whole task complete while assigned review scope remains uncovered.
+The reviewer always writes that full report to `REPORT_FILE` (`${SDD_DIR}/task-N-review.md`) and returns only a compact pointer plus the assessment to PM — a completed task under `execution_mode: sdd` has no conversation-only L2 output, and `REPORT_FILE` here is never the implementer's `task-N-report.md`. The `## Scope` line is the only truncation disclosure; a truncated review keeps the `Task quality` it earned for checked scope, and PM cannot mark the whole task complete while assigned review scope remains uncovered.
 
 Re-review after fixes checks both verdicts only for the raised findings and fix delta; unchanged evidence remains reusable. PM resolves all ⚠️ items before marking task complete.

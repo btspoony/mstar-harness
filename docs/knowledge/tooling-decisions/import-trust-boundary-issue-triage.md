@@ -195,6 +195,10 @@ exclusion is documented as SQLite `BEGIN IMMEDIATE` / `store.busy`
 merges**, not before. An earlier note in this round that labelled I-000532 an "unchanged
 residual" was wrong: the removal it asks for is in this PR.
 
+Update (2026-11 maintenance audit): the delivery has merged — `packages/engine/src/lease.ts` no
+longer exists on main; the filesystem lease family was replaced by native SQLite transactions
+(`BEGIN IMMEDIATE` / `store.busy`), exactly as this paragraph predicted.
+
 ## Guidance
 
 1. **Classify by prerequisite, not by badge.** "Hostile cwd only" is cheap and reaches

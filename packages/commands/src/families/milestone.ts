@@ -5,11 +5,11 @@ import { z } from "zod";
 import { commandEnvelopeSchema } from "../envelope.js";
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../types.js";
 
-const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), target: z.string().optional(), clearTarget: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
+const schema = z.object({ project: z.string().optional(), id: z.string().optional(), name: z.string().optional(), ordinal: z.number().int().nonnegative().optional(), effortSessions: z.number().int().min(1).optional(), clearEffortSessions: z.boolean().optional(), status: z.enum(["planned", "active", "delivered", "dropped"]).optional(), issue: z.string().optional(), reason: z.string().optional(), expectIssue: z.number().int().nonnegative().optional(), expectStore: z.number().int().nonnegative().optional(), operation: z.string().optional(), actor: z.string().optional(), harness: z.string().optional(), clear: z.boolean().optional() });
 type Input = z.infer<typeof schema>;
 const verbs = ["add", "update", "assign", "list", "status"] as const;
-const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",target:"--target <YYYY-MM-DD>",clearTarget:"--clear-target",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
-const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","target","expectStore","operation","harness"], update:["project","id","name","ordinal","target","clearTarget","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
+const flags: Record<keyof Input, string> = { project:"--project <id>",id:"--id <id>",name:"--name <name>",ordinal:"--ordinal <n>",effortSessions:"--effort-sessions <n>",clearEffortSessions:"--clear-effort-sessions",status:"--status <status>",issue:"--issue <id>",reason:"--reason <text>",expectIssue:"--expect-issue <n>",expectStore:"--expect-store <n>",operation:"--operation <id>",actor:"--actor <role>",harness:"--harness <root>",clear:"--clear" };
+const options: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","effortSessions","expectStore","operation","harness"], update:["project","id","name","ordinal","effortSessions","clearEffortSessions","status","expectStore","operation","harness"], assign:["project","issue","id","clear","reason","expectIssue","expectStore","operation","actor","harness"], list:["project","harness"], status:["project","id","harness"] };
 const required: Record<(typeof verbs)[number], (keyof Input)[]> = { add:["project","name","ordinal","expectStore","operation"], update:["project","id","expectStore","operation"], assign:["project","issue","reason","expectIssue","expectStore","operation","actor"], list:["project"], status:["project","id"] };
 class UsageError extends Error {}
 function requireValue(value: string | undefined, flag: string): string { if (value === undefined || !value.trim()) throw new UsageError(`${flag} is required`); return value.trim(); }
@@ -18,6 +18,7 @@ function envelope(id: string, data: unknown): CommandEnvelope { return { version
 export function failure(id: string, error: unknown): CommandEnvelope<never> {
   const message = error instanceof Error ? error.message : String(error);
   const { code, details, recovery } = engineErrorFacts(error);
+  const invalidInputRecovery = "Pass --effort-sessions <n>, a count of standard sessions of at least 1, or --clear-effort-sessions to mark the milestone unestimated.";
   const fallbackRecovery = id === "milestone.add"
     ? "Set a unique milestone name and project ordinal. Run mstar milestone add --project project-id --name milestone-name --ordinal 1 --expect-store 0 --operation retry-id."
     : id === "milestone.update"
@@ -26,7 +27,8 @@ export function failure(id: string, error: unknown): CommandEnvelope<never> {
       ? "Verify the issue and milestone ids and the issue/store revisions the request was planned against, then retry as the project-manager seat. Run mstar milestone assign --project project-id --issue issue-id --id milestone-id --reason reason --expect-issue 0 --expect-store 0 --operation retry-id --actor project-manager, or pass --clear instead of --id to unassign."
         : "Select the existing milestone project and retry the requested read.";
   if (error instanceof UsageError) return refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message, details: { operation: id }, recovery: fallbackRecovery });
-  return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: recovery ?? fallbackRecovery });
+  const engineRecovery = code === "milestone.invalid-input" && recovery === undefined ? invalidInputRecovery : recovery;
+  return refusalEnvelope({ command: id, status: "refused", code: code ?? `${id}.internal-error`, exitCode: 1, message, details: { operation: id, ...details }, recovery: engineRecovery ?? fallbackRecovery });
 }
 async function run(id: string, input: Input, invocation: InvocationContext): Promise<CommandEnvelope> {
  try {
@@ -34,10 +36,10 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
   if (verb === "list" || verb === "status") return envelope(id,await withStoreRead(store,queryMilestones(projectId,verb === "status" ? requireValue(input.id,"--id") : undefined)));
   if (input.expectStore === undefined) throw new UsageError("--expect-store is required");
   const operationId = requireValue(input.operation,"--operation");
-  if (verb === "add") { if (input.name === undefined || input.ordinal === undefined) throw new UsageError("--name and --ordinal are required"); return envelope(id,await addMilestone(store,{projectId,name:input.name,ordinal:input.ordinal,target:input.target ?? null},{operationId,expectedStoreRevision:input.expectStore})); }
+  if (verb === "add") { if (input.name === undefined || input.ordinal === undefined) throw new UsageError("--name and --ordinal are required"); return envelope(id,await addMilestone(store,{projectId,name:input.name,ordinal:input.ordinal,effortSessions:input.effortSessions ?? null},{operationId,expectedStoreRevision:input.expectStore})); }
   if (verb === "update") {
-   if (input.target !== undefined && input.clearTarget) throw new UsageError("--target and --clear-target are exclusive");
-   const patch: MilestonePatch = { ...(input.name === undefined ? {} : {name:input.name}), ...(input.ordinal === undefined ? {} : {ordinal:input.ordinal}), ...(input.status === undefined ? {} : {status:input.status}), ...(input.target === undefined && !input.clearTarget ? {} : {target:input.clearTarget ? null : input.target!}) };
+   if (input.effortSessions !== undefined && input.clearEffortSessions) throw new UsageError("--effort-sessions and --clear-effort-sessions are exclusive");
+   const patch: MilestonePatch = { ...(input.name === undefined ? {} : {name:input.name}), ...(input.ordinal === undefined ? {} : {ordinal:input.ordinal}), ...(input.status === undefined ? {} : {status:input.status}), ...(input.effortSessions === undefined && !input.clearEffortSessions ? {} : {effortSessions:input.clearEffortSessions ? null : input.effortSessions!}) };
    if (!Object.keys(patch).length) throw new UsageError("update requires at least one patch field");
    return envelope(id,await updateMilestone(store,projectId,requireValue(input.id,"--id"),patch,{operationId,expectedStoreRevision:input.expectStore}));
   }
@@ -49,8 +51,8 @@ async function run(id: string, input: Input, invocation: InvocationContext): Pro
 }
 export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
   const descriptions: Record<(typeof verbs)[number], string> = {
-    add: "Add a milestone record to the project store; its name, target and ordinal are authoritative.",
-    update: "Update stored milestone fields using the observed store revision; roadmap document text is unchanged.",
+    add: "Add a milestone record to the project store; its name, effort sessions and ordinal are authoritative.",
+    update: "Update stored milestone fields using the observed store revision.",
     assign: "Assign or unassign an issue from a stored milestone with expected issue revision and a reason.",
     list: "List the project's stored milestones and linked-issue rollups.",
     status: "Show one milestone and linked issue rollup.",
@@ -71,11 +73,11 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
         { name: "clear", ownership: "caller" as const, route, required: false, constraint: "only true selects unassignment; false does not select this alternative" },
       ] : []),
       ...(verb === "update" ? [
-        { name: "name", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-least-one" as const, members: [{ name: "name" }, { name: "ordinal" }, { name: "status" }, { name: "target" }, { name: "clearTarget", whenTrue: true }] }, constraint: "at least one patch value is required; target is optional and clearTarget selects only when true" },
+        { name: "name", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-least-one" as const, members: [{ name: "name" }, { name: "ordinal" }, { name: "status" }, { name: "effortSessions" }, { name: "clearEffortSessions", whenTrue: true }] }, constraint: "at least one patch value is required; effortSessions is optional and clearEffortSessions selects only when true" },
         { name: "ordinal", ownership: "caller" as const, route, required: false },
         { name: "status", ownership: "caller" as const, route, required: false },
-        { name: "target", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-most-one" as const, members: [{ name: "target" }, { name: "clearTarget", whenTrue: true }] }, constraint: "optional patch; supplying target and clearTarget=true is refused" },
-        { name: "clearTarget", ownership: "caller" as const, route, required: false, constraint: "only true selects clear; false does not select a patch" },
+        { name: "effortSessions", ownership: "caller" as const, route, required: false, alternatives: { cardinality: "at-most-one" as const, members: [{ name: "effortSessions" }, { name: "clearEffortSessions", whenTrue: true }] }, constraint: "optional patch; supplying effortSessions and clearEffortSessions=true is refused" },
+        { name: "clearEffortSessions", ownership: "caller" as const, route, required: false, constraint: "only true selects clear; false does not select a patch" },
       ] : []),
     ]);
     return {
@@ -85,8 +87,8 @@ export function getMilestoneCommandDefinitions(): readonly CommandDefinition[] {
         options: [
           ...opts.map((key) => ({
             key, flags: flags[key], required: required[verb].includes(key),
-            ...(verb === "update" && key === "clearTarget" ? { help: "Optional: only true clears target, and it cannot be combined with --target. False does not select a patch." } : {}),
-            ...(verb === "update" && key === "target" ? { help: "Optional target patch; mutually exclusive with --clear-target=true." } : {}),
+            ...(verb === "update" && key === "clearEffortSessions" ? { help: "Optional: only true clears effort sessions, and it cannot be combined with --effort-sessions. False does not select a patch." } : {}),
+            ...(verb === "update" && key === "effortSessions" ? { help: "Optional effort patch as a count of standard sessions of at least 1; mutually exclusive with --clear-effort-sessions=true." } : {}),
           })),
         ],
       },

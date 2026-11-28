@@ -1,13 +1,13 @@
 /**
- * omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
+ * invariant: omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
  * mode blocks engine-validated violations; soft dispatch findings are logged,
  * while authority refusals remain unconditional.
  *
  * Gate 1 protects execution-owned coordination paths and issue/catalog authority
- * paths. ACTIVE execution DB state is the only recognized authority: retired
- * file documents and project registers are refused, and missing, staged or
- * unreadable authority state fails closed rather than falling through to a
- * document validator.
+ * paths. Retired file documents are judged by the ACTIVE execution DB state;
+ * project registers by the collaboration lane's ACTIVE record — a missing,
+ * staged or unreadable lane fails closed rather than falling through to a
+ * document validator. Neither domain's verdict is inferred from the other.
  *
  * Target classification and write validation come from the shared
  * `@mstar-harness/engine` gates module. The local hook supplies event shape,
@@ -17,24 +17,24 @@
  * caller-scoped recursion constraints. Unexpected gate errors return explicit
  * block envelopes; intentional refusals keep their existing shape.
  */
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
   detectStoreRuntime,
   eventTargetPaths,
   harnessDocKindOfTarget,
+  assignmentFrontmatterEntries,
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
-  parseAssignmentFields,
-  queryDashboard,
+  parseAssignmentFieldsFromFrontmatter,
+  probeCollaborationAuthority,
   resolveExecutionReadRoute,
   resolveHarnessDir,
   resolveRepoEnforcement,
   SymlinkResolutionError,
   violationLine,
-  withStoreRead,
 } from "@mstar-harness/engine";
 import type { StoreRuntimeInfo, ValidationResult } from "@mstar-harness/engine";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -111,11 +111,12 @@ function refusalOf(error: unknown): { code: string; message: string } {
 }
 
 /**
- * Resolve the ACTIVE issue-store authority. An unavailable, missing or staged
- * store refuses; no document-backed fallback is admitted.
+ * invariant: Resolve the ACTIVE collaboration (issue/catalog) authority. An unavailable,
+ * missing or staged lane refuses; no execution-store read and no
+ * document-backed fallback is admitted.
  */
 type AuthorityRoute =
-  | { kind: "retired"; storeRevision: number }
+  | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
@@ -124,12 +125,10 @@ async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }
-  try {
-    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
-    return { kind: "retired", storeRevision: envelope.storeRevision };
-  } catch (error) {
-    return { kind: "unavailable", ...refusalOf(error) };
-  }
+  const probe = await probeCollaborationAuthority({ harnessDir });
+  return probe.kind === "active"
+    ? { kind: "retired", storeRevision: probe.authority.revision }
+    : { kind: "unavailable", code: probe.code, message: probe.message };
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -143,12 +142,11 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
-/** The harness root of the register a write LANDS on through a symlink alias
- * (stricter-wins veto): the landed destination of an alias is itself an
- * authority candidate even when the caller's own path already classified as a
- * register elsewhere — classified by the exact-case marker probe first, then
- * the FW-3 folded shape walk. `null` when the write is not an alias or does
- * not land on a register. */
+/** note: The harness root of the register a write LANDS on through a symlink alias
+ * (stricter-wins veto): the landed destination is the authority the bytes
+ * belong to even when the caller's own path already classified as a register
+ * elsewhere. `null` when the write is not an alias or does not land on a
+ * register. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(landed);
@@ -173,11 +171,11 @@ function storeDirectWriteRefusal(rawPath: string): { block: true; reason: string
   );
 }
 
-function registerRetiredRefusal(storeRevision: number): { block: true; reason: string } {
+function registerRetiredRefusal(storeRevision: number | null): { block: true; reason: string } {
   return authorityRefusal(
     REGISTER_RETIRED_CODE,
     "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
   );
 }
@@ -293,7 +291,7 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
           caseFoldedRegisterRoot(resolved) ??
           (landed !== resolved ? caseFoldedRegisterRoot(landed) : null));
     if (registerDir !== null) {
-      const route = await readAuthorityRoute(registerDir);
+      const route = await readAuthorityRoute(landedRegisterDirOf(resolved, landed) ?? registerDir);
       if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision);
       return authorityUnavailableRefusal(route, "the issue authority", "register write");
     }
@@ -316,15 +314,40 @@ async function gateStatusWrite(eventInput: unknown): Promise<{ block: true; reas
  * failure (`error`): Gate 2 skips itself either way (see `gateTaskDispatch`),
  * but the two produce different one-time warnings.
  */
-type DispatchGateFn = (text: string, options?: { caller?: string; callerRequired?: boolean; writable?: boolean }) => {
+type DispatchGateFn = (text: string, options?: {
+  caller?: string;
+  callerRequired?: boolean;
+  writable?: boolean;
+  fileCarrier?: boolean;
+  cwd?: string;
+  assignmentDir?: string;
+  entries?: ReturnType<typeof assignmentFrontmatterEntries>;
+}) => {
   ok: boolean;
   shaped: boolean;
   enforcement: { hard: boolean };
   violations: ValidationResult[];
 };
 
+type ReadAssignmentSourceFn = (
+  text: string,
+  opts: { harnessDir: string | null },
+) =>
+  | { ok: true; text: string; path?: string }
+  | { ok: false; severity: string; code: string; message: string; fix?: string; terminal?: boolean };
+
+/** The engine exports Gate 2 calls: one composition and one resolver (D16
+ * recognition and its refusal are the composition's — hosts keep no local
+ * copy of the retired grammar).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+type DispatchEngineGates = {
+  gate: DispatchGateFn;
+  readSource: ReadAssignmentSourceFn;
+};
+
 type ComposeDispatchGateLoad =
-  | { status: "ok"; gate: DispatchGateFn }
+  | ({ status: "ok" } & DispatchEngineGates)
   | { status: "missing" }
   | { status: "error"; error: unknown };
 
@@ -333,8 +356,14 @@ let cachedDispatchGate: Promise<ComposeDispatchGateLoad> | null = null;
 export function loadComposeDispatchGate(): Promise<ComposeDispatchGateLoad> {
   cachedDispatchGate ??= import("@mstar-harness/engine")
     .then((mod) =>
-      typeof mod.composeDispatchGate === "function"
-        ? ({ status: "ok", gate: mod.composeDispatchGate as DispatchGateFn } as const)
+      typeof mod.composeDispatchGate === "function" &&
+      typeof mod.readAssignmentSource === "function" &&
+      typeof mod.assignmentFrontmatterEntries === "function"
+        ? ({
+            status: "ok",
+            gate: mod.composeDispatchGate as DispatchGateFn,
+            readSource: mod.readAssignmentSource as ReadAssignmentSourceFn,
+          } as const)
         : ({ status: "missing" } as const),
     )
     .catch((error: unknown) => ({ status: "error", error } as const));
@@ -371,7 +400,7 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
   }
   const message =
     reason === "missing"
-      ? "mstar-gates: installed engine lacks composeDispatchGate — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
+      ? "mstar-gates: installed engine lacks composeDispatchGate or the shared Assignment parsers — task dispatch gate (Gate 2) disabled; status gate unaffected; upgrade the engine (next release)"
       : `mstar-gates: task dispatch gate (Gate 2) disabled: engine import failed — ${error instanceof Error ? error.message : String(error)}; status gate unaffected`;
   try {
     (
@@ -401,13 +430,65 @@ function warnDispatchGateDegraded(logger: unknown, reason: "missing" | "error", 
  */
 function validateDispatchEntry(
   entry: DispatchEntry,
-  composeDispatchGate: DispatchGateFn,
+  engine: DispatchEngineGates,
+  harnessDir: string | null,
 ): { violations: ValidationResult[]; hard: boolean } {
-  const text = entry.task;
+// compass D14 — resolve the Assignment source ONCE through the engine
+// resolver (inline front-matter passthrough or the `Assignment file:
+// <abs>` pointer, containment-checked against the control harness root;
+// a null root refuses the pointer — containment is never skipped). A
+// refusal is itself the verdict: validating the pointer text would
+// report field violations on the wrong body. A source-resolution
+// refusal is `terminal` by contract (unreadable / out-of-home / unrooted
+// / ambiguous pointer): there is no verified assignment to dispatch on,
+// so it is hard independently of document or repo enforcement — the
+// call fails closed on every compass setting.
+// see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const source = engine.readSource(entry.task, { harnessDir });
+  if (!source.ok) {
+    return {
+      violations: [{
+        ok: false,
+        severity: source.severity as ValidationResult["severity"],
+        code: source.code,
+        message: source.message,
+        fix: source.fix,
+        terminal: source.terminal === true,
+      }],
+      hard: source.terminal === true,
+    };
+  }
+  const text = source.text;
+  // File provenance (compass D14): a resolved `Assignment file:` pointer
+  // commits to the Assignment contract, so its bytes validate as one even
+  // without a recognized core key. Inline prompts keep the silent path.
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const carrier = source.path;
+  // One parse per decision: the role read and the composition share this
+  // parse (the composition also owns the D16 refusal).
+  // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+  const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch gates.
-  const writable = isReadOnlyAssignmentRole(parseAssignmentFields(text).executeAs ?? "") ? false : undefined;
-  const composed = composeDispatchGate(text, { writable });
-  return { violations: composed.violations, hard: composed.enforcement.hard };
+  const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? "") ? false : undefined;
+  const composed = engine.gate(text, {
+    writable,
+    entries,
+    fileCarrier: carrier !== undefined,
+    // Source-relative `worktree_path` resolves from the pointed file's own
+    // directory (CLI parity); Git discovery stays on the checkout (`cwd`
+    // unset), so an out-of-repo assignment home never changes the inspected
+    // repository.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    assignmentDir: carrier === undefined ? undefined : dirname(carrier),
+  });
+  return {
+    violations: composed.violations,
+    // The composition's own enforcement flag, plus TERMINAL violations (a
+    // source refusal or the retired-format one): a terminal verdict blocks
+    // on every compass setting — soft mode never downgrades it.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    hard: composed.enforcement.hard || composed.violations.some((violation) => violation.terminal === true),
+  };
 }
 
 /**
@@ -420,10 +501,11 @@ function validateDispatchEntry(
  * violations never block but ARE warn-logged through `logSoft` (opencode
  * warn-channel parity — silent drops hide gate/model drift).
  *
- * When the engine build lacks `composeDispatchGate` (predating the export)
- * or the engine import itself fails, Gate 2 is SKIPPED entirely — no
- * blocking, no violations — with a one-time warning; Gate 1 (status) keeps
- * working (engine-version compatibility).
+ * When the engine build lacks `composeDispatchGate` and the shared D16
+ * recognizer (predating those exports) or the engine import itself fails,
+ * Gate 2 is SKIPPED entirely — no blocking, no violations — with a one-time
+ * warning; Gate 1 (status) keeps working (engine-version compatibility).
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
  */
 async function gateTaskDispatch(
   eventInput: unknown,
@@ -435,14 +517,13 @@ async function gateTaskDispatch(
     warnDegraded(load.status, load.status === "error" ? load.error : undefined);
     return undefined;
   }
-  const composeDispatchGate = load.gate;
- // Repo-level hard (`.mstarc` wins, else compass) hardens flag-less
- // entries — same source Gate 1 uses for coordination writes.
   const harnessDir = resolveHarnessDir();
   const repoHard = harnessDir !== null && resolveRepoEnforcement(harnessDir).hard;
-  const blocked: string[] = [];
+  // Allocated on the first blocked entry: the clean path allocates nothing.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+  let blocked: string[] | undefined;
   for (const entry of taskDispatchEntries(eventInput)) {
-    const { violations, hard } = validateDispatchEntry(entry, composeDispatchGate);
+    const { violations, hard } = validateDispatchEntry(entry, load, harnessDir);
     if (violations.length === 0) continue;
     const label = entry.name !== "" ? `"${entry.name}"` : entry.agent !== "" ? `agent "${entry.agent}"` : "(unnamed)";
     if (!hard && !repoHard) {
@@ -452,11 +533,12 @@ async function gateTaskDispatch(
       }
       continue;
     }
+    blocked ??= [];
     for (const violation of violations) {
       blocked.push(`task dispatch entry ${label}: ${violationLine(violation)} (${DISPATCH_SKILL_POINTER})`);
     }
   }
-  if (blocked.length === 0) return undefined;
+  if (blocked === undefined) return undefined;
   return { block: true, reason: blocked.join("\n") };
 }
 

@@ -31,6 +31,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
+
+  ensureCollaborationAuthority,
   initializeStore,
   openStore,
   readExecutionAuthority,
@@ -41,7 +43,8 @@ import {
 import { semanticRequestHash } from "../../engine/src/execution-store.js";
 import { PLAN_OPERATION_SEMANTICS, selectSemanticFields } from "../../engine/src/recovery-intent.js";
 
-import { receiptStable, runCli, type RunResult } from "./harness";
+import { receiptStable, runCli, writeFixtureRepoId, type RunResult } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 const WORKFLOW_ID = "wf-close";
 const PLAN_ID = "plan-close";
@@ -143,12 +146,14 @@ async function activeFixture(label: string): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   const baseSha = gitOut(["rev-parse", "HEAD"], root);
 
   const worktree = join(root, "wt-feature");
@@ -158,7 +163,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "feat: slice"], { cwd: worktree });
   const sourceSha = gitOut(["rev-parse", "HEAD"], worktree);
 
-  writeText(join(harness, "plans", `${PLAN_ID}.md`), `# Close plan\n\n**plan_id:** ${PLAN_ID}\n\n**title:** Close plan\n`);
+  writeText(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Close plan\n", { title: "Close plan" }));
   const sdd = join(harness, "sdd", PLAN_ID);
   const qcReport = join(sdd, "review", "qc1.md");
   const qcConsolidated = join(sdd, "review", "qc.md");
@@ -410,7 +415,7 @@ describe("mstar status workflow-close — prerequisite refusals", () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-close-legacy-")));
     roots.push(root);
     const harness = join(root, ".mstar");
-    writeText(join(harness, "plans", `${PLAN_ID}.md`), `# Close plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeText(join(harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# Close plan\n"));
     const statusPath = join(harness, "status.json");
     const snapshotPath = join(harness, "workflows", WORKFLOW_ID, "snapshot.json");
     writeJson(statusPath, {

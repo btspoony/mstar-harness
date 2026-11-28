@@ -1,6 +1,6 @@
 ---
 name: mstar-conventions
-description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}`/`{ADR_DIR}`/`{REVIEW_DIR}` 等符号的发现与初始化、docs 与 harness 子树边界、Spec 分支模型。读写 `.mstar/` 或开 plan 前必读。
+description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{ASSIGNMENT_DIR}`/`{ITERATION_DIR}`/`{KNOWLEDGE_DIR}`/`{SPECS_DIR}`/`{ADR_DIR}`/`{REVIEW_DIR}` 等符号的发现与初始化、docs 与 harness 子树边界、Spec 分支模型。读写 `.mstar/` 或开 plan 前必读。
 ---
 
 ## Load order（必读顺序）
@@ -10,10 +10,10 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 | 你还可能要 Read | 何时 |
 |-----------------|------|
 | `mstar-artifacts` | Main plans, review summaries, current execution/issue fields, InReview/QC waves and knowledge |
-| `mstar-project-governance` | 项目 roadmap 内容权威与读写/导入/导出规则；legacy `roadmap.md` 仅 transport/history；residual register 迁移边界与 `_default` |
+| `mstar-project-governance` | milestone 结构化目标与 issue 关联、issue capture；residual register 迁移边界与 `_default` |
 | `mstar-branch-worktree` | Assignment 写分支 / worktree / QC 检出 |
 | `mstar-review-qc` | 派 QC（PM 同轮必读；SDD 强制 tri） |
-| `mstar-sdd` | PM 执行 `Execution mode: sdd` 的 implement 波次 |
+| `mstar-sdd` | PM 执行 `execution_mode: sdd` 的 implement 波次 |
 
 ## Workflow
 
@@ -28,14 +28,17 @@ description: harness 路径约定：`{HARNESS_DIR}`/`{PLAN_DIR}`/`{SDD_DIR}`/`{I
 | `{HARNESS_DIR}` | `.mstar/` |
 | `{PLAN_DIR}` | `{HARNESS_DIR}/plans/` |
 | `{SDD_DIR}` | `{HARNESS_DIR}/sdd/<plan-id>/`（SDD 运行时 scratch + review bundle；gitignored） |
+| `{ASSIGNMENT_DIR}` | Assignment 文件的 write home：按 identity 取声明的那一处——plan → `{SDD_DIR}/assignments/`，iteration → `{ITERATION_DIR}/<id>/assignments/`，workflow → `{WORKFLOW_DIR}/<id>/assignments/`（`resolveAssignmentDir`，precedence plan → iteration → workflow；无 identity 解析不到 ⇒ Assignment 只能内联）；`.mstarc` 只移动对应 base，`assignments/` 段不变 |
+| `{HARNESS_DIR}/assignments/` | Assignment 的第四 source（`assignmentSourceHomes`）：**只读**——指针可指向此处，任何引擎路径都不在此新建文件 |
 | `{ITERATION_DIR}` | `{HARNESS_DIR}/iterations/` |
 | `{KNOWLEDGE_DIR}` | `.agents/knowledge/`；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{SPECS_DIR}` | `.agents/specs/`；解析见下文「`{SPECS_DIR}` 解析」 |
 | `{ADR_DIR}` | `.agents/adr/`；解析见下文「`{KNOWLEDGE_DIR}` / `{ADR_DIR}` 解析」 |
 | `{WORKFLOW_DIR}` | `{HARNESS_DIR}/workflows/` (default; `.mstarc` `workflow_dir` overrides it) — retained ordinary bodies, append-only `notes.jsonl` and workflow-owned `reports/` (e.g. `<workflow-id>/reports/e2e.md`) |
-| `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录；旧 `roadmap.md` 仅作文件 transport/history |
+| `{PROJECT_DIR}` | `{HARNESS_DIR}/projects/`（默认；`.mstarc` `project_dir` 声明时用声明值）——project 层目录 |
 | `{REVIEW_DIR}` | `{HARNESS_DIR}/reviews/`（默认；`.mstarc` `review_dir` 声明时用声明值）——review 运行目录树（codebase audit / PR / branch / diff review 的 report 与 evidence；`mstar audit scaffold` 写入，`mstar pr-review report-path` 解析；gitignored） |
-| `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/roadmap/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；roadmap 规则 → `mstar-project-governance`。 |
+| `{HARNESS_DIR}/store.db` | 进程/control harness 根下的 issue/catalog/milestone 与 **execution_* 执行权威** SQLite（`resolveProcessHarnessDir` 后 `<resolved root>/store.db`；尊重 `.mstarc`）。功能/集成 worktree **不**在 cwd 建库；milestone/issue 规则 → `mstar-project-governance`。 |
+| `{HARNESS_DIR}/planboard.md` | 本地指针板（gitignored，随 `{HARNESS_DIR}` 整体忽略，**无需**新 ignore 规则）：只存 `- <id> — <ordering reason>` 与 `- ? <candidate> — <evidence>` 两类指针和一条 `review_after: yyyy-mm-dd`，不存状态；`<id>` 按 `[collaboration] mode` 取 `I-xxxxxx`（`local`/`mirror`）或 `mstar:issue:<uuid>`（`remote`）。属于 control checkout 本机，**不**镜像、不发 provider。语法与读写点 → `mstar-iteration` Phase 1 §1.1 / Phase 3 §3.3；漂移报告 → `mstar planboard check`。 |
 
 > **Engine check:** engine `resolveHarnessDir` / `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` — or run `mstar path resolve [path]`, whose JSON envelope prints the resolved dirs (including `specsDir`, `knowledgeDir`, `adrDir`) — to confirm the resolution below. On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
@@ -66,7 +69,7 @@ enforcement=hard
 
 - `#` / `;` 注释；`[section]` 头；`key=value`（去空白）。仅读 `[config]` 段，未知键忽略（向前兼容）。
 - 目录键：`plan_dir`（`{PLAN_DIR}`）、`sdd_dir`（`{SDD_DIR}` 的 per-plan 基目录，`<plan-id>` 仍会追加）、`iteration_dir`（`{ITERATION_DIR}`）、`knowledge_dir`（`{KNOWLEDGE_DIR}`，**权威**——声明后不再走候选链）、`specs_dir`（`{SPECS_DIR}`，**权威**——同上）、`adr_dir`（`{ADR_DIR}`，**权威**——同上）、`workflow_dir`（`{WORKFLOW_DIR}`）、`project_dir`（`{PROJECT_DIR}`）、`review_dir`（`{REVIEW_DIR}`）。全部相对 `.mstarc` 所在目录解析（绝对路径亦可）；无需目录已存在（可后续 scaffold；v3 的 `workflows/` / `projects/` / `reviews/` 子目录由 engine writers 按需创建）。`harness_dir` 不在列表中：它已退役，声明后值被忽略。
-- **`enforcement=hard|soft`**：仓库级硬门禁策略（`hard` 硬门禁、`soft` 本地回滚；其他值忽略）。优先级：显式 Config > Assignment `Enforcement: hard` 头标记（仅派发闸门）> `.mstarc` > 迭代 compass frontmatter > 默认 warn-only。`.mstarc` `soft` 可回滚 hard compass；`.mstarc` `hard` 硬化无标记的派发与各闸门。
+- **`enforcement=hard|soft`**：仓库级硬门禁策略（`hard` 硬门禁、`soft` 本地回滚；其他值忽略）。优先级：显式 Config > Assignment front matter `enforcement: hard`（仅派发闸门）> `.mstarc` > 迭代 compass frontmatter > 默认 warn-only。`.mstarc` `soft` 可回滚 hard compass；`.mstarc` `hard` 硬化无标记的派发与各闸门。
 - 子目录键与 `enforcement` 由 engine `resolvePlanDir` / `resolveSddDir` / `resolveIterationDir` / `resolveKnowledgeDir` / `resolveSpecsDir` / `resolveAdrDir` / `resolveWorkflowDir` / `resolveProjectDir` / `resolveReviewDir` / `resolveRepoEnforcement` 读取：从 harness 目录与其父目录（仓库根，`.mstarc` 的文档化位置）向上找最近配置文件。
 - 优先级：`.mstarc` 只决定子目录与 corpus 布局，**不决定 harness 根**。`opts.harnessDir` / `--harness` 是调用方已经持有的值，由 transport 对照 Git 派生根校验，不是发现输入；Git 之外启动时才用它命名根。
 
@@ -98,7 +101,6 @@ enforcement=hard
 
 > **Engine check:** engine `resolveSpecsDir` / `resolveKnowledgeDir` / `resolveAdrDir` — or run `mstar path resolve` (prints all three) — to confirm the candidate order (empty-dir-as-absent included). On `fail`, do not proceed — fix and re-run. Contract → `mstar-use-cli/references/checks-and-lints.md` § Engine check callouts.
 
-部分 spoke 仓库 opt-in 跟踪的 `{HARNESS_DIR}/roadmap.md` 仅是既有 Markdown 文件/可审导入候选，非项目内容权威；读写规则 → `mstar-project-governance`。
 
 ## 内容边界（摘要）
 
@@ -110,7 +112,7 @@ enforcement=hard
 
 ## Issue/catalog store 路径与权威分界
 
-Issue/catalog/roadmap and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; roadmap/milestone rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. Historical execution files are read-only direct `mstar store upgrade` inputs, preserving original bytes; no staging writer or runtime file-state fallback remains. Retained ordinary artifacts stay with `ArtifactStore`; notes and docs never become transactional authority.
+Issue/catalog/milestone and ACTIVE execution authority live in control-root `{HARNESS_DIR}/store.db`; milestone/issue rules → `mstar-project-governance`. ACTIVE root register, workflow/plan rows, coordinator sessions, registered inputs and workflow merge exclusion live in `execution_*` tables. Coordinator source metadata/configuration/progress/completion and merge exclusion are domain-written; no per-row session or sealed Assignment. Historical execution files are read-only direct `mstar store upgrade` inputs, preserving original bytes; no staging writer or runtime file-state fallback remains. Retained ordinary artifacts stay with `ArtifactStore`; notes and docs never become transactional authority.
 
 ### Catalog 字段权威（contract §1）
 
@@ -150,7 +152,7 @@ PM 在需要持久化追踪时：
 4. Store：全新、无 legacy register/catalog 的 harness 用 `mstar store init` 建 active issue/catalog store；已有或 legacy harness 用 `mstar store upgrade`（operator 见 help）导入可识别执行状态、激活 authority 并报告 skipped 项。`store activate` 是 staged `store migrate` apply 后的激活入口（attestation 自动生成，`--attestation <path>` 仅为显式覆盖，`--operator` 必填），不是 init/upgrade 的例行下一步。以回执确认 authority，再用 `mstar status validate` / `mstar plan show` 读执行状态。
 5. Git：**进程本地、结果共享** — 默认跟踪 `.mstarc`（布局声明）、`.agents/AGENTS.md`、`{KNOWLEDGE_DIR}/**`、`{SPECS_DIR}/**`、`{ADR_DIR}/**`（bootstrap 默认即 `.agents/knowledge|specs|adr`）；`{HARNESS_DIR}` 整体（含 store、`plans/`、`iterations/`、`sdd/`、`reviews/`、`workflows/`、`projects/`）gitignored。plan Markdown 仍是 authored artifact，非状态权威。跨 clone 持久 handoff = knowledge + specs + adr + `.agents/AGENTS.md` + `.mstarc`（及根 `CONCEPTS.md` / `STRATEGY.md` 若使用）；须跨 clone 的 finding 须提升（compound）或写入 tracked results — **勿**默认 `git add` 迁移源 `status.json` / `plans/`。
 
-**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）完成目录 + **`projects/_default/` 目录及可用 catalog 登记** + canonical gitignore snippet + `.mstarc` 声明（缺失且父目录在 scaffold 根内时）+ `.agents/AGENTS.md`（已存在则跳过）；**不**写 `status.json`，也不代替 `mstar store init` / `mstar store upgrade`（执行权威只在 store）。不创建 roadmap Markdown 或 residual register。既有 v1 `roadmap.md` 只作为后续 reviewed import 的候选（→ `mstar-project-governance`）。幂等，重跑只补缺失件；已声明的 `.gitignore` 属作者所有，字节不变。scaffold 遵循 `.mstarc`；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义布局自行管理 ignore 规则）。
+**程序化初始化**：`scaffoldHarness`（engine）与 `mstar harness scaffold [path]`（CLI）完成目录 + **`projects/_default/` 目录及可用 catalog 登记** + canonical gitignore snippet + `.mstarc` 声明（缺失且父目录在 scaffold 根内时）+ `.agents/AGENTS.md`（已存在则跳过）；**不**写 `status.json`，也不代替 `mstar store init` / `mstar store upgrade`（执行权威只在 store）。不创建 residual register。幂等，重跑只补缺失件；已声明的 `.gitignore` 属作者所有，字节不变。scaffold 遵循 `.mstarc`；解析出的 harness 目录名非 `.mstar` 时跳过 canonical gitignore snippet（自定义布局自行管理 ignore 规则）。
 
 步骤与 `AGENTS.md` 分层（bootstrap 布局的 harness 规则文件是 `.agents/AGENTS.md`）→ **`references/harness-bootstrap-and-agents-layering.md`**。
 
@@ -160,10 +162,10 @@ PM 在需要持久化追踪时：
 
 ## Spec 驱动的分支模型（多 Plan · 同一 Spec）
 
-- **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。**`branch.base` 是创建/merge 锚点，不是主 worktree 驻留事实**——主 worktree（control root）的驻留分支在生命周期写入前由 PM 记录为 **`Main worktree branch`**（主 plan 头），全程不切换。
+- **Iteration base branch**：创建 Spec/iteration 集成分支的祖先分支或 ref；必须显式记录，不能默认 `main` / `master`。**`branch.base` 是创建/merge 锚点，不是主 worktree 驻留事实**——主 worktree（control root）的驻留分支在生命周期写入前由 PM 记录为 **`main_worktree_branch`**（主 plan front matter），全程不切换。
 - **Spec 集成分支**：从 `iteration_base_branch` 创建；各 Plan 实现 merge 回此线后再视为 Spec 在代码侧集成。
 - **Plan 实现分支**：每 `plan_id` 一条（PM 书面）。
-- **PR target**：全部 Plans、各 plan 的 compound、与 iteration-close（specs/ADR 提升）完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment `Branch policy`）。
+- **PR target**：全部 Plans、各 plan 的 compound、与 iteration-close（specs/ADR 提升）完成后，向显式 `target_branch` 提 PR（窄例外见 Assignment front matter `branch_policy`）。
 - **Standalone development plan**：单 plan 交付不经迭代集成序列——交付分支上完成 compound disposition（步骤 → **`mstar-knowledge/references/compound-workflow.md`**）后向显式 target 提交 PR，PR 身份（repo/head/target）在提交时记录；序列与语义 → `mstar-artifacts/references/plan-workflow-lifecycle-contract.md`（迭代序列不变，见上）。
 - Git 操作与 QC 单一 `HEAD` → **`mstar-branch-worktree`**。
 - ACTIVE workflow 行（DB）登记顶层 `branch.base`（`iteration_base_branch`）/ `branch.target`（`target_branch`）/ `branch.integration`（`spec_integration_branch`），以及 plan 行 `metadata.spec_integration_branch` / `merge_target` → **`mstar-artifacts`**。

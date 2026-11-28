@@ -34,7 +34,7 @@ import { dirname, join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = resolve(TEST_DIR, "..");
@@ -45,6 +45,8 @@ assert.ok(existsSync(CLI_ENTRY), `built CLI bundle missing: ${CLI_ENTRY} (run th
 
 const WORKFLOW_ID = "wf-t4-omp-identity";
 const PLAN_ID = "20261004-t4-omp-plan";
+
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 const PLAN_TITLE = "T4 omp identity plan";
 const NATIVE_ID = "omp-native-session-a";
 const BRANCH = "feature/t4-omp-identity";
@@ -84,10 +86,15 @@ async function makeActiveWorkspace(label) {
   execFileSync("git", ["-c", "user.email=t4@test", "-c", "user.name=t4", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-mcp-id-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   return { root, harness };
 }
 
@@ -181,7 +188,8 @@ test("T4: stdio MCP chain - identity-free shared connection, per-call injected i
   const planPath = join(fixture.harness, "plans", `${PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-t4");
-  writeText(planPath, `# ${PLAN_TITLE}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planPath, planFrontMatter(PLAN_ID, `# ${PLAN_TITLE}
+`));
   // A REAL checkout on the branch the registration names: prepare validates the
   // actual checkout and branch.
   execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });

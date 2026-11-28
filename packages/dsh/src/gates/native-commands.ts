@@ -665,13 +665,13 @@ async function adoptNativeExecutionBinding(
       workflowId: bindWorkflowIdOf(input),
     })
   }
-  // The adoption target is the root the shared admission bound in. Both
+  // note: The adoption target is the root the shared admission bound in. Both
   // `plan.bind` arms resolve it as `resolveProcessHarnessDir(cwd,
   // input.harness)` and refuse `null` BEFORE committing, so a committed bind
   // has a non-null root and this call answers the same one: an explicit
   // non-blank `harness` is resolved against the same cwd base (the shared
   // `callHarness` narrowing), and the implicit arm uses the engine's
-  // git-top-level/main-worktree probe (which also honours `MSTAR_HARNESS_DIR`)
+  // git-top-level/main-worktree probe (which ignores `MSTAR_HARNESS_DIR`)
   // — NOT the plugin's workspace-only probe, whose null answer for a
   // subdirectory session used to turn a committed bind into a bare
   // `binding.no-harness` refusal. A relative selector keeps resolving to the

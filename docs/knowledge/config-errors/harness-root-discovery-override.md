@@ -12,12 +12,18 @@ symptoms:
   - "a linked feature worktree carrying a stray status.json resolved and created a second SDD tree under the feature checkout"
 root_cause: "harness-root discovery only probed the conventional names ({HARNESS_DIR}/.agents) and returned the first existing candidate; no explicit override existed for non-default harness roots, and the status.json probe ran before any linked-worktree guard"
 resolution_type: code_fix
-tags: [harness-root, path-resolution, sdd-workspace, worktree, fail-closed, override]
+tags:
+  - harness-root
+  - path-resolution
+  - sdd-workspace
+  - worktree
+  - fail-closed
+  - override
 ---
 
 # Harness-root discovery override
 
-> **Superseded (2026-11-20):** the explicit override this record introduced is retired. The harness root is fixed at `<git main worktree root>/.mstar/`; see `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`. The fail-closed linked-worktree ordering below remains in force.
+> **Superseded (2026-11-20):** the explicit override this record introduced is retired. The harness root is fixed at `<git main worktree root>/.mstar/`; see `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`. The fail-closed linked-worktree ordering below remains in force.
 
 ## Problem
 

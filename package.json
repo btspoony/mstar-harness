@@ -65,6 +65,6 @@
     "description": "Morning Star multi-agent harness skills and iteration commands for omp."
   },
   "overrides": {
-    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.2-rc.3"
+    "@deepseek-ai/dsh-client-ui-plugin-manager": "0.2.2-rc.5"
   }
 }

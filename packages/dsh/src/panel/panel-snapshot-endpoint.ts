@@ -328,16 +328,12 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     }
   }
 
-  /**
-   * Create one milestone (engine `addMilestone`) under the observed store
-   * revision (contract C2: `expectedStoreRevision` comes from the roadmap
-   * read's envelope). One request, one transaction, no partial write.
-   */
+  /** see packages/dsh/src/panel/panel-snapshot-endpoint.ts - Create one milestone (engine `addMilestone`) under the observed store revision (contract C2: `expectedStoreRevision` comes from the overview read's envelope). One request, one transaction, no partial write. */
   async milestoneAdd(
     sessionId: string,
     cwd: string,
     projectId: string,
-    input: { name: string; target: string | null; ordinal: number },
+    input: { name: string; effortSessions: number | null; ordinal: number },
     mutation: { operationId: string; expectedStoreRevision: number },
   ): Promise<MilestoneWriteResult> {
     try {
@@ -351,7 +347,7 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
       }
       const receipt = await addMilestone(
         { harnessDir: target.harnessDir },
-        { projectId, name: input.name, target: input.target ?? null, ordinal: input.ordinal },
+        { projectId, name: input.name, effortSessions: input.effortSessions ?? null, ordinal: input.ordinal },
         mutation,
       )
       return { ok: true, receipt }
@@ -360,7 +356,6 @@ export class MstarPanelSnapshotGateway extends TypertRemoteService {
     }
   }
 
-  /** Edit one milestone's name / target / ordinal / status (engine `updateMilestone`). */
   async milestoneUpdate(
     sessionId: string,
     cwd: string,

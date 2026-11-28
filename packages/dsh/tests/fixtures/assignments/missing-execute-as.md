@@ -1,7 +1,9 @@
-## Assignment
+---
+delegation: forbidden
+task_category: logic
+working_branch: feature/x
+---
 
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/x
+## Assignment
 
 Do the thing.

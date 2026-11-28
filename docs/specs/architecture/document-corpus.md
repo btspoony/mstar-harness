@@ -2,7 +2,7 @@
 
 ## Scope
 
-This page describes the tracked document corpora the harness maintains, what each one owns, how their directories resolve, and where registration lives. Path symbols (`{HARNESS_DIR}`, `{SPECS_DIR}`, `{KNOWLEDGE_DIR}`, `{ADR_DIR}`, `{ITERATION_DIR}`, `{PLAN_DIR}`, `{SDD_DIR}`, `{REVIEW_DIR}`, `{PROJECT_DIR}`, `{WORKFLOW_DIR}`) are resolved by `packages/engine/src/path.ts` and summarized in `skills/mstar-conventions/SKILL.md`. Process state itself is described in [store-authority.md](store-authority.md).
+This page describes the tracked document corpora the harness maintains, what each one owns, how their directories resolve, and where registration lives. Path symbols (`{HARNESS_DIR}`, `{SPECS_DIR}`, `{KNOWLEDGE_DIR}`, `{ADR_DIR}`, `{ITERATION_DIR}`, `{PLAN_DIR}`, `{SDD_DIR}`, `{REVIEW_DIR}`, `{PROJECT_DIR}`, `{WORKFLOW_DIR}`) are resolved by `packages/engine/src/path.ts` and summarized in `skills/mstar-conventions/SKILL.md`. Process state is described in [store-authority.md](store-authority.md) (execution) and [collaboration-authority.md](collaboration-authority.md) (the document catalog and other collaboration facts).
 
 ## Current state
 
@@ -28,7 +28,7 @@ The remaining harness directories are process artifacts, gitignored, with the st
 - `{WORKFLOW_DIR}` (`{HARNESS_DIR}/workflows/`) — retained workflow bodies, the append-only `notes.jsonl` ledger, workflow-owned `reports/`.
 - `{REVIEW_DIR}` (`{HARNESS_DIR}/reviews/`) — review run trees for codebase audits and PR/branch/diff reviews (`mstar audit scaffold` writes; `mstar pr-review report-path` resolves).
 - `{PROJECT_DIR}` (`{HARNESS_DIR}/projects/`) — project files including `<id>/references/` research corpora bound to one project.
-- `{HARNESS_DIR}/store.db` — the state authority itself (see [store-authority.md](store-authority.md)).
+- `{HARNESS_DIR}/store.db` — the execution authority itself (see [store-authority.md](store-authority.md)). The collaboration authority, which owns document catalog registration, is a separate user-level database outside the harness root (see [collaboration-authority.md](collaboration-authority.md)).
 
 ### Path resolution chains
 
@@ -43,32 +43,32 @@ Without a `.mstarc`, all three corpora therefore prefer `.agents/<kind>/`, outsi
 
 ### Git tracking policy
 
-Principle: process stays local; results are shared. Under the default layout, tracked results are `.agents/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and `{ADR_DIR}/**` — the first lives in `.agents/` and the last three default to `.agents/<kind>/`, all outside `{HARNESS_DIR}`; everything under `{HARNESS_DIR}` (plans, iterations, sdd, workflows, projects, reviews, archived, `store.db`, `status.json`) is gitignored. Cross-clone handoff is therefore knowledge + specs + ADR + AGENTS layering; a finding that must cross clones is promoted into a tracked corpus or captured as a store issue. In this repository the corpora resolve outside `{HARNESS_DIR}` (to `docs/`), so they follow normal branch tracking directly; `mstar path check` verifies the landed reality against Git, not directory names, and reports a gitignored result directory as a `path.result-ignored` warning (exit `0`) rather than a finding.
+Principle: process stays local; results are shared. Under the default layout, tracked results are `.agents/AGENTS.md`, `{KNOWLEDGE_DIR}/**`, `{SPECS_DIR}/**`, and `{ADR_DIR}/**` — the first lives in `.agents/` and the last three default to `.agents/<kind>/`, all outside `{HARNESS_DIR}`; everything under `{HARNESS_DIR}` (plans, iterations, sdd, workflows, projects, reviews, archived, `store.db`, `status.json`) is gitignored. Cross-clone handoff is therefore knowledge + specs + ADR + AGENTS layering; a finding that must cross clones is promoted into a tracked corpus or captured as a collaboration issue. In this repository the corpora resolve outside `{HARNESS_DIR}` (to `docs/`), so they follow normal branch tracking directly; `mstar path check` verifies the landed reality against Git, not directory names, and reports a gitignored result directory as a `path.result-ignored` warning (exit `0`) rather than a finding.
 
 ### Catalog registration
 
-The registry for documents is the store's catalog domain (`catalog_entities`, `catalog_links`, `catalog_execution_bindings`; see [store-authority.md](store-authority.md)):
+The registry for documents is the catalog domain of the repository's collaboration database (`catalog_entities`, `catalog_links`, `catalog_operations`; the execution-side pin `catalog_execution_bindings` stays with the workflow that pinned it; see [collaboration-authority.md](collaboration-authority.md)):
 
 - Queries go through `mstar catalog list` / `mstar catalog show`; registration through `mstar catalog register` / `mstar catalog link` or reviewed `mstar catalog discover` + `mstar catalog import`.
 - README files in any corpus (including this one) are prose navigation only — no table in them is a registry, and no document owes a README row.
-- Catalog rows carry identity, path, kind, description, membership, relations, and lifecycle (`active` / `archived` / `superseded`); a revision is frozen into a plan's `execution_inputs` when registered as a plan input, so catalog edits never silently relocate an active plan.
-- Because `store.db` is process-local, tracked bodies alone cannot rebuild catalog history; transport is `catalog export` + reviewed `import`.
+- Catalog rows carry identity, path, kind, description, membership, relations, and lifecycle (`active` / `archived` / `superseded`); a revision is frozen into a plan's `execution_inputs` when registered as a plan input, so catalog edits never silently relocate an active plan. A pin resolves its `(kind, id)` against the collaboration catalog, which is why the cross-file reference is logical, not a foreign key.
+- Because the catalog database is user-level and per repository, tracked bodies alone cannot rebuild catalog history; transport is `catalog export` + reviewed `import`.
 
 ## Invariants
 
 - **Disjoint ownership.** Each long-lived fact has one home: methodology in knowledge, current state in specs, decision rationale in an ADR. A page never assumes another layer's job.
 - **Latest-only specs.** A spec describes the present; no version suffix, date prefix, or history directory is created for it.
-- **Process local, results shared.** Tracked corpora are the cross-clone handoff; store, plans, iterations, and review trees stay local.
+- **Process local, results shared.** Tracked corpora are the cross-clone handoff; the execution store, the collaboration database, plans, iterations, and review trees stay local.
 - **README is navigation.** No README table is a registry, and no document owes a README row for its existence.
 - **Declared config wins.** A `.mstarc` directory key is authoritative and skips the candidate chain for that corpus.
-- **The catalog is the only document registry**, and it lives in the store; file layout alone never registers a document.
+- **The catalog is the only document registry**, and it lives in the repository's collaboration database; file layout alone never registers a document.
 
 ## Where it lives
 
 - Resolvers: `resolveSpecsDir`, `resolveKnowledgeDir`, `resolveAdrDir`, and `resolveHarnessDir` in `packages/engine/src/path.ts`; path symbols are summarized in `skills/mstar-conventions/SKILL.md`.
 - Declared overrides: `.mstarc` `[config]` (`specs_dir`, `knowledge_dir`, `adr_dir`, plus the process-directory keys); `harness_dir` is parsed and ignored.
 - Git reality check: `mstar path check`; the harness root is gitignored in this repository's `.gitignore`.
-- Registration: catalog tables in `{HARNESS_DIR}/store.db` and the `mstar catalog` verb family.
+- Registration: the `catalog_*` tables in the repository's user-level collaboration database and the `mstar catalog` verb family (see [collaboration-authority.md](collaboration-authority.md)).
 - ADR contract: `mstar-doc-corpus/references/adr.md`; this repository's tree and gate: `docs/adr/README.md`, with records filed under `docs/adr/{bucket}/{class}/`.
 
 ## Change obligations
@@ -76,5 +76,5 @@ The registry for documents is the store's catalog domain (`catalog_entities`, `c
 - **New, moved, or retired corpus** → update the corpora table, both resolution lists it belongs to, the `.mstarc` pin statement, and the tracking policy in the same PR.
 - **New directory key in `.mstarc`** → add it to the resolution description and to `skills/mstar-conventions/SKILL.md`.
 - **Change to a resolution chain or probe order** → update the affected chain here and in [store-authority.md](store-authority.md) when the harness root itself moves.
-- **Change to catalog schema or verbs** → update catalog registration and [store-authority.md](store-authority.md).
+- **Change to catalog schema or verbs** → update catalog registration here, [collaboration-authority.md](collaboration-authority.md), and [store-authority.md](store-authority.md) when the execution-side pin changes.
 - **Change to the ADR bucket set or record contract** → update this table, `mstar-doc-corpus/references/adr.md` (the contract), `docs/adr/README.md` (this repository's tree and gate) and the seeded consumer copy `ADR_README` in `packages/engine/src/path.ts` together.

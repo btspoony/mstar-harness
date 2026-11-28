@@ -26,7 +26,7 @@ Mount shape on this host: skills, commands and rules mount as text — no native
 
 ## Plan mode × harness dual-write
 
-When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, ACTIVE store.db registry/workflow/plan rows.
+When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (fixed `.mstar/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, ACTIVE store.db registry/workflow/plan rows.
 
 Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepare gates from `mstar-phase-gates` when not hotfix. Full procedure: **`cursor-plan-mode-bridge.md`**.
 
@@ -38,10 +38,10 @@ Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepar
 | `spec-register` | Register store-backed workflow/plan rows through `mstar workflow register`; prepare via `mstar plan prepare` + spec stub if applicable |
 | `mirror-plan` | Write SSOT main plan under `{PLAN_DIR}/` |
 
-Each **implement todo**: per–task-ID **git commit** on Working branch → SSOT `- [x]` → PM public plan-state update in store.db → `git log -1 --format='%h %an <%ae>'` evidence.
+Each **implement todo**: per–task-ID **git commit** on the Assignment front matter `working_branch` → SSOT `- [x]` → PM public plan-state update in store.db → `git log -1 --format='%h %an <%ae>'` evidence.
 Each implement todo's commit uses the configured identity; missing/failing identity is Blocked, never fabricate or use `-c` identity overrides → `mstar-roles/references/_shared/leaf-executor-core.md` § Git NEVER (repo writes).
 
-Before **SwitchMode → Agent for ordinary per-plan implementation**: mirror plan exists, `mstar status validate` / `mstar plan show` confirms registered workflow/plan identity, bootstrap todos are done. Never use only the Cursor URI as **Plan Path**. Phase 1 restricted-prototype preparation uses the exception below, not premature formal drafts.
+Before **SwitchMode → Agent for ordinary per-plan implementation**: mirror plan exists, `mstar status validate` / `mstar plan show` confirms registered workflow/plan identity, bootstrap todos are done. Never use only the Cursor URI as `plan_path`. Phase 1 restricted-prototype preparation uses the exception below, not premature formal drafts.
 
 After **Build**: reload `mstar-harness-core` + this reference and resume as PM orchestration on the same carrier. Finish any pending Phase 1 design checkpoint before drafting; dispatch implementation only after its own gates, never from Build alone.
 
@@ -58,17 +58,17 @@ Enforcement: `rules/mstar-cursor-plan-mode.mdc` when plugin active.
 
 ## Task tool (QC: SDD → N=3)
 
-- **`Execution mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path (N rules → `parallel-dispatch.md`).
+- **`execution_mode: sdd`**: **N=3** Tasks (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`) + branch review-package path (N rules → `parallel-dispatch.md`).
 - **`inline`**: **N=1** per `parallel-dispatch.md`.
 - SDD implement/reviewer: ready-task scheduling per **`mstar-sdd`** — implementer Task per task id with `subagent_type` matching the implementer role when listed; task reviewer = new Task with `subagent_type: "code-reviewer"` (Cursor L2 review; not qc-specialist*) when listed, else generic fallback per C5 — no `resume` for reviewers. See **`mstar-sdd`**.
 
 ## SDD sticky implementer (Cursor Task resume)
 
-When Assignment has **`SDD implementer session: sticky`** (`mstar-sdd/references/sticky-implementer-session.md`):
+When Assignment has **`sdd_implementer_session: sticky`** (`mstar-sdd/references/sticky-implementer-session.md`):
 
 | Turn | Task tool |
 |------|-----------|
-| **First task** (or after `fresh` reset) | `subagent_type: <Execute as>` + `implementer-prompt.md` body; capture returned **agent id** → `{SDD_DIR}/implementer-session.json` → `host_agent_id` |
+| **First task** (or after `fresh` reset) | `subagent_type: <execute_as>` + `implementer-prompt.md` body; capture returned **agent id** → `{SDD_DIR}/implementer-session.json` → `host_agent_id` |
 | **Task 2+** | `resume: <host_agent_id>` + `implementer-continuation-prompt.md` body (new brief path + report path only) |
 
 **Rules:**
@@ -80,17 +80,17 @@ When Assignment has **`SDD implementer session: sticky`** (`mstar-sdd/references
 
 ## Dispatch execution（canonical）
 
-Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `Execute as` role. Flat JSON field shape → **Task invoke schema (Cursor)** below.
+Cursor PM dispatch = **`Task`** with `subagent_type` matching the Assignment `execute_as` role. Flat JSON field shape → **Task invoke schema (Cursor)** below.
 
-**Role-binding field:** **`subagent_type`** (flat sibling of `prompt`) — must equal the Assignment `Execute as`.
-**Engine scope (#156):** Cursor exposes no dispatcher identity, so the caller-scoped `antiRecursionPrecheck` leg is **skipped** on this host — the binding field carries the **spawn target**, and target == `Execute as` is the compliant C5 pattern — and the red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
+**Role-binding field:** **`subagent_type`** (flat sibling of `prompt`) — must equal the Assignment `execute_as`.
+**Engine scope (#156):** Cursor exposes no dispatcher identity, so the caller-scoped `antiRecursionPrecheck` leg is **skipped** on this host — the binding field carries the **spawn target**, and target == `execute_as` is the compliant C5 pattern — and the red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线). Caller-side hard enforcement exists only where the host declares a dispatcher binding (`dsh.md`).
 
 - **1 Assignment ⇒ 1 Task**; parallel batches ⇒ **N Tasks in one message** → **`parallel-dispatch.md`** (`mstar-dispatch-gates`).
 - Paste-only: Assignment Markdown **does not** start work; PM thread **must not** implement, review, or edit specialist deliverables by loading another role reference in the same session (`Acting as role: …` is **not** dispatch) → **`parallel-dispatch.md`** § Paste-only failure.
 - No callable `Task` / subagent for required work → **`Blocked`** — report to user; do not substitute in-thread execution.
 - **Only exception:** user explicitly overrides harness dispatch for this turn (document the override).
 - Concurrent writers / QC cwd alignment → **`mstar-branch-worktree`** (not a separate “mode”).
-- Implement subagents: recipient is already `Execute as`; **no** recursive Task with same `subagent_type`. Assignment wins (`Delegation: forbidden` unless stated).
+- Implement subagents: recipient is already `execute_as`; **no** recursive Task with same `subagent_type`. Assignment wins (`delegation: forbidden` unless stated).
 
 ## Task invoke schema (Cursor)
 
@@ -102,7 +102,7 @@ Cursor’s live **Task** tool expects a **flat** JSON argument object. `prompt` 
 {
   "description": "3-5 word UI title",
   "prompt": "<full Assignment Markdown body>",
-  "subagent_type": "<Execute as role id or built-in>",
+  "subagent_type": "<execute_as role id or built-in>",
   "model": "<optional host slug>",
   "run_in_background": false
 }
@@ -112,8 +112,8 @@ Cursor’s live **Task** tool expects a **flat** JSON argument object. `prompt` 
 
 | Field | Required | Notes |
 |-------|----------|-------|
-| `prompt` | yes | Full Assignment Markdown string (IDENTITY, gates, Plan Path, Working branch, …) |
-| `subagent_type` | yes | Must equal Assignment `Execute as` (Morning Star role id when using custom agents) |
+| `prompt` | yes | Full Assignment document string — its `---`-fenced front matter is the only field contract, followed by the IDENTITY / gates body (key set → `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)) |
+| `subagent_type` | yes | Must equal Assignment `execute_as` (Morning Star role id when using custom agents) |
 | `description` | recommended | Short UI title only (3–5 words); never the Assignment body |
 | `model` | optional | Host slug for the **session's own model policy** — host-owned and optional; mstar prescribes no tier. Omit to inherit the host default |
 | `run_in_background` | optional | Default false unless PM intentionally backgrounds |
@@ -133,7 +133,7 @@ Task(
 
 Rules:
 
-- `subagent_type` **=** Assignment `Execute as` — never OpenCode’s `subagent` key.
+- `subagent_type` **=** Assignment `execute_as` — never OpenCode’s `subagent` key.
 - `prompt` = plain Markdown Assignment text, **not** a JSON object string of the whole call.
 - `description` = UI title only; do not put the Assignment there.
 
@@ -148,7 +148,7 @@ When `N ≥ 2`, emit **N** separate Task tool calls in **one** assistant message
 | Args as one stringified JSON blob | Flat sibling fields on the Task tool |
 | Field name `subagent` (OpenCode) | `subagent_type` |
 | `CallMcpTool` / MCP wrap for Task | Native Task tool only |
-| Missing `subagent_type` | Always set; match `Execute as` |
+| Missing `subagent_type` | Always set; match `execute_as` |
 | Assignment JSON stuffed only into `prompt`, no top-level `subagent_type` | Both `prompt` and `subagent_type` present |
 | Nested `{ "arguments": { ... } }` Task payload | Flat object at tool-call top level |
 | Treating paste-only `## Assignment` as dispatch | Must emit Task call(s) |
@@ -157,7 +157,7 @@ When `N ≥ 2`, emit **N** separate Task tool calls in **one** assistant message
 
 1. Tool name is **Task** (not MCP, not OpenCode `task`+`subagent`).
 2. Top-level keys include **`prompt`** and **`subagent_type`** (siblings).
-3. `subagent_type` equals Assignment `Execute as`.
+3. `subagent_type` equals Assignment `execute_as`.
 4. `prompt` is Markdown Assignment text, not stringified JSON of the whole call.
 5. If sticky continue: `resume` + continuation prompt per sticky section; else omit `resume`.
 6. If `N ≥ 2`: this message contains **exactly N** Task calls (`parallel-dispatch.md`).

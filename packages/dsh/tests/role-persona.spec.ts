@@ -41,12 +41,15 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { describe, expect, it, afterEach } from 'bun:test'
 import type { SubagentActivationSpec, SubagentRuntime } from '@deepseek-ai/dsh-subagent'
+import * as fallbacksModule from 'dsh-llm-fallbacks'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as plugin from '../src/index.ts'
 import type { SubagentActivationSpecView, SubagentsServiceView } from '../src/gates/role-persona.ts'
 import { fallbacksMounted } from '../src/gates/fallbacks-probe.ts'
+import { subagentRoleIds } from '../src/gates/agent-personas.ts'
+import { packagedAgentsDir } from '../src/gates/_shared.ts'
 import {
   FakeAgentPresetRegistry,
   FakeLoaderRegistry,
@@ -92,9 +95,11 @@ const UNMAPPED_ROLE = 'scout'
 
 /** One mstar-style Assignment prompt: the header region the engine parses. */
 const ASSIGNMENT_PROMPT = [
-  `**Execute as**: ${EXECUTE_AS}`,
-  '**Delegation**: forbidden',
-  '**Task category**: logic',
+  '---',
+  `execute_as: ${EXECUTE_AS}`,
+  'delegation: forbidden',
+  'task_category: logic',
+  '---',
   '',
   'Implement the assigned work.',
 ].join('\n')
@@ -248,6 +253,99 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
       restore()
     }
   })
+
+  it('(c2) fallbacks mounted → the delegated prompt carries the Execute-as bridge line', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: app.root }))
+
+    const prompt = provider.starts[0]!.request.prompt as Array<{ type: string; text?: string }>
+    expect(prompt[0]).toEqual({ type: 'text', text: `**Execute as**: ${EXECUTE_AS}\n` })
+    expect(prompt.slice(1)).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
+  it('(c4) a gate exemption leaves the prompt untouched with fallbacks mounted', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
+    const request: RecordedRequest = { ...textPrompt(ASSIGNMENT_PROMPT), agentPreset: PRESET_ID, cwd: app.root }
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', request))
+
+    expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
+  it('(c5) roleGate off keeps the prompt untouched with fallbacks mounted', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', {}, { roleGate: 'off' })
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: app.root }))
+
+    expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+  })
+
+  it('(c6) a non-harness start keeps the prompt untouched with fallbacks mounted', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    expect(fallbacksMounted(app.ctx)).toBe(true)
+    const outside = await mkdtemp(join(tmpdir(), 'dsh-non-harness-'))
+    try {
+      await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: outside }))
+
+      expect(provider.starts[0]!.request.prompt).toEqual([{ type: 'text', text: ASSIGNMENT_PROMPT }])
+    } finally {
+      await rm(outside, { recursive: true, force: true })
+    }
+  })
+
+  it('(c7) roleGate off still bridges a role the gate repaired', async () => {
+    const { app, provider } = await bootWithProvider('fake-spawn', {}, { roleGate: 'off' })
+    const loader = app.ctx.get('loader') as FakeLoaderRegistry
+    loader.entriesList.push({ options: { name: 'dsh-llm-fallbacks' }, disabled: false, fiber: {} })
+    const repairPrompt = `Role: \`${EXECUTE_AS}\`\n\nImplement the assigned work.`
+
+    await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(repairPrompt), cwd: app.root }))
+
+    const prompt = provider.starts[0]!.request.prompt as Array<{ type: string; text?: string }>
+    expect(prompt[0]).toEqual({ type: 'text', text: `**Execute as**: ${EXECUTE_AS}\n` })
+  })
+
+  const agentsRoot = packagedAgentsDir()
+  const realReaderSkip = agentsRoot === undefined
+    ? 'harness-agents mirror not synced — run `bun run --cwd packages/dsh bundle-assets`'
+    : !subagentRoleIds(agentsRoot).includes(EXECUTE_AS)
+      ? `the packaged agents mirror declares no '${EXECUTE_AS}' role`
+      : undefined
+  if (realReaderSkip !== undefined) console.warn(`(c3) skipped: ${realReaderSkip}`)
+  it.skipIf(realReaderSkip !== undefined)(
+    '(c3) real dsh-llm-fallbacks resolves the bridged role from a front-matter Assignment',
+    async () => {
+      const { app, provider } = await bootWithProvider('fake-spawn', {}, {
+        fallbacksModule,
+        settingsService: 'fake-deferred',
+      })
+      const fallbacks = app.ctx.get('llm-fallbacks')
+      if (fallbacks === undefined) throw new Error('the real llm-fallbacks service is not applied')
+      await untilReached(() => fallbacks.getEffectiveRoles().roles.some((row) => row.id === EXECUTE_AS))
+
+      const result = await startActivationViaNativeChannel(app, specFor('fake-spawn', { ...textPrompt(ASSIGNMENT_PROMPT), cwd: app.root }))
+      const childId = typeof result === 'object' && result !== null && 'id' in result && typeof result.id === 'string'
+        ? result.id
+        : undefined
+      expect(typeof childId).toBe('string')
+      if (childId === undefined) throw new Error('the activation result carries no child id')
+      await untilReached(() => fallbacks.getAgentRole(childId) === EXECUTE_AS)
+      expect(fallbacks.getAgentRole(childId)).toBe(EXECUTE_AS)
+      expect(provider.starts[0]!.request.agentPreset).toBe(PRESET_ID)
+    },
+  )
 
   it('(d) provider without the agentPreset capability → no selection + ONE debug, the start proceeds', async () => {
     // Selecting a preset the runtime would reject is never acceptable, so the
@@ -588,6 +686,27 @@ describe('native role-preset channel — Config.rolePresets → SubagentStartReq
     // Boundary cast: the resolved service carries no declared symbol index.
     const afterDispose = (await readSubagents(app.ctx)) as Record<symbol, unknown>
     expect(afterDispose[ROLE_PERSONA_WRAPPER_BRAND]).toBeUndefined()
+  })
+
+  it('(legacy) the retired body-label Assignment grammar refuses at the native start (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the terminal
+    // legacy-format refusal fires ahead of every exemption (preset, canonical,
+    // non-harness, unknown provider), so no provider start ever happens.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const { app, provider } = await bootWithProvider('fake-spawn')
+    const LEGACY_BODY_LABEL_PROMPT = [
+      '## Assignment',
+      '',
+      '**Execute as**: fullstack-dev',
+      '**Delegation**: forbidden',
+      '**Task category**: logic',
+      '',
+      'Implement the assigned work.',
+    ].join('\n')
+
+    await expect(startActivationViaNativeChannel(app, specFor('fake-spawn', textPrompt(LEGACY_BODY_LABEL_PROMPT))))
+      .rejects.toThrow(/legacy-format/)
+    expect(provider.starts).toHaveLength(0)
   })
 })
 

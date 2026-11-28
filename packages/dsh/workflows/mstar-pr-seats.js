@@ -14,8 +14,6 @@ const withSecurity = a.security !== false
 const diffHint = typeof a.diffFile === 'string' && a.diffFile.length > 0
   ? 'the pinned diff snapshot at ' + a.diffFile + ', plus ' + a.diffBase + ' in ' + a.worktree
   : a.diffBase + ' in ' + a.worktree
-const budgetLine = '\nBudget: ' + a.budgetLine
-
 const SEAT = {
   type: 'object',
   description: 'One read-only PR review seat payload (findings only — the seat produces no verdict).',
@@ -44,18 +42,21 @@ const SEAT = {
   },
 }
 
-const seatPrompt = (domain, extra) => `## Assignment
+const seatPrompt = (domain, extra) => `---
+execute_as: code-reviewer
+delegation: forbidden
+task_category: audit
+budget: ${a.budgetLine}
+return_shape: the seat findings in the audit format; stop when the diff or the budget bound is reached
+review_cwd: ${a.worktree}
+diff_basis: ${a.diffBase}
+---
 
-Execute as: code-reviewer
-Delegation: forbidden
-Task category: audit
-**Budget (review / QC seats)**: /1 round — one pass over the diff
-**Return shape (review / QC seats)**: the seat findings in the audit format; stop when the diff or the budget bound is reached
+## Assignment
 
 Review target: ${a.target}
-Review worktree: ${a.worktree}
 Domain: ${domain}
-Diff basis: ${a.diffBase}${budgetLine}
+Diff basis: ${a.diffBase}
 Stage: Stage 2 domain review — read-only, you never post and never produce the verdict.
 
 Read-only audit seat in the three-stage PR review pipeline; the main agent synthesizes one verdict and posts.

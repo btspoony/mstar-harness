@@ -58,11 +58,11 @@ afterEach(async () => {
 /* ---------------------------------- fixtures ---------------------------------- */
 
 /** A fully valid Assignment — the dispatch row is what every case starts from. */
-const ASSIGNMENT = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
+const ASSIGNMENT = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+---
 
 Do the thing.
 `
@@ -661,13 +661,13 @@ describe('team agent flow — early-end admission keeps genuine ends and is hone
 /* ------------------------------ the real composition (ACTIVE workflow seeded) ------------------------------ */
 
 /** A fully valid writable Assignment (the positive-control shape the dispatch specs use). */
-const VALID_WRITABLE = `## Assignment
-
-**Execute as**: fullstack-dev
-**Delegation**: forbidden
-**Task category**: logic
-**Working branch**: feature/team-ledger
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+const VALID_WRITABLE = `---
+execute_as: fullstack-dev
+delegation: forbidden
+task_category: logic
+working_branch: feature/team-ledger
+task_budget: S — one focused implementer round
+---
 
 Do the thing, evidence-first.
 `
@@ -722,5 +722,42 @@ describe('team agent flow — an ACTIVE-workflow-seeded activation resolves or i
     const rows = ledgerRows(app.harnessDir, 'wf-team-orphan')
     expect(rows.some((row) => row.kind === 'settle')).toBe(false)
     expect(rows.find((row) => row.kind === 'continuation')).toMatchObject({ state: 'unresolved', role: 'fullstack-dev' })
+  })
+})
+
+/**
+ * ------------------- D16 legacy body-label regression -------------------
+ * see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+ */
+
+describe('team agent flow — the retired body-label grammar is inert in the ledger', () => {
+  it('a body-label Assignment records no derived fields (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the dispatch
+    // gate refuses the retired `**Label**` grammar upstream, so its ledger
+    // mirror is a dispatch row with NO derived role/category/plan fields.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    const LEGACY_BODY_LABEL = `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+Do the thing.
+`
+    recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: workflowDir,
+      selectedGeneration,
+      exec: subagentExec('call-legacy', LEGACY_BODY_LABEL),
+      pairing: newPairing(),
+      prompt: LEGACY_BODY_LABEL,
+      violations: [],
+      hard: false,
+    })
+    expect(readAgentFlow(workflowDir, 'wf-1')?.events).toEqual([
+      expect.objectContaining({ kind: 'dispatch', role: '', taskCategory: null, planId: null }),
+    ])
   })
 })

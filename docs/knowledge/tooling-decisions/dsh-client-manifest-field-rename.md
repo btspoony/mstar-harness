@@ -19,7 +19,7 @@ tags:
 
 ## Context
 
-The MStar workflow panel (`@mstar-harness/dsh` web client half) disappeared from the dsh web GUI after the upstream dsh source tree moved to snapshot `staging-20260810T165245Z`. Root-cause chain (real-machine evidence, 2026-08-11): upstream `packages/client/modules/src/index.ts` `parseDshClient` / `resolveMeta` now read the **nested `pkg.dsh.client`** declaration with **no legacy `pkg.dshClient` fallback**; our manifest still declared the old top-level `dshClient` key, so client-modules discovery parsed the declaration as `undefined` → the package was judged "not a web client module" → the boot manifest (`window.__DSH_BOOT__.entries`) contained no `@mstar-harness/dsh` row → the panel entry never loaded. The server side (catalog rows, `/plugins/<id>/client.js` route, `dist/client.js`) was intact — the only break was the manifest field.
+The MStar workflow panel (`@mstar-harness/dsh` web client half) disappeared from the dsh web GUI after the upstream dsh source tree moved to snapshot `staging-20260810T165245Z`. Root-cause chain (real-machine evidence, 2026-08-11): upstream `packages/client/modules/src/index.ts` (since split into the published `@deepseek-ai/dsh-client-modules` package) `parseDshClient` / `resolveMeta` now read the **nested `pkg.dsh.client`** declaration with **no legacy `pkg.dshClient` fallback**; our manifest still declared the old top-level `dshClient` key, so client-modules discovery parsed the declaration as `undefined` → the package was judged "not a web client module" → the boot manifest (`window.__DSH_BOOT__.entries`) contained no `@mstar-harness/dsh` row → the panel entry never loaded. The server side (catalog rows, `/plugins/<id>/client.js` route, `dist/client.js`) was intact — the only break was the manifest field.
 
 This doc records the fix decision (migrate + contract test + boot-manifest verification method) so a future upstream field rename fails loudly in-loop instead of silently shipping a missing panel.
 
@@ -31,7 +31,7 @@ This doc records the fix decision (migrate + contract test + boot-manifest verif
 
 ## Root Cause
 
-- Upstream contract (staging-20260810T165245Z, `packages/client/modules/src/index.ts`): `resolveMeta` reads `pkg.dsh` → `parseDshClient(pkgName, pkg.dsh.client)`; `parseDshClient` returns `undefined` when the value is `undefined` (missing key is silent — no fallback to a top-level `dshClient`; a non-object value or a non-string `platform` is a loud throw). `decl === undefined || decl.platform !== 'web'` → `pkgMeta = null` → package never becomes a client row.
+- Upstream contract (staging-20260810T165245Z, then `packages/client/modules/src/index.ts`; now `@deepseek-ai/dsh-client-modules`): `resolveMeta` reads `pkg.dsh` → `parseDshClient(pkgName, pkg.dsh.client)`; `parseDshClient` returns `undefined` when the value is `undefined` (missing key is silent — no fallback to a top-level `dshClient`; a non-object value or a non-string `platform` is a loud throw). `decl === undefined || decl.platform !== 'web'` → `pkgMeta = null` → package never becomes a client row.
 - Our `packages/dsh/package.json` still declared top-level `"dshClient": { inject, platform }` → `pkg.dsh` was `undefined` → not a client module.
 - `ClientModuleHostService` writes only packages declaring `dsh.client` into `window.__DSH_BOOT__.entries` → the boot graph lacks the entry → the panel entry never loads.
 

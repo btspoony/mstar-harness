@@ -7,19 +7,26 @@
  * validation implementation. Every case runs the layer against the real store
  * boundary; nothing is mocked.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { MAX_DASHBOARD_SEARCH_LENGTH, dashboardFailure, dashboardFilters, readDashboardView } from "./dashboard-view.js";
 import { catalogRootDir, linkCatalogEntities, registerCatalogEntity } from "./catalog.js";
 import { createExecutionWorkflow, readExecutionState } from "./execution-store.js";
 import { captureIssue, getIssue, ISSUE_DISPOSITIONS, ISSUE_KINDS, ISSUE_SEVERITIES } from "./issue.js";
 import { addMilestone } from "./milestone-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
+import { bindRemoteAuthority, ingestRemoteObservation } from "./collaboration-remote.js";
+import { completeSnapshot, createRemoteScope, positiveCheck, REMOTE_IDS, submission } from "./remote-scope.fixture.js";
 import { initializeStore, openStore } from "./store-db.js";
 import { queryDashboard, withStoreRead } from "./store-read.js";
 import type { CatalogEntityInput, CatalogOperation } from "./catalog.js";
-import type { IssueDetail } from "./issue.js";
+import type { IssueDetail, IssuePage } from "./issue.js";
 import type { MilestoneRead } from "./milestone-store.js";
 import type { StoreContext } from "./store-db.js";
 import type {
@@ -31,22 +38,71 @@ import type {
   OverviewDTO,
   OverviewMember,
   ReadEnvelope,
+  WorkflowListDTO,
 } from "./store-read.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-view-"));
+const TEST_HOME = join(ROOT, "home");
+mkdirSync(TEST_HOME, { recursive: true });
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => TEST_HOME);
+});
 const RECORDED_AT = "2026-10-22T00:00:00.000Z";
 
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
 async function workspace(name: string): Promise<StoreContext> {
-  const harness = join(mkdtempSync(join(ROOT, name)), ".mstar");
+  const dir = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], {
+    cwd: dir,
+    stdio: ["ignore", "ignore", "ignore"],
+  });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${dir}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: dir, stdio: ["ignore", "ignore", "ignore"] },
+  );
+  writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harness = join(dir, ".mstar");
   mkdirSync(harness, { recursive: true });
   const context: StoreContext = { harnessDir: harness };
   const handle = await initializeStore(context);
   handle.close();
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  activateCollaboration(context);
   return context;
+}
+
+/**
+ * invariant: Publish the staged collaboration lane AND this checkout's binding -- the two
+ * records the real activation writes. An ACTIVE authority is never usable from
+ * an unbound checkout, so a fixture that flips only the lane is refused.
+ */
+function activateCollaboration(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const lane = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
+  try {
+    lane
+      .prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1")
+      .run(new Date().toISOString());
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 describe("dashboardFilters refusals", () => {
@@ -56,8 +112,8 @@ describe("dashboardFilters refusals", () => {
 
   test("refuses an unsupported query field per view", () => {
     expect(() => dashboardFilters("projects", { limit: "2" })).toThrow(/"limit" is not a supported projects query parameter/);
-    expect(() => dashboardFilters("roadmap", { disposition: "open" })).toThrow(
-      /"disposition" is not a supported roadmap query parameter/,
+    expect(() => dashboardFilters("projects", { project: "proj-a" })).toThrow(
+      /"project" is not a supported projects query parameter/,
     );
   });
 
@@ -86,10 +142,6 @@ describe("dashboardFilters refusals", () => {
     for (const unsafe of [".", "..", "/", "\\", "a/b", "a\\b", "a\u0000b"]) {
       expect(() => dashboardFilters("issues", { project: unsafe })).toThrow(/project must be a single safe id/);
     }
-  });
-
-  test("refuses the roadmap view without a project", () => {
-    expect(() => dashboardFilters("roadmap")).toThrow(/the roadmap view requires a project query parameter/);
   });
 
   test("refuses a detail view without an id", () => {
@@ -127,7 +179,7 @@ describe("dashboardFilters refusals", () => {
     expect(
       dashboardFilters("issues", { project: "proj-a", disposition: "open", kind: "bug", severity: "high", q: "race", limit: "10", offset: "5" }),
     ).toEqual({ issue: { projectId: "proj-a", disposition: "open", kind: "bug", severity: "high", query: "race", limit: 10, offset: 5 } });
-    expect(dashboardFilters("roadmap", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
+    expect(dashboardFilters("overview", { project: "proj-a" })).toEqual({ projectId: "proj-a" });
     expect(dashboardFilters("iteration-detail", {}, "iter-read")).toEqual({ id: "iter-read" });
   });
 });
@@ -164,15 +216,123 @@ describe("readDashboardView over a real store", () => {
       id: "I-000001",
     });
     const detail: IssueDetail = envelope.data as IssueDetail;
-    expect(detail).toEqual(await getIssue(context, "I-000001"));
+    // why: The domain reader also stamps its own observation; the dashboard DTO keeps
+    // the detail shape and the envelope carries that observation.
+    const direct = await getIssue(context, "I-000001");
+    const { collaboration: detailEvidence, ...directDetail } = direct;
+    expect(detail).toEqual(directDetail);
+    expect(detailEvidence.completeness).toBe("complete");
     expect(typeof envelope.storeRevision).toBe("number");
     expect(envelope.catalogRevision).toBe(0);
   });
 
   test("surfaces a store refusal through dashboardFailure", async () => {
-    const harness = join(mkdtempSync(join(ROOT, "uninitialized-")), ".mstar");
+    const dir = mkdtempSync(join(ROOT, "uninitialized-"));
+    execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "ignore", "ignore"] });
+    execFileSync("git", ["remote", "add", "origin", "https://github.com/acme/uninitialized.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    execFileSync("git", ["config", `url.${dir}.insteadOf`, "https://github.com/acme/uninitialized.git"], {
+      cwd: dir,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+    writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
+    const harness = join(dir, ".mstar");
+    mkdirSync(harness, { recursive: true });
     const failure = await readDashboardView({ context: { harnessDir: harness }, view: "issues" }).catch((error: unknown) => error);
-    expect(dashboardFailure(failure)).toMatchObject({ code: "store.not-initialized" });
+    expect(dashboardFailure(failure)).toMatchObject({ code: "collaboration.not-initialized" });
+  });
+});
+
+describe("dashboard collaboration disclosure", () => {
+  /** note: Remove the workspace's collaboration authority: an unavailable source, not an empty one. */
+  function removeCollaboration(context: StoreContext): void {
+    unlinkSync(resolveCollaborationLocation(context).dbPath);
+  }
+
+  test("a pure collaboration view refuses when its authority is missing", async () => {
+    const context = await workspace("disclosure-pure-");
+    removeCollaboration(context);
+    const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
+    const typed = dashboardFailure(failure);
+    // invariant: A typed non-success, never a 404-shaped or zero-row answer.
+    expect(typed.code).toBe("collaboration.not-initialized");
+    // why: The refusal keeps the recovery path and drops the user's home and store file.
+    expect(typed.message).toContain("mstar store init");
+    expect(typed.message).not.toContain(TEST_HOME);
+    expect(typed.message).not.toMatch(/\.db\b/);
+  });
+
+  test("a credential-shaped value in a refusal is redacted", () => {
+    for (const [scheme, secret] of [
+      ["Bearer", "sk-live-bearer"],
+      ["Basic", "dXNlcjpwYXNz"],
+      ["Token", "tok-live-123"],
+    ] as const) {
+      const typed = dashboardFailure(new Error(`Authorization: ${scheme} ${secret}`));
+      expect(typed.message).not.toContain(secret);
+      expect(typed.message).toContain("{REDACTED}");
+    }
+    // invariant: A scheme-led credential without the header label is redacted too — in any
+    // scheme capitalization (a bare lower-case `bearer` must not escape).
+    for (const [scheme, secret] of [
+      ["bearer", "sk-live-456"],
+      ["bAsIc", "dXNlcjpwYXNz"],
+      ["toKeN", "tok-live-mixed"],
+      ["dIgEsT", "nonce=abc"],
+    ] as const) {
+      const bare = dashboardFailure(new Error(`provider refused ${scheme} ${secret}`));
+      expect(bare.message).not.toContain(secret);
+      expect(bare.message).toContain("{REDACTED}");
+    }
+    // note: A Digest value is a parameter list: every parameter is redacted with it.
+    const digest = dashboardFailure(
+      new Error('Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"'),
+    );
+    for (const leaked of ["Mufasa", "test", "abc", "deadbeef"]) expect(digest.message).not.toContain(leaked);
+    expect(digest.message).toContain("Authorization: {REDACTED}");
+    const keyed = dashboardFailure(new Error("transport refused token=sk-live-123"));
+    expect(keyed.message).not.toContain("sk-live-123");
+  });
+
+  test("an execution-only list keeps its rows and discloses the optional gap", async () => {
+    const context = await workspace("disclosure-optional-");
+    await createPlanWorkflow(context, "p-disclosure", "Todo");
+    // invariant: A generation is published first, as it would be on a healthy checkout; the
+    // later unavailable catalog must not turn those rows into an empty success.
+    const published = await readDashboardView({ context, view: "workflows" });
+    expect((published.data as WorkflowListDTO).items.map((item) => item.id)).toContain("p-disclosure");
+    removeCollaboration(context);
+    const envelope = await readDashboardView({ context, view: "workflows" });
+    const list = envelope.data as WorkflowListDTO;
+    // note: Previously usable execution data stays; only the unavailable optional
+    // catalog association is disclosed, and no collaboration counter is claimed.
+    expect(list.items.map((item) => item.id)).toContain("p-disclosure");
+    expect(envelope.collaboration).toMatchObject({
+      completeness: "unavailable",
+      code: "collaboration.not-initialized",
+    });
+    expect(envelope.storeRevision).toBeNull();
+    expect(envelope.catalogRevision).toBeNull();
+    expect(envelope.execution).not.toBeNull();
+  });
+
+  test("the mixed overview refuses rather than reporting placeholder totals", async () => {
+    const context = await workspace("disclosure-mixed-");
+    removeCollaboration(context);
+    const failure = await readDashboardView({ context, view: "overview" }).catch((error: unknown) => error);
+    expect(dashboardFailure(failure).code).toBe("collaboration.not-initialized");
+  });
+
+  test("a complete observation may legitimately report zero", async () => {
+    const context = await workspace("disclosure-zero-");
+    const envelope = await readDashboardView({ context, view: "issues" });
+    const page = envelope.data as IssuePage;
+    expect(page.items).toEqual([]);
+    expect(page.total).toBe(0);
+    expect(envelope.collaboration?.completeness).toBe("complete");
+    expect(typeof envelope.storeRevision).toBe("number");
   });
 });
 
@@ -304,13 +464,9 @@ function readMember<T>(member: OverviewMember<T>): T {
   return member.data;
 }
 
+/** note: The CAS revision the milestone verbs guard on: the collaboration counter. */
 async function storeRevision(context: StoreContext): Promise<number> {
-  const handle = await openStore(context, "read");
-  try {
-    return (handle.db.prepare("select revision from store_meta where id = 1").get() as { revision: number }).revision;
-  } finally {
-    handle.close();
-  }
+  return (await readCollaborationAuthority(context)).revision;
 }
 
 /** One plan workflow per gate case: the plan row's workflow id is the plan id. */
@@ -417,7 +573,7 @@ async function scopedOverviewWorkspace(name: string): Promise<StoreContext> {
 
   await addMilestone(
     context,
-    { projectId: "proj-a", name: "Read boundary", target: "2026-09-30", ordinal: 0 },
+    { projectId: "proj-a", name: "Read boundary", effortSessions: 3, ordinal: 0 },
     { operationId: "add-milestone-read-boundary", expectedStoreRevision: await storeRevision(context) },
   );
 
@@ -491,6 +647,7 @@ describe("overview read model", () => {
     const milestones: MilestoneRead = readMember(overview.milestones);
     expect(milestones.projectId).toBe("proj-a");
     expect(milestones.milestones.map((milestone) => milestone.name)).toEqual(["Read boundary"]);
+    expect(milestones.milestones.map((milestone) => milestone.effortSessions)).toEqual([3]);
 
     // Latest iteration: the newest compass start date inside the project, and
     // it reuses IterationDTO, so the gate step travels with it.
@@ -678,7 +835,7 @@ describe("overview read model", () => {
     expect((listed.data as IterationListDTO).attribution).toBe("absent");
   });
 
-  test("a resolved project with no roadmap answers milestones with data, never not-applicable", async () => {
+  test("a resolved project with no milestones answers milestones with data, never not-applicable", async () => {
     const context = await workspace("overview-empty-project-");
     await registerCatalogEntity(
       context,
@@ -788,23 +945,61 @@ describe("overview read model", () => {
       { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
       operation("register-proj-a"),
     );
-    // Remove the one table the milestone member reads; every other reader is
-    // untouched, so only `milestones` may answer `unavailable`.
-    const handle = await openStore(context, "write");
+    // why: Remove the one table the milestone member reads; every other reader is
+    // untouched, so only `milestones` may answer `unavailable`. The project is
+    // removed from the catalog, which the milestone grouping resolves against;
+    // the other members keep reading their own rows.
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
     try {
-      handle.db.exec("drop table project_milestones");
-      handle.db.prepare("update store_meta set revision = revision + 1 where id = 1").run();
+      lane.exec("delete from catalog_entities where kind = 'project' and id = 'proj-a'");
+      lane.prepare("update collaboration_meta set revision = revision + 1 where id = 1").run();
     } finally {
-      handle.close();
+      lane.close();
     }
 
     const overview = (await readDashboardView({ context, view: "overview", params: { project: "proj-a" } }))
       .data as OverviewDTO;
     expect(overview.milestones.state).toBe("unavailable");
     // The reason is the store's own message, not a rewritten one.
-    expect(overview.milestones.state === "unavailable" ? overview.milestones.reason : "").toContain("project_milestones");
+    expect(overview.milestones.state === "unavailable" ? overview.milestones.reason : "").toContain(
+      "Project proj-a does not exist",
+    );
     for (const member of [overview.workflows, overview.residuals, overview.latestIteration, overview.issueFlow] as const) {
       expect(member.state).toBe("read");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// note: Remote selection: the dashboard transport never collapses to an empty page
+// ---------------------------------------------------------------------------
+
+describe("remote dashboard transport", () => {
+  test("a complete remote scope serves the issue page and discloses its source", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-dashboard");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const check = positiveCheck();
+    await ingestRemoteObservation(context, submission(commit, check, completeSnapshot(check), 0));
+
+    const envelope = await readDashboardView({ context, view: "issues" });
+    const page = envelope.data as IssuePage;
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ issueRef: REMOTE_IDS.issueRef, severity: "high" });
+    expect(page.providerIssues).toEqual([expect.objectContaining({ kind: "provider-only", nativeStatus: "Done" })]);
+    expect(envelope.collaboration).toMatchObject({ source: "remote", completeness: "complete" });
+
+    const detail = await readDashboardView({ context, view: "issue-detail", id: REMOTE_IDS.providerOnlyIssueId, params: { project: REMOTE_IDS.projectId } });
+    expect(detail.data).toMatchObject({ kind: "provider-only", nativeStatus: "Done" });
+  });
+
+  test("an unobserved remote scope refuses instead of answering an empty dashboard", async () => {
+    const fixture = createRemoteScope(ROOT, "remote-dashboard-empty");
+    const commit = fixture.publish();
+    const context = fixture.context();
+    await bindRemoteAuthority(context, fixture.batch(commit));
+    const failure = await readDashboardView({ context, view: "issues" }).catch((error: unknown) => error);
+    expect(failure).toMatchObject({ code: "remote.unavailable" });
   });
 });

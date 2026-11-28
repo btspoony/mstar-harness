@@ -18,17 +18,7 @@ or a custom profile).
   provider as a **single canonical mount** (`providerName: mstar`). Skills are
   loadable by **name** via `ctx.skills`; the canonical skill-root form is
   `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]`.
-- Plugin commands: the plugin registers the **eight** bundled
-  **`harness-commands/`** commands on `ctx.commands` — **`/iteration-start`**,
-  **`/iteration-drive`**, **`/iteration-loop`**, **`/codebase-audit`**, **`/codebase-comment-cleanup`**,
-  **`/amazing-pr-review`**, **`/amazing-e2e-check`**,
-  **`/amazing-test-audit`**. Each
-  command steers its command body into the receiving agent as a USER-source
-  message (the mstar workflow prompt — the model executes it as a task, not
-  injected context), returning a success result. The plugin registers **no
-  duplicated** mstar command tools: the writable mstar command surface on this
-  host is the **MCP** route (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface),
-  and the only native tools are the three the MCP route cannot replace.
+- Plugin commands: the plugin registers the bundled **`harness-commands/`** commands on `ctx.commands` — every shipped mstar slash command (full set: `docs/commands.md`), each steering its command body into the receiving agent as a USER-source message (the mstar workflow prompt — the model executes it as a task, not injected context) and returning a success result. The plugin registers **no duplicated** mstar command tools: the writable mstar command surface on this host is the **MCP** route (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface), and the only native tools are the three the MCP route cannot replace.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.
@@ -126,21 +116,9 @@ never replace a running child with a second spawn because you could not see it.
 
 ### `subagent` dispatch shape
 
-The dsh `subagent` tool is the DIRECT delegation channel (schema rendered by
-`@deepseek-ai/dsh-tool-subagent`; `provider`-bound, default toolName
-`subagent`) — the one that carries an Assignment when the Team layer is not
-mounted, and the shape below is what its callers emit. On a Team-mode profile the
-same Assignment text goes out through a board task + a teammate created with
-`subagent` / `subagent_fork` (§ Delegation channels).
-Either way the dispatch gate validates the
-**Assignment header region** (`## Assignment`
-+ `**Execute as**` / `**Delegation**` / `**Task category**` / `**Working
-branch**` / `**Branch policy**` fields — engine `composeDispatchGate`, same
-violation codes as opencode/omp/CLI).
+The dsh `subagent` tool is the DIRECT delegation channel (schema rendered by `@deepseek-ai/dsh-tool-subagent`; `provider`-bound, default toolName `subagent`) — the one that carries an Assignment when the Team layer is not mounted, and the shape below is what its callers emit. On a Team-mode profile the same Assignment text goes out through a board task + a teammate created with `subagent` / `subagent_fork` (§ Delegation channels).
 
-Envelope-first discipline applies: put the header fields at the top of the
-Assignment body — the dsh dispatch gate reads only the header region, so
-body-quoted examples never leak into header fields.
+Either way the dispatch gate validates the **Assignment front matter**: `execute_as` / `delegation` / `task_category`, plus exactly one branch form (`working_branch` or `branch_policy`) — required on a WRITABLE dispatch, optional for a read-only `scout` / `explore` orientation, and refused when both appear on either. Condition and its control-domain variant → **`mstar-branch-worktree`** § Assignment 要求（PM）; engine `parseAssignmentFields` + `composeDispatchGate`, same violation codes as opencode/omp/CLI. Front matter is the only field contract: it opens the document, a body `**Label**:` line declares nothing (`dispatch.assignment.legacy-format`), and the full key set lives in `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical).
 
 ## Delegation channels
 
@@ -223,50 +201,11 @@ The orchestration-level fact: attribution resolves through the native `mstar_pla
 
 ## PM dispatch
 
-Harness **dispatch** on dsh carries the full Assignment text as the delegation
-prompt (role binding in the prompt — `Execute as` / `Act as` + skill load;
-there is no separate `agent` field, the Assignment body IS the prompt). **Which
-tool carries it is the mounted channel's decision** (§ Delegation channels):
-with Agent Teams (Team mode on), one board task plus one teammate per assignee,
-created with `subagent` / `subagent_fork`; with Team
-mode off, one bare `subagent` call per Assignment. **N
-assignees = N independent delegations** on either channel (dispatch-gate
-口径: one assistant message carries all N invokes — the gate counts each
-dispatched Assignment, board task or `subagent` call alike). Paste-only
-Assignment without an invoke is **not** dispatch.
+Harness **dispatch** on dsh carries the full Assignment text as the delegation prompt (role binding in the prompt — the Assignment front matter `execute_as` / `Act as` + skill load; there is no separate `agent` field, the Assignment document IS the prompt). **Which tool carries it is the mounted channel's decision** (§ Delegation channels): with Agent Teams (Team mode on), one board task plus one teammate per assignee, created with `subagent` / `subagent_fork`; with Team mode off, one bare `subagent` call per Assignment. **N assignees = N independent delegations** on either channel (dispatch-gate 口径: one assistant message carries all N invokes — the gate counts each dispatched Assignment, board task or `subagent` call alike). Paste-only Assignment without an invoke is **not** dispatch.
 
-**Role-binding field:** none — binding is **prompt-only** on dsh (the tool has
-no role field; the header region of the Assignment body is what the gate and
-the role-preset channel read, so `Execute as` / `Act as` + skill load must be
-in the prompt). A dispatch that drops those lines has no field to fall back on
-— it is a bare delegation.
+**Role-binding field:** none — binding is **prompt-only** on dsh (the tool has no role field; the Assignment front matter is what the gate and the role-preset channel read, so `execute_as` / `Act as` + skill load must be in the prompt). A dispatch that drops those lines has no field to fall back on — it is a bare delegation.
 
-**Role gate (`roleGate`, default `hard`):** the plugin normalizes an explicit
-declaration at the subagent start seam before the preset merge, so a
-`Role: \`<role>\`` line or a backticked/bold already-declared role id IN THE
-ASSIGNMENT HEADER is rewritten into the canonical `Execute as: <role>` header
-and binds normally; free prose is never mined, so write the header explicitly.
-A body mention is not a declaration (the token tier is header-scoped), and a
-canonical declaration that exists only inside a fenced code block is refused
-too — the seam's header read is fence-unaware and would bind that quote. A
-harness-project start with NO reliable declaration is refused under `hard` with
-a message naming the exact fix (`Execute as: <role-id>` under `## Assignment`)
-and the `roleGate: warn|off` escape hatch; a start naming two or more distinct
-roles is refused with the ids and the "exactly one declaration" rule instead,
-and a role field that IS present but unusable (empty, or not a lowercase role
-id) gets its own message naming the raw value and the accepted shape. The
-non-harness exemption is judged at the child's EFFECTIVE start directory (an
-absolute `cwd` as-is, a relative one resolved against the parent's CURRENT
-directory, an omitted one inherited from it — the working-directory projection
-the runtime itself resolves against, never the immutable header alone), so the
-default `subagent` / `subagent_fork` starts — which
-omit `cwd` — are gated by
-the directory the parent is in NOW rather than exempted. A request already
-carrying `agentPreset` and an unknown provider are exempt too. `off` skips only
-the refusal; a single explicit declaration is still normalized. `roleGate` and
-`dispatchBinding` are the plugin's live-editable settings fields — a dsh
-plugin-configuration save applies on the next start (next dispatch for the
-binding) without a reload.
+**Role gate (`roleGate`, default `hard`):** the plugin reads the prompt's front matter at the subagent start seam before the preset merge — a canonical `execute_as: <role-id>` key passes; one unambiguous declaration (a `role` / `act_as` key, or a `Role:` / `Act as:` / `Execute as:` field line inside the declaration scope) is repaired into front matter `execute_as` and then proved through the binding seam's own reader; free prose is never mined, so write the key explicitly. A body mention is not a declaration, and a declaration that exists only inside a fenced code block supplies no candidate. A document carrying its fields as retired `**Execute as**:` body labels is refused terminally with `dispatch.assignment.legacy-format` — no `roleGate` mode or exemption softens it. A harness-project start with NO reliable declaration is refused under `hard` with a message naming the exact fix (`execute_as: <role-id>` in the prompt's front matter) and the `roleGate: warn|off` escape hatch; a start naming two or more distinct roles is refused with the ids and the "exactly one declaration" rule instead, and a role field that IS present but unusable (empty, or not a lowercase role id) gets its own message naming the raw value and the accepted shape. The non-harness exemption is judged at the child's EFFECTIVE start directory (an absolute `cwd` as-is, a relative one resolved against the parent's CURRENT directory, an omitted one inherited from it — the working-directory projection the runtime itself resolves against), so the default `subagent` / `subagent_fork` starts — which omit `cwd` — are gated by the directory the parent is in NOW rather than exempted. A request already carrying `agentPreset` and an unknown provider are exempt too. `off` skips only the refusal; a single explicit declaration is still normalized. `roleGate` and `dispatchBinding` are the plugin's live-editable settings fields — a dsh plugin-configuration save applies on the next start (next dispatch for the binding) without a reload.
 
 **Execution: same-message invokes start concurrently.** The installed `subagent`
 tool declares **`isConcurrencySafe: () => true`**, so a batch of invokes emitted
@@ -333,39 +272,12 @@ No-argument iteration-drive resumes the primary coordinator's workflow; nonempty
 
 ### QC default
 
-- **`Execution mode: sdd`**: **N=3** seats — one per QC seat (`qc-specialist`,
-  `qc-specialist-2`, `qc-specialist-3`), each body **Act as** the respective QC
-  role + QC skill load. Channel follows the **`QC report path`** field: a
-  plan-backed QC seat must itself write its report file, so it routes through a
-  **writable** channel (an Agent Teams teammate; `subagent` when the Team layer
-  is not mounted) — `workflow` children are read-only and only carry the
-  plan-QC tri when the Assignment explicitly declares conversation-only review
-  (`QC report path: N/A`), in which case the caller persists
-  `{SDD_DIR}/review/qcN.md` from the returned envelopes (`mstar-qc-tri` script —
-  § Read-only fan-out via the
-  `workflow` tool): one run, three concurrent children, one conversation
-  `workflow-run` node. When the tool is not mounted (the `ptc` preset hides it),
-  fall back to the `subagent` path below. **The `subagent` path emits all three
-  invokes in ONE message**: the host admits every dispatch before any
-  settlement, so all N are admitted before the first seat settles and the seats
-  run CONCURRENTLY (wall ≈ single seat). There is no serialization promise
-  either way — a PM that waits for each settlement before emitting the next
-  invoke is what spaces the batch out and costs the wall time. The call return
-  (`started subagent <name>`) is an activation, never a completion. A seat that
-  cannot be started at all → **`Blocked`**.
+- **`execution_mode: sdd`**: **N=3** seats — one per QC seat (`qc-specialist`, `qc-specialist-2`, `qc-specialist-3`), each body **Act as** the respective QC role + QC skill load. Channel follows the **`qc_report_path`** front matter key: a plan-backed QC seat must itself write its report file, so it routes through a **writable** channel (an Agent Teams teammate; `subagent` when the Team layer is not mounted) — `workflow` children are read-only and only carry the plan-QC tri when the Assignment explicitly declares conversation-only review (`qc_report_path: N/A`), in which case the caller persists `{SDD_DIR}/review/qcN.md` from the returned envelopes (`mstar-qc-tri` script — § Read-only fan-out via the `workflow` tool): one run, three concurrent children, one conversation `workflow-run` node. When the tool is not mounted (the `ptc` preset hides it), fall back to the `subagent` path below. **The `subagent` path emits all three invokes in ONE message**: the host admits every dispatch before any settlement, so all N are admitted before the first seat settles and the seats run CONCURRENTLY (wall ≈ single seat). There is no serialization promise either way — a PM that waits for each settlement before emitting the next invoke is what spaces the batch out and costs the wall time. The call return (`started subagent <name>`) is an activation, never a completion. A seat that cannot be started at all → **`Blocked`**.
 - **`inline`**: **N=1**.
 
 ### SDD implement
 
-- **`Execution mode: sdd`**: one implementer delegation per ready task id, on the
-  mounted channel: with Agent Teams, one board task per task id and one teammate
-  per track (a `subagent` / `subagent_fork` call), each handed its own worktree;
-  with Team mode off, one bare `subagent` call per task id. Independent tracks
-  are started together so their activations overlap, then the PM waits for
-  settlement, per **`mstar-sdd`** § Ready-task scheduling. The task reviewer is a
-  fresh separate seat on either channel. Sticky resume is a durable teammate
-  resumed by name on the Team channel, and a recorded continuable-subagent id on
-  the direct one.
+- **`execution_mode: sdd`**: one implementer delegation per ready task id, on the mounted channel: with Agent Teams, one board task per task id and one teammate per track (a `subagent` / `subagent_fork` call), each handed its own worktree; with Team mode off, one bare `subagent` call per task id. Independent tracks are started together so their activations overlap, then the PM waits for settlement, per **`mstar-sdd`** § Ready-task scheduling. The task reviewer is a fresh separate seat on either channel. Sticky resume is a durable teammate resumed by name on the Team channel, and a recorded continuable-subagent id on the direct one.
 
 ## PR-review posting
 
@@ -436,27 +348,19 @@ and lease gates.
 Seats return findings in their result payload and must never depend on writing
 files — the caller persists the seat reports.
 
-**Every `agent()` prompt starts with the Assignment header** — `## Assignment`
-plus `Execute as` / `Delegation` / `Task category` as the first lines:
+**Every `agent()` prompt starts with the Assignment front matter** — `execute_as` / `delegation` / `task_category` plus the review-seat keys:
 
 ```markdown
-## Assignment
-
-Execute as: qc-specialist
-Delegation: forbidden
-Task category: audit
-**Budget (review / QC seats)**: /1 round — one full pass over the review range
-**Return shape (review / QC seats)**: the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
+---
+execute_as: qc-specialist
+delegation: forbidden
+task_category: audit
+budget: /1 round — one full pass over the review range
+return_shape: the verdict envelope (seat, verdict, summary, findings); stop when the range and its directly affected interfaces are covered
+---
 ```
 
-Role binding on dsh is prompt-only (there is no `agent` field), and the same
-engine grammar is what the role-preset channel parses
-(`packages/dsh/src/gates/role-persona.ts` reads only the header region) — so
-`Execute as: qc-specialist` selects the agent preset the deployment declared for
-that role (dsh 0.2.1 delivers a child's identity through preset selection; a
-role with no configured preset leaves the child on the delegating agent's
-composition). Keep body-quoted field examples out of the header region, and
-never pass the deferred `agentType` option: the engine rejects it loudly.
+Role binding on dsh is prompt-only (there is no `agent` field), and the same engine grammar is what the role-preset channel parses (`packages/dsh/src/gates/role-persona.ts` reads the front matter block) — so `execute_as: qc-specialist` selects the agent preset the deployment declared for that role (dsh 0.2.1 delivers a child's identity through preset selection; a role with no configured preset leaves the child on the delegating agent's composition). Never pass the deferred `agentType` option: the engine rejects it loudly.
 
 | Operator types | N | Tool | `meta.name` | Operator sees |
 |---|---|---|---|---|
@@ -480,7 +384,7 @@ through the agent-flow ledger (§ Agent-flow ledger).
 | Surface | Path / invocation |
 |---------|-------------------|
 | Plugin skills | Skill **name** via the mstar skill-local provider (`ctx.skills`); canonical `$DSH_BUNDLED_SKILL_DIR/<name>` |
-| Plugin commands | The eight bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` |
+| Plugin commands | The nine bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/codebase-arch-governance`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
 ## Command delivery (dsh host, updated 2026-08-11)
@@ -489,7 +393,7 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 
 **Degradation fallback:** when a command is NOT claimed client-side (lexicon fetch timing, args parsing, manual typing), the model receives the **bare text** (`/iteration-loop <方向> …`) with NO command body — unlike opencode/cursor/omp where the body always arrives.
 
-**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = execute with layer delivery alongside → close → close-delta layer if nonempty, then whole-chain proof on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
+**Rule:** when a user message begins with a registered mstar command name (full set: `docs/commands.md`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = execute with layer delivery alongside → close → close-delta layer if nonempty, then whole-chain proof on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
 
 ## Harness dir and environment
 
@@ -525,15 +429,7 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   child's parent would be read as root and receive the coordinator identity.
   **A coordinator that is not the root session cannot be served by this
   field.**
-- **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That
-  binding is what makes the precheck real here: with a declared dispatcher
-  identity the engine compares the **dispatching seat's own role** against the
-  Assignment `Execute as` and hard-enforces it (`callerRequired` — an unset
-  binding fails closed, never skipped). Hosts whose reference declares **no**
-  dispatcher binding expose only the **spawn target** in their role-binding
-  field — and target == `Execute as` is the compliant C5 pattern — so there the
-  leg is skipped and the red line stays **prompt-level**
-  (`mstar-dispatch-gates` § 承接方反递归红线).
+- **Caller-scoped engine enforcement (the dsh-only half of issue #156).** That binding is what makes the precheck real here: with a declared dispatcher identity the engine compares the **dispatching seat's own role** against the Assignment front matter `execute_as` and hard-enforces it (`callerRequired` — an unset binding fails closed, never skipped). Hosts whose reference declares **no** dispatcher binding expose only the **spawn target** in their role-binding field — and target == `execute_as` is the compliant C5 pattern — so there the leg is skipped and the red line stays **prompt-level** (`mstar-dispatch-gates` § 承接方反递归红线).
 
 ## Files, shell, and approvals
 
@@ -543,10 +439,8 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 
 ## Git and final evidence
 
-- Git work follows `mstar-branch-worktree` and Assignment **Working branch** /
-  **Branch policy**; the worktree L1/L2 gates run in-process.
-- Completion reports cite concrete commands, artifacts, and commit lines when
-  required.
+- Git work follows `mstar-branch-worktree` and the Assignment front matter `working_branch` / `branch_policy`; the worktree L1/L2 gates run in-process.
+- Completion reports cite concrete commands, artifacts, and commit lines when required.
 
 ## Gotchas
 
@@ -560,9 +454,7 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
   fixed name is added to the plugin's `TEAM_DISPATCH_TOOLS` map; team names have
   no Config key, so the map is source-only — the same caveat as renamed
   `subagent` instances, one level stricter.
-- Role binding is prompt-only on dsh: always include **`Execute as`** +
-  **`Act as`** + skill load in the Assignment body — there is no separate
-  `agent` field.
+- Role binding is prompt-only on dsh: always include the front matter **`execute_as`** + **`Act as`** + skill load in the Assignment — there is no separate `agent` field.
 - Session plan UI / todos are not durable SSOT unless mirrored to
   `{HARNESS_DIR}`.
 - The plugin's bundled skills/commands mirror is synced by `bundle-assets`

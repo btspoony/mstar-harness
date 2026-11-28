@@ -543,50 +543,7 @@ function engineStatusCache(
  */
 const DIGEST_PLAN_CAP = 8
 
-/**
- * The slim `mstar:engine-status` digest (only when the
- * session's workspace has an active workflow
- * (`payload.state.selection.kind === 'active'`) — ONE compact
- * `workflow <id> (<type>) <status> | plans: <id>(<status>) … [| branch: <base>
- * → <target>] [| gate: …]` line. Every non-active session (an unresolved
- * workspace, an empty/absent active set — `state === null`, a `'terminal'` /
- * `'error'` selection) renders the EMPTY string: dsh's `renderPrompt` drops
- * empty sections, so the model context carries no mstar digest at all. A
- * cache MISS never reaches this renderer — the caller falls back to the
- * pre-gate version line for that one assembly. The version line is not a
- * standalone fact worth a section — it changes no decision without a workflow. The
- * catalog's terminal-mtime history fallback is therefore structurally
- * unreachable from this surface without touching `resolveReadWorkflow`.
- *
- * The plans segment comes from `plansSegment` in `catalog.ts` — the SAME
- * assembler the pre-step row renders — so the selected snapshot's non-Done
- * rows arrive in catalog-array order, capped at {@link DIGEST_PLAN_CAP} with a
- * final `+N more` overflow marker when longer. One wording per state on both
- * surfaces: an empty registry renders `plans: none registered` and an all-Done
- * workflow `plans: all done` (two different states, never one text).
- *
- * Division of labour with the pre-step catalog row: this always-on digest is
- * the surface that survives a row-less step AND host-side compaction (the row
- * is a change-driven DELTA and is not re-anchored per turn), so it carries the
- * version, the active workflow, its non-Done plans, the `branch` anchors (when
- * the payload resolved both) and the iteration phase-`gate` verdict (when a
- * steering compass gated it) — the two facts a post-compaction step still has
- * to decide on. Residuals / plan row scopes / direction / harness dir /
- * enforcement / the agent-flow ledger are NOT re-added here: they stay
- * payload-only (the panel renders them from the persisted emission) and each is
- * read on demand from its own authority (`mstar status tech-debt`, the compass
- * document, `mstar roadmap show`, the knowledge tree) — no single `status`
- * command serves them. Do not restate a dropped row line in this digest: the
- * two surfaces must not duplicate each other.
- *
- * STRICT-interpolation safety : every operator-
- * controlled value (workflow id, workflow type/status, plan ids, plan
- * statuses, branch anchors) is screened through `stripInterpolationHazard`
- * before embedding — a hostile `{{…}}` in any of them can never throw the
- * renderer. Engine-derived literals (version, `workflow`, `plans:`,
- * `none registered`, `all done`, `unknown`, the `+N more` overflow marker) are
- * constants, not operator text, and stay unscreened.
- */
+/** see packages/dsh/src/gates/system-prompt.ts - The slim `mstar:engine-status` digest (only when the session's workspace has an active workflow (`payload.state.selection.kind === 'active'`) — ONE compact `workflow <id> (<type>) <status> | plans: <id>(<status>) … [| branch: <base> → <target>] [| gate: …]` line. Every non-active session (an unresolved workspace, an empty/absent active set — `state === null`, a `'terminal'` / `'error'` selection) renders the EMPTY string: dsh's `renderPrompt` drops empty sections, so the model context carries no mstar digest at all. A cache MISS never reaches this renderer — the caller falls back to the pre-gate version line for that one assembly. The version line is not a standalone fact worth a section — it changes no decision without a workflow. The catalog's terminal-mtime history fallback is therefore structurally unreachable from this surface without touching `resolveReadWorkflow`. The plans segment comes from `plansSegment` in `catalog.ts` — the SAME assembler the pre-step row renders — so the selected snapshot's non-Done rows arrive in catalog-array order, capped at {@link DIGEST_PLAN_CAP} with a final `+N more` overflow marker when longer. One wording per state on both surfaces: an empty registry renders `plans: none registered` and an all-Done workflow `plans: all done` (two different states, never one text). Division of labour with the pre-step catalog row: this always-on digest is the surface that survives a row-less step AND host-side compaction (the row is a change-driven DELTA and is not re-anchored per turn), so it carries the version, the active workflow, its non-Done plans, the `branch` anchors (when the payload resolved both) and the iteration phase-`gate` verdict (when a steering compass gated it) — the two facts a post-compaction step still has to decide on. Residuals / plan row scopes / direction / harness dir / enforcement / the agent-flow ledger are NOT re-added here: they stay payload-only (the panel renders them from the persisted emission) and each is read on demand from its own authority (`mstar status tech-debt`, the compass document, the knowledge tree) — no single `status` command serves them. Do not restate a dropped row line in this digest: the two surfaces must not duplicate each other. STRICT-interpolation safety : every operator- controlled value (workflow id, workflow type/status, plan ids, plan statuses, branch anchors) is screened through `stripInterpolationHazard` before embedding — a hostile `{{…}}` in any of them can never throw the renderer. Engine-derived literals (version, `workflow`, `plans:`, `none registered`, `all done`, `unknown`, the `+N more` overflow marker) are constants, not operator text, and stay unscreened. */
 function engineStatusSummary(payload: MstarEngineStatusPayload | undefined): string {
   if (!hasActiveWorkflow(payload)) return ''
   const lines = [`mstar engine status: v${payload.version}`]

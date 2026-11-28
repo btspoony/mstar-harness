@@ -1012,7 +1012,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <div class="milestone-top">
                 <span class="status tone-active" aria-label="active"><span class="dot"></span></span>
                 <span class="milestone-name">Unified frontend, one implementation</span>
-                <span class="milestone-target">2026-11-07</span>
+                <span class="milestone-target"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span></span>
               </div>
               <div class="milestone-foot">
                 <span class="bar"><i style="width:36%"></i></span>
@@ -1023,7 +1023,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <div class="milestone-top">
                 <span class="status tone-todo" aria-label="planned"><span class="dot"></span></span>
                 <span class="milestone-name">Read-path correctness</span>
-                <span class="milestone-target">2026-10-31</span>
+                <span class="milestone-target" data-t="rm.unestimated">unestimated</span>
               </div>
               <div class="milestone-foot">
                 <span class="bar"><i style="width:33%"></i></span>
@@ -1034,7 +1034,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <div class="milestone-top">
                 <span class="status tone-done" aria-label="delivered"><span class="dot"></span></span>
                 <span class="milestone-name">Issue store authority v4</span>
-                <span class="milestone-target">2026-10-18</span>
+                <span class="milestone-target"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span></span>
               </div>
               <div class="milestone-foot">
                 <span class="bar is-done"><i style="width:100%"></i></span>
@@ -1952,21 +1952,20 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <span aria-hidden="true">·</span>
           <span><span class="num mono">26</span> <span data-t="pj.openIssues">open issues</span></span>
           <span aria-hidden="true">·</span>
-          <span data-t="pj.scopeNote">roadmap, issues and iterations of one project</span>
+          <span data-t="pj.scopeNote">milestones, issues and iterations of one project</span>
         </div>
       </div>
 
       <section class="panel">
         <div class="panel-head">
           <h2 class="panel-title" data-t="pj.catalog">Catalog projects</h2>
-          <span class="panel-meta"><span data-t="pj.hint">Select a project to open its roadmap, issues and iterations</span></span>
+          <span class="panel-meta"><span data-t="pj.hint">Select a project to open its milestones, issues and iterations</span></span>
         </div>
         <div role="list">
           <div class="rm-project-row" role="listitem" tabindex="0" data-go-screen="project-detail">
             <span class="dot tone-neutral" aria-hidden="true"></span>
             <span class="rm-project-name">Default</span>
             <span class="rm-project-id">_default</span>
-            <span class="chip plain" data-t="pj.noRoadmap">no roadmap row</span>
             <span class="rm-project-desc" data-t="pj.descDefault">Fallback owner for issues captured without a project</span>
             <span class="rm-project-open"><span class="num">2</span> <span data-t="rm.openIssues">open issues</span></span>
             <span class="rm-project-go" aria-hidden="true">→</span>
@@ -1997,7 +1996,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           </div>
         </div>
         <div class="panel-foot">
-          <span data-t="pj.listNote">A project owns its roadmap, its issues and its iterations. Lifecycle is the catalog lifecycle, never the execution state.</span>
+          <span data-t="pj.listNote">A project owns its milestones, its issues and its iterations. Lifecycle is the catalog lifecycle, never the execution state.</span>
           <span style="margin-left:auto" class="mono">read 13:58:04</span>
         </div>
       </section>
@@ -2013,7 +2012,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       <div class="detail-head">
         <div class="detail-head-main">
           <h1 class="detail-title">Engine</h1>
-          <p class="prose t-12 secondary" style="margin:6px 0 0;max-width:80ch" data-t="pj.direction">One store, one projection, one read contract. The engine owns issue, milestone and roadmap authority; hosts only render what it answers.</p>
+          <p class="prose t-12 secondary" style="margin:6px 0 0;max-width:80ch" data-t="pj.direction">One store, one projection, one read contract. The engine owns issue and milestone authority; hosts only render what it answers.</p>
           <div class="detail-meta">
             <span class="mono">engine</span><span aria-hidden="true">·</span>
             <span class="mono">active</span><span aria-hidden="true">·</span>
@@ -2022,46 +2021,43 @@ select.ctl { cursor: pointer; max-width: 180px; }
           </div>
         </div>
         <div class="detail-actions">
-          <span class="status tone-active"><span class="dot"></span><span class="label mono" data-t="rm.present">roadmap present</span></span>
           <span class="mono t-11 muted">projects/engine</span>
         </div>
       </div>
 
       <div class="subtabs" role="tablist" data-subtabs aria-label="Project features">
-        <button role="tab" aria-selected="true" data-tab="roadmap"><span data-t="pj.tabRoadmap">Roadmap</span><span class="subtabs-count mono">3</span></button>
-        <button role="tab" aria-selected="false" data-tab="issues"><span data-t="pj.tabIssues">Issues</span><span class="subtabs-count mono">14</span></button>
+        <button role="tab" aria-selected="true" data-tab="issues"><span data-t="pj.tabIssues">Issues</span><span class="subtabs-count mono">14</span></button>
         <button role="tab" aria-selected="false" data-tab="iterations"><span data-t="pj.tabIterations">Iterations</span><span class="subtabs-count mono">2</span></button>
       </div>
 
-      <!-- ---- Roadmap tab ---- -->
-      <div data-tabpanel="roadmap">
+      <!-- ---- Milestone body (the project screen default; not a tab) ---- -->
+      <div data-ms-milestone-body="">
         <section class="panel" style="margin-bottom:12px">
           <div class="panel-head"><h2 class="panel-title" data-t="rm.timeline">Milestone timeline</h2><span class="panel-meta"><span class="num mono">3</span> <span data-t="f.milestonesLower">milestones</span></span></div>
           <div class="panel-body">
-            <!-- Target-ordered nodes; missing targets last; one trailing unassigned node. -->
+            <!-- Ordinal-ordered nodes (the milestone's stored position); one trailing unassigned node. -->
             <div class="timeline" data-ms-milestone-timeline="">
               <div class="tl-node done">
                 <div class="tl-name">Issue store authority v4</div>
-                <div class="tl-date">2026-10-18 · delivered</div>
+                <div class="tl-date"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span> · delivered</div>
                 <div class="tl-counts">13/13 · 0 open</div>
               </div>
               <div class="tl-node">
                 <div class="tl-name">Read-path correctness</div>
-                <div class="tl-date">2026-10-31 · planned</div>
+                <div class="tl-date"><span data-t="rm.unestimated">unestimated</span> · planned</div>
                 <div class="tl-counts">2/6 · 4 open</div>
               </div>
               <div class="tl-node run">
                 <div class="tl-name">Unified frontend, one implementation</div>
-                <div class="tl-date">2026-11-07 · active</div>
+                <div class="tl-date"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span> · active</div>
                 <div class="tl-counts">5/14 · 9 open</div>
               </div>
               <div class="tl-node">
                 <div class="tl-name" style="color:var(--ms-text-muted)">unassigned</div>
-                <div class="tl-date">no target</div>
                 <div class="tl-counts">3 issues</div>
               </div>
             </div>
-            <p class="sec-note">Nodes are ordered by target date; each carries retired/total and the open count. Unassigned issues sit at the end as one node.</p>
+            <p class="sec-note">Nodes are ordered by the milestone's stored position (ordinal), never by a date; each carries retired/total and the open count, and its status line reads <span class="mono">&lt;n&gt; sessions · &lt;status&gt;</span>, or <span class="mono">unestimated · &lt;status&gt;</span>. Unassigned issues sit at the end as one node and carry no effort text.</p>
           </div>
         </section>
 
@@ -2073,9 +2069,12 @@ select.ctl { cursor: pointer; max-width: 180px; }
 
           <form class="ms-create" data-ms-milestone-create="">
             <label><span data-t="rm.wName">Milestone name</span><input type="text" placeholder="Milestone name"></label>
-            <label><span data-t="rm.wTarget">Target</span><input type="date" placeholder="2026-11-30"></label>
-            <!-- Creation is name + target: the engine's add verb has no status field and
-                 always inserts `planned`. Status changes are the edit control's. -->
+            <label><span data-t="rm.wEffort">Sessions</span><input type="text" inputmode="numeric" placeholder="12"></label>
+            <!-- Creation is name + effort sessions: the engine's add verb has no status field and
+                 always inserts `planned`. Status changes are the edit control's. The effort field
+                 is a numeric-mode text input, never a number-typed one, which sanitises text that
+                 is not a number to an empty value and would pass a typo off as an unestimated row.
+                 An empty value means unestimated (null). -->
             <button class="btn" type="button" data-t="rm.wCreate">Create</button>
           </form>
 
@@ -2085,7 +2084,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <span class="milestone-block-name">Unified frontend, one implementation</span>
               <span class="milestone-block-id">9f2c4a10-7d3e-4b62-8a51-0c9d2e7f4b13</span>
               <span class="chip">active</span>
-              <span class="mono t-11 muted">2026-11-07</span>
+              <span class="mono t-11 muted"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span></span>
               <span class="milestone-block-counts">
                 <span><span class="num">9</span><span class="milestone-count-label" data-t="m.open">open</span></span>
                 <span><span class="num">4</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
@@ -2119,7 +2118,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <span class="milestone-block-name">Read-path correctness</span>
               <span class="milestone-block-id">2b8e4067-3c91-4f88-b0d4-6e5a17c9d2ab</span>
               <span class="chip">planned</span>
-              <span class="mono t-11 muted">2026-10-31</span>
+              <span class="mono t-11 muted" data-t="rm.unestimated">unestimated</span>
               <span class="milestone-block-counts">
                 <span><span class="num">4</span><span class="milestone-count-label" data-t="m.open">open</span></span>
                 <span><span class="num">2</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
@@ -2142,7 +2141,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
               <span class="milestone-block-name">Issue store authority v4</span>
               <span class="milestone-block-id">91cc5511-8a4d-4d3e-9a77-5b0c8e2f6d40</span>
               <span class="chip">delivered</span>
-              <span class="mono t-11 muted">2026-10-18</span>
+              <span class="mono t-11 muted"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span></span>
               <span class="milestone-block-counts">
                 <span><span class="num">0</span><span class="milestone-count-label" data-t="m.open">open</span></span>
                 <span><span class="num">11</span><span class="milestone-count-label" data-t="m.resolved">resolved</span></span>
@@ -2182,7 +2181,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       </div>
 
       <!-- ---- Issues tab ---- -->
-      <div data-tabpanel="issues" hidden>
+      <div data-tabpanel="issues">
         <section class="panel">
           <div class="filter-applied">
             <span class="chip accent" data-t="pj.filterChip">project: engine</span>
@@ -2436,7 +2435,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <div class="milestone-top">
             <span class="status tone-active" aria-label="active"><span class="dot"></span></span>
             <span class="milestone-name">Unified frontend, one implementation</span>
-            <span class="milestone-target">2026-11-07</span>
+            <span class="milestone-target"><span class="num">12</span> <span data-t="rm.unitSessions">sessions</span></span>
           </div>
           <div class="milestone-foot">
             <span class="bar"><i style="width:36%"></i></span>
@@ -2447,7 +2446,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <div class="milestone-top">
             <span class="status tone-todo" aria-label="planned"><span class="dot"></span></span>
             <span class="milestone-name">Read-path correctness</span>
-            <span class="milestone-target">2026-10-31</span>
+            <span class="milestone-target" data-t="rm.unestimated">unestimated</span>
           </div>
           <div class="milestone-foot">
             <span class="bar"><i style="width:33%"></i></span>
@@ -2458,7 +2457,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
           <div class="milestone-top">
             <span class="status tone-done" aria-label="delivered"><span class="dot"></span></span>
             <span class="milestone-name">Issue store authority v4</span>
-            <span class="milestone-target">2026-10-18</span>
+            <span class="milestone-target"><span class="num">5</span> <span data-t="rm.unitSessions">sessions</span></span>
           </div>
           <div class="milestone-foot">
             <span class="bar is-done"><i style="width:100%"></i></span>
@@ -2808,16 +2807,15 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "screen.sidebarFocus": "Sidebar · focus", "screen.sidebarIssues": "Sidebar · issues",
       "screen.sidebarNarrow": "Sidebar · narrow", "screen.sidebarProject": "Sidebar · project",
       "pj.title": "Projects", "pj.count": "projects", "pj.openIssues": "open issues",
-      "pj.scopeNote": "a project owns its roadmap, issues and iterations",
+      "pj.scopeNote": "a project owns its milestones, issues and iterations",
       "pj.catalog": "Catalog projects",
-      "pj.hint": "Select a project to open its roadmap, issues and iterations",
+      "pj.hint": "Select a project to open its milestones, issues and iterations",
       "pj.listNote": "Lifecycle is the catalog lifecycle, never the execution state.",
       "pj.descDefault": "Fallback owner for issues captured without a project",
       "pj.descEngine": "Store, projection and gates — the engine package",
       "pj.descDsh": "DeepSeek Harness host plugin: panel, channels, tools",
       "pj.descOmp": "omp host adapter: agents, commands and packaging",
-      "pj.noRoadmap": "no roadmap row",
-      "pj.tabRoadmap": "Roadmap", "pj.tabIssues": "Issues", "pj.tabIterations": "Iterations",
+      "pj.tabIssues": "Issues", "pj.tabIterations": "Iterations",
       "pj.openProjectIssues": "Open project issues",
       "pj.filterChip": "project: engine",
       "pj.filterNote": "applied by the project — the shared issue table, scoped",
@@ -2845,8 +2843,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "nav.label": "Destinations", "gate.label": "Phase gate",
       "flow.chartTitle": "Cumulative captured and retired issues, 2026-10-10 to 2026-10-25",
       "wf.activeRegistrationChip": "active registration",
-      "host.workspace": "Workspace", "host.sessionChip": "session · 4f2a",
-      "rm.present": "roadmap present", "it.compassStarted": "started 2026-10-25 09:10",
+      "host.workspace": "Workspace", "host.sessionChip": "session · 4f2a", "it.compassStarted": "started 2026-10-25 09:10",
       "tk.tSample20": "Issues", "tk.tMeta20": "20 / 28 · 600 · page title",
       "tk.tSample16": "Unified frontend, one implementation", "tk.tMeta16": "16 / 24 · 600 · screen + detail title",
       "tk.tSample14": "Active workflow · 26 open issues", "tk.tMeta14": "14 / 20 · 500 · emphasis step",
@@ -2925,6 +2922,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "rm.openIssues": "open issues",
             "rm.authority": "Roadmap authority", "rm.contentHash": "Content hash", "rm.frontmatter": "Frontmatter",
       "rm.unassigned": "unassigned issues", "rm.unassignedNote": "issues are not assigned to a milestone",
+      "rm.wEffort": "Sessions", "rm.unitSessions": "sessions", "rm.unestimated": "unestimated",
       "rm.direction": "Direction", "rm.markdown": "Stored markdown",
       "rm.freshnessProjection": "projection current", "rm.storedFacts": "Stored facts",
       "rm.projectStatus": "Frontmatter status", "rm.createdAt": "Created at", "rm.residualsRef": "Residuals ref",
@@ -2998,16 +2996,15 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "screen.sidebarFocus": "侧边栏 · 焦点", "screen.sidebarIssues": "侧边栏 · 问题",
       "screen.sidebarNarrow": "侧边栏 · 窄栏", "screen.sidebarProject": "侧边栏 · 项目",
       "pj.title": "项目", "pj.count": "个项目", "pj.openIssues": "未解决问题",
-      "pj.scopeNote": "项目拥有自己的路线图、问题与迭代",
+      "pj.scopeNote": "项目拥有自己的里程碑、问题与迭代",
       "pj.catalog": "目录项目",
-      "pj.hint": "选择项目以打开它的路线图、问题与迭代",
+      "pj.hint": "选择项目以打开它的里程碑、问题与迭代",
       "pj.listNote": "生命周期即目录生命周期，绝不等同于执行状态。",
       "pj.descDefault": "未指定项目的问题默认归属",
       "pj.descEngine": "存储、投影与门禁 —— engine 包",
       "pj.descDsh": "DeepSeek Harness 宿主插件：面板、通道、工具",
       "pj.descOmp": "omp 宿主适配器：agents、命令与打包",
-      "pj.noRoadmap": "无路线图记录",
-      "pj.tabRoadmap": "路线图", "pj.tabIssues": "问题", "pj.tabIterations": "迭代",
+      "pj.tabIssues": "问题", "pj.tabIterations": "迭代",
       "pj.openProjectIssues": "打开本项目问题",
       "pj.filterChip": "项目: engine",
       "pj.filterNote": "由项目应用 —— 共用问题表，已限定范围",
@@ -3035,8 +3032,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "nav.label": "目的页", "gate.label": "阶段门禁",
       "flow.chartTitle": "捕获与退役累计走势，2026-10-10 至 2026-10-25",
       "wf.activeRegistrationChip": "活跃注册",
-      "host.workspace": "工作区", "host.sessionChip": "会话 · 4f2a",
-      "rm.present": "路线图就绪", "it.compassStarted": "开始于 2026-10-25 09:10",
+      "host.workspace": "工作区", "host.sessionChip": "会话 · 4f2a", "it.compassStarted": "开始于 2026-10-25 09:10",
       "tk.tSample20": "问题", "tk.tMeta20": "20 / 28 · 600 · 页面标题",
       "tk.tSample16": "统一前端，一套实现", "tk.tMeta16": "16 / 24 · 600 · 页面与详情标题",
       "tk.tSample14": "活跃工作流 · 26 未解决问题", "tk.tMeta14": "14 / 20 · 500 · 强调阶梯",
@@ -3114,6 +3110,7 @@ select.ctl { cursor: pointer; max-width: 180px; }
       "rm.openIssues": "未解决问题",
             "rm.authority": "路线图权威", "rm.contentHash": "内容哈希", "rm.frontmatter": "frontmatter",
       "rm.unassigned": "未分配问题", "rm.unassignedNote": "条问题未分配到里程碑",
+      "rm.wEffort": "会话数", "rm.unitSessions": "个会话", "rm.unestimated": "未估算",
       "rm.direction": "方向", "rm.markdown": "存储的 Markdown",
       "rm.freshnessProjection": "投影最新", "rm.storedFacts": "存储事实",
       "rm.projectStatus": "Frontmatter 状态", "rm.createdAt": "创建时间",

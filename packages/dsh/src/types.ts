@@ -189,12 +189,14 @@ export interface HarnessResidualView {
 /**
  * Where the workspace-state digest's open-item facts came from, and whether
  * that read was whole. `kind: 'store'` means the issue rollup AND the knowledge
- * catalog digest were read from `{HARNESS_DIR}/store.db`; `'unavailable'` means
- * the store could not serve them (missing / staged / corrupt / below-floor
- * runtime) and `diagnostic` carries the refusal verbatim — never an empty
- * "no findings" rollup. `projection` is the read envelope's own projection
- * freshness (current | stale | unavailable), so a stale projection is disclosed
- * instead of being sold as current; `null` when no envelope was read.
+ * catalog digest were read from the collaboration authority; `'unavailable'`
+ * means that authority could not serve them (absent / staged / unreadable /
+ * below-floor runtime) and `diagnostic` carries the refusal verbatim — never an
+ * empty "no findings" rollup. `projection` is the read envelope's own
+ * projection freshness (current | stale | unavailable), so a stale projection
+ * is disclosed instead of being sold as current; `null` when no envelope was
+ * read. `completeness`/`asOf` are that envelope's collaboration observation
+ * for the rollup's own scope — projection health never stands in for them.
  *
  * ABSENT when a build ran without a store read (the synchronous
  * `buildCatalogPayload` callers — the `mstar:engine-status` context provider,
@@ -204,6 +206,10 @@ export interface StoreFactsView {
   readonly kind: 'store' | 'unavailable'
   readonly projection: 'current' | 'stale' | 'unavailable' | null
   readonly storeRevision: number | null
+  /** note: Completeness of the scoped collaboration observation that produced the rollup. */
+  readonly completeness: 'complete' | 'partial' | 'unavailable' | null
+  /** note: Observation time of that scoped snapshot (`null` when nothing was observed). */
+  readonly asOf: string | null
   readonly diagnostic: string | null
 }
 
@@ -215,21 +221,21 @@ export interface HarnessRowScopeView {
 }
 
 /**
- * Whether the store-backed roadmap authority has roadmap content, no roadmap
- * content, or could not be read. Partial coverage is explicit in
- * `absentProjectIds`; `diagnostic` carries an actionable read failure.
+ * Whether the store-backed milestone rollup answered or could not be read.
+ * `present` covers an empty set — a store with no milestones is a successful
+ * read, not a missing source; `unavailable` carries an actionable read failure
+ * in `diagnostic`.
  */
-export interface RoadmapSourceView {
-  readonly kind: 'present' | 'absent' | 'unavailable'
-  readonly absentProjectIds: readonly string[]
+export interface MilestoneSourceView {
+  readonly kind: 'present' | 'unavailable'
   readonly diagnostic: string | null
 }
 
 /** The additive project rollup, sourced from store authority and open issues. */
 export interface MstarHarnessProject {
-  /** Roadmap milestones in deterministic catalog-project order, roadmap order within each project. */
+  /** see packages/dsh/src/types.ts - Milestone names in deterministic catalog-project order, ordinal order within each project. */
   readonly milestones: readonly string[]
-  readonly roadmapSource: RoadmapSourceView
+  readonly milestoneSource: MilestoneSourceView
   /** Open-issue counts by severity across the harness (non-zero severities only — same rollup as `state.residuals`). */
   readonly openResiduals: readonly HarnessResidualView[]
 }
@@ -310,11 +316,7 @@ export interface MstarHarnessState {
   readonly plans: readonly HarnessPlanView[]
   /** Open issue counts by severity (non-zero only) — the issue authority's own rollup. */
   readonly residuals: readonly HarnessResidualView[]
-  /**
-   * The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth
-   * zone): store-authoritative roadmap milestones plus open-issue counts.
-   * Always-present (lossless), including an explicit roadmap-source verdict.
-   */
+  /** see packages/dsh/src/types.ts - The additive project rollup (compass v3.0.0 AC-4 — the panel's fifth zone): store-authoritative milestones plus open-issue counts. Always-present (lossless), including an explicit milestone-source verdict. */
   readonly project: MstarHarnessProject
   /**
    * Open issue detail (issue id + severity + title), in the issue authority's

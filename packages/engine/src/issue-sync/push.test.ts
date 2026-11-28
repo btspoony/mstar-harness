@@ -1,8 +1,21 @@
-import { mkdtempSync, rmSync } from "node:fs";
+/**
+ * note: push.test.ts — the push ledger protocol without a transport: planning a
+ * payload, recording the caller's results, and reconciling ambiguous creates.
+ *
+ * Everything here runs against a REAL store (the ledger is SQL). No fake
+ * provider: mstar makes no call, so the test plays the agent's side and hands
+ * the engine what a Linear tool would return.
+ */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, type StoreDb } from "../store-db.js";
+import * as nodeOs from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "../collaboration-identity.js";
+import { initializeCollaborationStore } from "../collaboration-store.js";
+import { busyTimeoutMs, connect, type StoreDb } from "../store-db.js";
 import type { IssueKind, Severity } from "../issue.js";
 import { acquireRun, readItem, releaseRun, type SyncItem } from "../issue-sync.js";
 import { SyncError } from "../issue-sync.js";
@@ -22,19 +35,79 @@ import {
 } from "./push.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-push-test-"));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+
+/** why: The collaboration store is user-level, so the resolver's home is the fixture's. */
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 const PROJECT = "p-push";
 const BINDING = "linear:" + PROJECT;
 
+/**
+ * invariant: The push ledger fixture: one ACTIVE collaboration authority, and ONE
+ * caller-owned transaction for the whole case — the same ownership the command's
+ * `withSyncWrite` holds around an `apply`. A row and its receipt therefore commit
+ * together at `close()`, exactly as in production; the per-batch advance and the
+ * failing-receipt abort are covered in `issue-sync.test.ts`.
+ */
 async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: string; close: () => void }> {
   const harnessDir = mkdtempSync(join(ROOT, name));
-  const handle = await initializeStore({ harnessDir });
-  const db = handle.db;
+  const checkoutRoot = join(harnessDir, "checkout");
+  mkdirSync(checkoutRoot, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["config", "user.name", "Push Test"], { cwd: checkoutRoot });
+  execFileSync("git", ["config", "user.email", "push@example.test"], { cwd: checkoutRoot });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(harnessDir)}.git`], {
+    cwd: checkoutRoot,
+  });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(harnessDir)}.git`],
+    { cwd: checkoutRoot },
+  );
+  writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=mirror\n");
+  const location = resolveCollaborationLocation({ harnessDir, checkoutRoot });
+  await initializeCollaborationStore(location);
+  const flip = new DatabaseSync(location.dbPath);
+  try {
+    flip.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    flip.close();
+  }
+  const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
+  db.exec("begin immediate");
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Push', 'projects', ?, 'now', 'now')",
   ).run(PROJECT, PROJECT + "/roadmap.md");
-  return { db, harnessDir, close: () => handle.close() };
+  return {
+    db,
+    harnessDir,
+    close: () => {
+      try {
+        db.exec("commit");
+      } finally {
+        db.close();
+      }
+    },
+  };
+}
+
+/** note: v2 made the stable reference NOT NULL and unique; the fixture derives one from its display id. */
+function fixtureIssueRef(id: string): string {
+  return `mstar:issue:00000000-0000-4000-8000-${id.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
 }
 
 function addIssue(
@@ -43,8 +116,8 @@ function addIssue(
   overrides: Partial<{ kind: IssueKind; severity: Severity; disposition: string; title: string }> = {},
 ): void {
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values (?, ?, ?, ?, ?, ?, 'impact body', 'acceptance body', 'now', 'now', ?)",
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+      " values (?, ?, ?, ?, ?, ?, 'impact body', 'acceptance body', 'now', 'now', ?, ?)",
   ).run(
     id,
     PROJECT,
@@ -53,6 +126,7 @@ function addIssue(
     overrides.severity ?? "high",
     overrides.disposition ?? "open",
     "sync-issue-" + id,
+    fixtureIssueRef(id),
   );
 }
 
@@ -98,6 +172,11 @@ function record(externalId: string, description: string): ProviderItem {
   };
 }
 
+/**
+ * note: Take the run lease, as the command does before any planning. The holder pid is
+ * part of the run token, so two acquisitions in the same millisecond still name
+ * different runs.
+ */
 function lease(db: StoreDb, options: { holderPid?: number; takeRun?: boolean } = {}) {
   return acquireRun(db, {
     bindingId: BINDING,
@@ -117,6 +196,31 @@ describe("selectPushCandidates", () => {
       addIssue(db, "I-000902");
       db.prepare("update issues set provider = 'linear', external_id = 'LIN-9' where id = 'I-000902'").run();
       expect(selectPushCandidates(db, BINDING).map((entry) => entry.localId)).toEqual(["I-000901"]);
+    } finally {
+      close();
+    }
+  });
+
+  test("a record a cross-authority move froze is not a candidate, a published row is not a freeze", async () => {
+    const { db, close } = await openedStore("candidates-frozen");
+    try {
+      addIssue(db, "I-000901");
+      addIssue(db, "I-000902");
+      // note: A source row in a blocking phase is the fence the record's writes meet; a push of
+      // it could never be reconciled, so the planner never sees it. A terminal row is history.
+      for (const [operationId, issueId, phase] of [
+        ["move-frozen", "I-000901", "switched"],
+        ["move-done", "I-000902", "published"],
+      ] as const) {
+        db.prepare(
+          "insert into issue_moves(operation_id, role, request_hash, issue_ref, source_issue_id, destination_issue_id, " +
+            "source_authority, destination_authority, destination_project, actor, reason, phase, payload_json, payload_digest, " +
+            "staged_counts, source_store_id, source_epoch, created_at, updated_at) " +
+            "values (?, 'source', 'hash', ?, ?, null, 'fixture/repo', 'github.com/acme/elsewhere', 'p-dest', " +
+            "'project-manager', 'moved', ?, '{}', 'digest', '{}', 'store-one', 1, 'now', 'now')",
+        ).run(operationId, fixtureIssueRef(issueId), issueId, phase);
+      }
+      expect(selectPushCandidates(db, BINDING).map((entry) => entry.localId)).toEqual(["I-000902"]);
     } finally {
       close();
     }

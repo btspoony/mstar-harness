@@ -4,10 +4,11 @@
  *
  * Spec sources (each test cites the skill/reference section it enforces):
  * - `{HARNESS_DIR}` fixed-root resolution (ADR
- * `docs/adr/proposed/architecture/2026-11-20-fixed-harness-root.md`):
+ * `docs/adr/implemented/architecture/2026-11-20-fixed-harness-root.md`):
  * `<git main worktree>/.mstar` only — `harness_dir` declarations,
  * `MSTAR_HARNESS_DIR` and the `.agents/`/`.plans/`/`plans/` candidates
- * are retired and refused with a named recovery; `opts.harnessDir` is a
+ * are retired and ignored (unknown `.mstarc` keys, never adopted as a
+ * root); `opts.harnessDir` is a
  * caller-held assertion returned verbatim.
  * - `{SPECS_DIR}` resolution (first non-empty candidate wins, empty-dir-as-
  * absent, default-create `<repoRoot>/.agents/specs/` when all absent; legacy
@@ -30,11 +31,13 @@ import { dirname, join, resolve } from "node:path";
 import {
   assertPlanWritingPath,
   assertSafePathComponent,
+  assignmentSourceHomes,
   canonicalizeNearestExisting,
   emitGitignoreSnippet,
   HarnessRootRetiredError,
   hasHarnessRootDeclaration,
   resolveAdrDir,
+  resolveAssignmentDir,
   resolveHarnessDir,
   resolveIterationDir,
   resolveKnowledgeDir,
@@ -72,18 +75,6 @@ const CANONICAL_SNIPPET = `# Morning Star harness: the process root stays local.
 .mstar/
 `;
 
-/** Legacy snippet text — verbatim from plan-conventions § Git 跟踪策略 ("Legacy `.agents/` 等价"). */
-const CANONICAL_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-!.agents/adr/
-!.agents/adr/**
-`;
 function tmpRoot(prefix: string): string {
   // why: Git answers with the real path (macOS /var → /private/var), so fixture
   // roots are canonicalized up front: a `resolve()` of a raw tmpdir path
@@ -129,12 +120,10 @@ function findRepoRoot(): string {
   }
 }
 
-/** Extract the Nth ```gitignore fence from a skill file. */
-function gitignoreFence(skillPath: string, fenceIndex: number): string {
+function gitignoreFence(skillPath: string): string {
   const content = readFileSync(skillPath, "utf8");
-  const blocks = [...content.matchAll(/```gitignore\n([\s\S]*?)```/g)];
-  const block = blocks[fenceIndex];
-  if (block === undefined) throw new Error(`no gitignore fence ${fenceIndex} in ${skillPath}`);
+  const block = /```gitignore\n([\s\S]*?)```/.exec(content);
+  if (block === null) throw new Error(`no gitignore fence in ${skillPath}`);
   return block[1];
 }
 
@@ -1525,40 +1514,14 @@ Custom direction.
 });
 
 describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟踪策略)", () => {
-  test("emitGitignoreSnippet(\"mstar\") returns the exact canonical .mstar/ snippet", () => {
-    expect(emitGitignoreSnippet("mstar")).toBe(CANONICAL_SNIPPET);
+  test("emitGitignoreSnippet() returns the exact canonical .mstar/ snippet", () => {
+    expect(emitGitignoreSnippet()).toBe(CANONICAL_SNIPPET);
   });
 
-  test("emitGitignoreSnippet(\"agents\") returns the exact legacy .agents/ snippet", () => {
-    expect(emitGitignoreSnippet("agents")).toBe(CANONICAL_SNIPPET_AGENTS);
-  });
-
-  test("emitGitignoreSnippet() with unknown kind returns both snippets", () => {
-    expect(emitGitignoreSnippet()).toBe(`${CANONICAL_SNIPPET}${CANONICAL_SNIPPET_AGENTS}`);
-  });
-
-  test("validateGitignore succeeds as author-declared for a declaration of either root (kind undetected)", () => {
+  test("validateGitignore succeeds as author-declared for a .mstar/ declaration", () => {
     const root = tmpRoot("path-gi-ok-");
     try {
       writeFileSync(join(root, ".gitignore"), `${CANONICAL_SNIPPET}\nnode_modules\n`);
-      const mstar = validateGitignore(root);
-      expect(mstar.ok).toBe(true);
-      expect(mstar.code).toBe("gitignore.author-declared");
-
-      writeFileSync(join(root, ".gitignore"), `${CANONICAL_SNIPPET_AGENTS}\nnode_modules\n`);
-      const agents = validateGitignore(root);
-      expect(agents.ok).toBe(true);
-      expect(agents.code).toBe("gitignore.author-declared");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  test("validateGitignore accepts a legacy .agents/ declaration for a detected .mstar harness", () => {
-    const root = tmpRoot("path-gi-mstar-kind-");
-    try {
-      mkdirSync(join(root, ".mstar"));
-      writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET_AGENTS);
       const result = validateGitignore(root);
       expect(result.ok).toBe(true);
       expect(result.code).toBe("gitignore.author-declared");
@@ -1567,10 +1530,24 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
     }
   });
 
-  test("validateGitignore accepts a .mstar/ declaration for a detected legacy .agents harness", () => {
-    const root = tmpRoot("path-gi-agents-kind-");
+  test("a .agents/ rule does not declare the harness root, so the .mstar/ entry is still reported missing", () => {
+    const root = tmpRoot("path-gi-agents-only-");
     try {
-      mkdirSync(join(root, ".agents"));
+      writeFileSync(join(root, ".gitignore"), ".agents/**\n!.agents/knowledge/\n");
+      const result = validateGitignore(root);
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe("gitignore.missing-entries");
+      expect(result.message).toContain(".mstar/");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("validateGitignore recognizes a .mstar/ declaration while a .agents/ corpus exists", () => {
+    const root = tmpRoot("path-gi-mstar-decl-");
+    try {
+      mkdirSync(join(root, ".agents", "knowledge"), { recursive: true });
+      mkdirSync(join(root, ".mstar"));
       writeFileSync(join(root, ".gitignore"), CANONICAL_SNIPPET);
       const result = validateGitignore(root);
       expect(result.ok).toBe(true);
@@ -1603,10 +1580,8 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
       expect(result.ok).toBe(false);
       expect(result.code).toBe("gitignore.missing-entries");
       expect(result.severity).toBe("medium");
-      // Unknown kind — the diagnostic reports the default .mstar/ set, which
-      // is the process root alone: tracked results live outside it.
       expect(result.message).toContain(".mstar/");
-      expect(emitGitignoreSnippet("mstar").split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#")))
+      expect(emitGitignoreSnippet().split("\n").filter((line) => line.trim() !== "" && !line.startsWith("#")))
         .toEqual([".mstar/"]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -1615,14 +1590,20 @@ describe("emitGitignoreSnippet / validateGitignore (plan-conventions § Git 跟�
 });
 
 describe("harness root declaration", () => {
-  test("recognizes harness-root rules of both layouts, with or without a leading slash", () => {
-    for (const line of [".mstar", ".mstar/", ".mstar/**", "/.mstar/", ".mstar/plans/", ".agents", ".agents/", ".agents/**", "/.agents/"]) {
+  test("recognizes .mstar harness-root rules, with or without a leading slash", () => {
+    for (const line of [".mstar", ".mstar/", ".mstar/**", "/.mstar/", ".mstar/plans/"]) {
       expect(hasHarnessRootDeclaration(line)).toBe(true);
     }
   });
 
-  test("recognizes negations of either root", () => {
-    for (const line of ["!.mstar/specs/", "!.mstar/specs/**", "!/.mstar/", "!.agents/knowledge/**"]) {
+  test("does not treat .agents/ rules as a harness-root declaration", () => {
+    for (const line of [".agents", ".agents/", ".agents/**", "/.agents/", ".agents/knowledge/**", "!.agents/knowledge/**"]) {
+      expect(hasHarnessRootDeclaration(line)).toBe(false);
+    }
+  });
+
+  test("recognizes negations of the .mstar/ root", () => {
+    for (const line of ["!.mstar/specs/", "!.mstar/specs/**", "!/.mstar/"]) {
       expect(hasHarnessRootDeclaration(line)).toBe(true);
     }
   });
@@ -1630,7 +1611,6 @@ describe("harness root declaration", () => {
   test("recognizes a partial declaration — canonical completion is intentionally suppressed", () => {
     expect(hasHarnessRootDeclaration(".mstar/**\n")).toBe(true);
     expect(hasHarnessRootDeclaration("!.mstar/specs/\n")).toBe(true);
-    expect(hasHarnessRootDeclaration(".agents/knowledge/**\n")).toBe(true);
   });
 
   test("recognizes a declaration among unrelated rules, blank lines and CRLF (trimmed for recognition only)", () => {
@@ -1793,14 +1773,9 @@ describe("assertSafePathComponent / resolveSddDir (path traversal guard(", () =>
 describe("byte-parity with skill SSOT files ", () => {
   const repoRoot = findRepoRoot();
 
-  test("emitGitignoreSnippet(\"mstar\") is byte-identical to the plan-conventions .mstar/ fence", () => {
+  test("emitGitignoreSnippet() is byte-identical to the plan-conventions .mstar/ fence", () => {
     const skillPath = join(repoRoot, "skills", "mstar-conventions", "references", "git-tracking-and-gitignore.md");
-    expect(emitGitignoreSnippet("mstar")).toBe(gitignoreFence(skillPath, 0));
-  });
-
-  test("emitGitignoreSnippet(\"agents\") is byte-identical to the plan-conventions legacy .agents/ fence", () => {
-    const skillPath = join(repoRoot, "skills", "mstar-conventions", "references", "git-tracking-and-gitignore.md");
-    expect(emitGitignoreSnippet("agents")).toBe(gitignoreFence(skillPath, 1));
+    expect(emitGitignoreSnippet()).toBe(gitignoreFence(skillPath));
   });
 
 });
@@ -1875,6 +1850,118 @@ describe("canonicalizeNearestExisting — A3 nonexistent-leaf canonicalization",
     const absentRoot = join(realpathSync("/"), "no-such-ancestor-canonicalize-test");
     const p = join(absentRoot, "a", "b.md");
     expect(canonicalizeNearestExisting(p)).toBe(p);
+  });
+});
+
+describe("resolveAssignmentDir (assignment homes — compass D6/D14)", () => {
+  function harness(mstarc?: string): { root: string; harnessDir: string } {
+    const root = tmpRoot("path-assign-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    if (mstarc !== undefined) writeFileSync(join(root, ".mstarc"), mstarc);
+    return { root, harnessDir };
+  }
+
+  test("planId composes `{SDD_DIR}/assignments`", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, planId: "plan-a" })).toBe(join(resolveSddDir(harnessDir, "plan-a"), "assignments"));
+  });
+
+  test("iterationId only composes `{ITERATION_DIR}/<id>/assignments`", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, iterationId: "iter-1" })).toBe(
+      join(resolveIterationDir(harnessDir), "iter-1", "assignments"),
+    );
+  });
+
+  test("workflowId only composes `{WORKFLOW_DIR}/<id>/assignments`", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, workflowId: "wf-1" })).toBe(
+      join(resolve(harnessDir), "workflows", "wf-1", "assignments"),
+    );
+  });
+
+  test("no identity returns null", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir })).toBeNull();
+  });
+
+  test("plan wins over iteration, iteration over workflow", () => {
+    const { harnessDir } = harness();
+    expect(resolveAssignmentDir({ harnessDir, planId: "p", iterationId: "i", workflowId: "w" })).toBe(
+      join(resolveSddDir(harnessDir, "p"), "assignments"),
+    );
+    expect(resolveAssignmentDir({ harnessDir, iterationId: "i", workflowId: "w" })).toBe(
+      join(resolveIterationDir(harnessDir), "i", "assignments"),
+    );
+  });
+
+  test("a `.mstarc` override moves the base but keeps the assignments segment", () => {
+    const { harnessDir } = harness("[config]\nsdd_dir=moved-sdd\niteration_dir=moved-iter\nworkflow_dir=moved-wf\n");
+    const root = resolve(harnessDir, "..");
+    expect(resolveAssignmentDir({ harnessDir, planId: "plan-a" })).toBe(join(root, "moved-sdd", "plan-a", "assignments"));
+    expect(resolveAssignmentDir({ harnessDir, iterationId: "iter-1" })).toBe(join(root, "moved-iter", "iter-1", "assignments"));
+    expect(resolveAssignmentDir({ harnessDir, workflowId: "wf-1" })).toBe(join(root, "moved-wf", "wf-1", "assignments"));
+  });
+
+  test("identity ids are traversal-guarded", () => {
+    const { harnessDir } = harness();
+    expect(() => resolveAssignmentDir({ harnessDir, iterationId: "../escape" })).toThrow();
+  });
+  test("a write home colliding with the read-only flat home is rejected (sdd_dir=. + planId .mstar)", () => {
+    const { harnessDir } = harness("[config]\nsdd_dir=.\n");
+    expect(() => resolveAssignmentDir({ harnessDir, planId: ".mstar" })).toThrow(/alias the read-only flat source/);
+  });
+
+  test("iteration and workflow base collisions with the flat home are rejected", () => {
+    const { harnessDir } = harness("[config]\niteration_dir=.\nworkflow_dir=.\n");
+    expect(() => resolveAssignmentDir({ harnessDir, iterationId: ".mstar" })).toThrow(/alias the read-only flat source/);
+    expect(() => resolveAssignmentDir({ harnessDir, workflowId: ".mstar" })).toThrow(/alias the read-only flat source/);
+  });
+
+  test("a valid external override still resolves", () => {
+    const { root, harnessDir } = harness("[config]\nsdd_dir=../external-sdd\n");
+    expect(resolveAssignmentDir({ harnessDir, planId: "plan-a" })).toBe(
+      join(resolve(root, ".."), "external-sdd", "plan-a", "assignments"),
+    );
+  });
+
+});
+
+describe("assignmentSourceHomes (compass D14)", () => {
+  test("names the three write homes plus the read-only fourth source", () => {
+    const root = tmpRoot("path-assign-homes-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    expect(assignmentSourceHomes(harnessDir)).toEqual([
+      { name: "sdd", root: join(resolve(harnessDir), "sdd"), write: true },
+      { name: "iteration", root: join(resolve(harnessDir), "iterations"), write: true },
+      { name: "workflow", root: join(resolve(harnessDir), "workflows"), write: true },
+      { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
+    ]);
+  });
+
+  test("`.mstarc` overrides move the write homes; the fourth source stays at the harness dir", () => {
+    const root = tmpRoot("path-assign-homes-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    writeFileSync(join(root, ".mstarc"), "[config]\nsdd_dir=moved-sdd\niteration_dir=moved-iter\nworkflow_dir=moved-wf\n");
+    expect(assignmentSourceHomes(harnessDir)).toEqual([
+      { name: "sdd", root: join(root, "moved-sdd"), write: true },
+      { name: "iteration", root: join(root, "moved-iter"), write: true },
+      { name: "workflow", root: join(root, "moved-wf"), write: true },
+      { name: "harness", root: join(resolve(harnessDir), "assignments"), write: false },
+    ]);
+  });
+
+  test("the write homes agree with the per-key resolvers for the same harness dir", () => {
+    const root = tmpRoot("path-assign-homes-");
+    const harnessDir = join(root, ".mstar");
+    mkdirSync(harnessDir, { recursive: true });
+    const homes = assignmentSourceHomes(harnessDir);
+    expect(homes[1]!.root).toBe(resolveIterationDir(harnessDir));
+    expect(homes[2]!.root).toBe(resolveWorkflowDir(harnessDir, { harnessDir }));
+    expect(homes[0]!.root).toBe(join(resolve(harnessDir), "sdd"));
   });
 });
 

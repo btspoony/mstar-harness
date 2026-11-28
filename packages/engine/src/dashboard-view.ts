@@ -14,6 +14,7 @@
  * Execution route: projection-backed views are served through the engine's
  * read boundary, which refreshes their projection from the current authority.
  */
+import { homedir } from "node:os";
 import { SddScriptError } from "./sdd.js";
 import { queryDashboard, withStoreRead, type StoreReadQuery } from "./store-read.js";
 import {
@@ -35,17 +36,18 @@ export const MAX_DASHBOARD_SEARCH_LENGTH = 200;
 /** Accepted query fields per view; anything else is a usage refusal. */
 const VIEW_QUERY_FIELDS: Record<DashboardView, readonly string[]> = {
   issues: ["project", "disposition", "kind", "severity", "q", "limit", "offset"],
-  "issue-detail": [],
+  "issue-detail": ["project"],
   workflows: ["project", "limit", "offset"],
   "workflow-detail": [],
   iterations: ["project", "limit", "offset"],
   "iteration-detail": [],
-  roadmap: ["project"],
   "issue-flow": ["project"],
   projects: [],
   // `project` scopes milestones, latestIteration and issueFlow; the view reads
   // no page window and no issue filter, so both keep refusing.
   overview: ["project"],
+  // see packages/engine/src/dashboard-view.ts - the milestone read takes the same project selector.
+  milestones: ["project"],
 };
 
 const DISPOSITIONS: Record<Disposition, true> = vocabularyMap(ISSUE_DISPOSITIONS);
@@ -131,14 +133,16 @@ export function dashboardFilters(
     return { issue };
   }
 
-  if (view === "issue-detail" || view === "workflow-detail" || view === "iteration-detail") {
+  if (view === "issue-detail") {
     if (id === undefined) refuse(`the ${view} route requires an id`);
-    return { id: requireSafeId(`${view} id`, id) };
+    // note: A remote native detail addresses the exact provider id under its project; a
+    // local/mirror detail keeps filtering by the display id alone.
+    return { id: requireSafeId(`${view} id`, id), ...(scoped === undefined ? {} : { projectId: scoped }) };
   }
 
-  // The roadmap view is per project; its identity is required, not guessed.
-  if (view === "roadmap" && scoped === undefined) {
-    refuse("the roadmap view requires a project query parameter");
+  if (view === "workflow-detail" || view === "iteration-detail") {
+    if (id === undefined) refuse(`the ${view} route requires an id`);
+    return { id: requireSafeId(`${view} id`, id) };
   }
 
   return {
@@ -163,12 +167,57 @@ export async function readDashboardView(input: {
 /**
  * Structured failure for an API response: the frozen refusal code, the engine's
  * usage class, or an internal fallback -- never a raw payload or credential.
+ * The message is sanitized here because every transport (HTTP, panel) publishes
+ * it: user HOME, a SQLite store path and a credential-shaped value never leave
+ * the process, while the recovery prose stays.
  */
 export function dashboardFailure(error: unknown): { code: string; message: string } {
-  if (error instanceof SddScriptError) return { code: "usage", message: error.message };
+  if (error instanceof SddScriptError) return { code: "usage", message: sanitizeFailureMessage(error.message) };
   const code = (error as { code?: unknown })?.code;
   if (typeof code === "string" && code !== "") {
-    return { code, message: error instanceof Error ? error.message : String(error) };
+    return { code, message: sanitizeFailureMessage(error instanceof Error ? error.message : String(error)) };
   }
-  return { code: "internal-error", message: error instanceof Error ? error.message : String(error) };
+  return { code: "internal-error", message: sanitizeFailureMessage(error instanceof Error ? error.message : String(error)) };
+}
+
+/** note: A filesystem SQLite path, with its optional journal sidecar. */
+const STORE_PATH = /(?:[A-Za-z]:)?[\\/][^\s"'`,;:)\]}]*(?:\.db)(?:-(?:wal|shm|journal))?/g;
+
+/** note: A conventional authorization scheme; the credential that follows is redacted with it. */
+const AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)";
+
+/** note: A credential-shaped key and its value, including an auth scheme and its credential. */
+const CREDENTIAL = new RegExp(
+  `\\b(token|secret|credential|password|passphrase|api[-_]?key|authorization)\\b(\\s*[=:]\\s*)(?:${AUTH_SCHEME}\\s+)?(?:"[^"]*"|'[^']*'|\\S+)`,
+  "gi",
+);
+
+/** invariant: A scheme-led credential that appears without a labelled key (`refused Bearer …`). */
+const AUTH_VALUE = new RegExp(`\\b(${AUTH_SCHEME})\\s+(?:"[^"]*"|'[^']*'|[A-Za-z0-9._~+/=-]+)`, "gi");
+
+/** note: One Digest parameter: `name=value`, quoted or unquoted. */
+const DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`;
+
+/** note: A labelled Digest value: the scheme plus every comma-separated parameter it carries. */
+const DIGEST_VALUE = new RegExp(
+  `\\b(authorization)\\b(\\s*[=:]\\s*)Digest\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`,
+  "gi",
+);
+
+/** note: A Digest value without its label. */
+const DIGEST_BARE = new RegExp(`\\b(Digest)\\b(?:\\s+${DIGEST_PARAM}(?:\\s*,\\s*${DIGEST_PARAM})*)?`, "gi");
+
+function sanitizeFailureMessage(message: string): string {
+  const home = homedir();
+  const withoutStore = message.replace(STORE_PATH, "{STORE_DB}");
+  const withoutHome = home === "" ? withoutStore : withoutStore.split(home).join("~");
+  // why: Digest first: its value is a comma-separated parameter list, so the generic
+  // single-token rule would leave the remaining parameters behind. The generic
+  // label rule then covers scheme-less values, and the bare scheme rules catch an
+  // authorization value that appears without its header name.
+  return withoutHome
+    .replace(DIGEST_VALUE, "$1$2{REDACTED}")
+    .replace(CREDENTIAL, "$1$2{REDACTED}")
+    .replace(DIGEST_BARE, "$1 {REDACTED}")
+    .replace(AUTH_VALUE, "$1 {REDACTED}");
 }

@@ -12,6 +12,7 @@
  */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { parseDocumentFrontmatterEntries, setOwn } from "./document-frontmatter.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
 // Call-time-only cycle with catalog.ts (which reaches this module through
 // coordination.ts): `catalogRootDir` only resolves roots when a catalog
@@ -19,6 +20,7 @@ import type { GateResult, Severity, ValidationResult } from "./core.js";
 // query, so neither side dereferences the other during module evaluation.
 import { catalogRootDir } from "./catalog.js";
 import { StoreError, openStore, readStoreAuthority, type StoreContext } from "./store-db.js";
+import { openCollaborationStore } from "./collaboration-store.js";
 import { validateStatusV2, type StatusV2Doc } from "./status.js";
 import { LEGACY_WORKTREE_PATH_CODE, isTerminalSnapshot, validateWorkflowSnapshot, type WorkflowSnapshot } from "./workflow.js";
 
@@ -26,7 +28,25 @@ const COMPASS_STATUSES = ["active", "locked", "completed"] as const;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const PLAN_STATUS_DONE = "Done";
 const COMPASS_FILE = "delivery-compass.md";
-const ROADMAP_FILE = "roadmap.md";
+
+/**
+ * note: The marker file a project package used to carry. A catalog row registered at
+ * `projects/<id>/roadmap.md` and one registered at the directory `projects/<id>` name the same
+ * project: the roadmap authority is gone, so the marker is history, and a completeness or import
+ * comparison treats the two spellings as that one project instead of reporting a gap or a conflict
+ * against a row the store already holds.
+ */
+export const PROJECT_MARKER_FILE = "roadmap.md";
+
+/**
+ * note: One project location's identity: `projects/<id>` and its retired marker spelling agree on the id.
+ * The marker is compared LITERALLY (no pattern), so an ordinary document whose name merely resembles it
+ * keeps its own identity instead of collapsing onto the directory.
+ */
+export function projectLocationIdentity(relativePath: string): string {
+  const suffix = `/${PROJECT_MARKER_FILE}`;
+  return relativePath.endsWith(suffix) ? relativePath.slice(0, -suffix.length) : relativePath;
+}
 
 /**
  * Loose shape of a parsed workflow snapshot (`workflows/<id>/snapshot.json`).
@@ -854,13 +874,7 @@ function listDocumentBodies(dir: string, base = ""): string[] {
   return bodies.sort();
 }
 
-/**
- * Every store location the harness layout convention proposes (§4: discovery
- * is a proposal, never a live parallel authority). Identity comes from the
- * layout rule — an iteration is a directory carrying a compass, a project a
- * directory carrying a roadmap, a plan a file under `plans/` — and never from
- * a maintained index table.
- */
+/** see packages/engine/src/iteration.ts - Every store location the harness layout convention proposes (§4: discovery is a proposal, never a live parallel authority). Identity comes from the layout rule — an iteration is a directory carrying a compass, a project a directory under `projects/`, a plan a file under `plans/` — and never from a maintained index table. */
 function discoverCatalogLocations(context: StoreContext, roots: readonly CatalogCompletenessRoot[]): DiscoveredLocation[] {
   const locations: DiscoveredLocation[] = [];
   for (const rootKind of roots) {
@@ -879,9 +893,7 @@ function discoverCatalogLocations(context: StoreContext, roots: readonly Catalog
       }
       case "projects": {
         for (const id of listChildDirectories(dir)) {
-          if (existsSync(join(dir, id, ROADMAP_FILE))) {
-            locations.push({ rootKind, kind: "project", id, relativePath: `${id}/${ROADMAP_FILE}` });
-          }
+          locations.push({ rootKind, kind: "project", id, relativePath: id });
         }
         break;
       }
@@ -944,40 +956,37 @@ export async function readCatalogCompleteness(
   }
   const discovered = discoverCatalogLocations(context, [...covered]);
   const registered = new Set<string>();
+  /** see packages/engine/src/iteration.ts - The project directory identities backed by an ACTUAL project row. A document registered under the `projects` root - at the directory spelling or at a retained body's path - is not a project registration, so it can neither cover a discovered directory nor hide a missing project row. */
+  const registeredProjects = new Set<string>();
   let storeRevision = 0;
   let catalogRevision = 0;
   try {
-    const handle = await openStore(context, "read");
+    const handle = await openCollaborationStore(context, "read");
     try {
-      const meta = readStoreAuthority(handle.db);
-      if (typeof meta.authorityState !== "string" || typeof meta.revision !== "number" || typeof meta.catalogRevision !== "number") {
-        throw new StoreError("store.corrupt", "store_meta is missing or malformed; the catalog authority cannot be verified");
-      }
-      storeRevision = meta.revision;
-      catalogRevision = meta.catalogRevision;
-      if (meta.authorityState !== "active") {
-        return completenessRefusal(
-          "store.not-active",
-          `The catalog store is ${meta.authorityState}; catalog completeness is asserted only against an ACTIVE authority \u2014 ` +
-            "the legacy index/register sources remain authoritative until activation completes.",
-          discovered.length,
-          storeRevision,
-          catalogRevision,
-        );
-      }
+      storeRevision = handle.authority.revision;
+      catalogRevision = handle.authority.catalogRevision;
+      // see packages/engine/src/iteration.ts - // note: The row KIND is read with the location: only a `project` row names a project. A retained
+      // document under the `projects` root (a reclassified roadmap body, say) is not a registration of
+      // the directory it happens to sit in.
       const rows = handle.db
-        .prepare("select root_kind, relative_path from catalog_entities")
-        .all() as Array<{ root_kind?: unknown; relative_path?: unknown }>;
+        .prepare("select kind, root_kind, relative_path from catalog_entities")
+        .all() as Array<{ kind?: unknown; root_kind?: unknown; relative_path?: unknown }>;
       for (const row of rows) {
         if (typeof row.root_kind !== "string" || typeof row.relative_path !== "string") continue;
         if (!covered.has(row.root_kind as CatalogCompletenessRoot)) continue;
         registered.add(`${row.root_kind}\u0000${row.relative_path}`);
+        // see packages/engine/src/iteration.ts - // invariant: A PROJECT row registered at the retired `roadmap.md` marker names the same project as
+        // its directory, so the directory it names reads as registered. Only a project row can say this:
+        // the set below is what the project gap check consults, and nothing else writes to it.
+        if (row.kind === "project" && row.root_kind === "projects") {
+          registeredProjects.add(projectLocationIdentity(row.relative_path));
+        }
       }
     } finally {
       handle.close();
     }
   } catch (error) {
-    if (error instanceof StoreError && error.code === "store.not-initialized") {
+    if (error instanceof StoreError && (error.code === "collaboration.not-initialized" || error.code === "collaboration.not-active")) {
       return completenessRefusal(error.code, error.message, discovered.length, storeRevision, catalogRevision);
     }
     throw error;
@@ -985,7 +994,13 @@ export async function readCatalogCompleteness(
 
   const gaps: CatalogCompletenessGap[] = [];
   for (const location of discovered) {
-    if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) continue;
+    // see packages/engine/src/iteration.ts - // note: A discovered project location is covered only by a project row naming it - directly, or
+    // through the retired marker alias. A document at the same path is not that row.
+    if (location.rootKind === "projects") {
+      if (registeredProjects.has(location.relativePath)) continue;
+    } else if (registered.has(`${location.rootKind}\u0000${location.relativePath}`)) {
+      continue;
+    }
     const code = GAP_CODE[location.kind];
     gaps.push({
       rootKind: location.rootKind,
@@ -1048,7 +1063,7 @@ export async function assertCatalogCompleteness(
  * iteration-compass-template.md` Fields guide); `validateCompassFrontmatter`
  * validates the parsed doc. The engine deliberately has no YAML dependency,
  * so this hand-rolled flat-subset parser lives here — the single shared
- * parser used by the CLI and the roadmap validator (no fork). Path wrapper
+ * parser used by the CLI and the compass validator (no fork). Path wrapper
  * over `parseCompassFrontmatterText`.
  *
  * Throws with the file path on structural errors (no fence / unterminated
@@ -1060,8 +1075,12 @@ export function parseCompassFrontmatter(filePath: string): Record<string, unknow
 
 /**
  * Parse flat-subset YAML frontmatter from raw file content — the single
- * shared parser core behind `parseCompassFrontmatter` (path wrapper) and
- * the roadmap validator (extract/reuse the same parsing, no fork).
+ * shared parser core behind `parseCompassFrontmatter` (path wrapper).
+ * The structural parse delegates to `parseDocumentFrontmatterEntries` in
+ * the flat profile — one pass, no line rescan, and that profile already
+ * carries the compass scalar contract: values are the decoded declaration
+ * text (one boundary quote pair strips, a double-quoted scalar
+ * JSON-escape-decodes) and are never typed `true` / numbers / `null`.
  */
 export function parseCompassFrontmatterText(content: string, filePath: string): Record<string, unknown> {
   const lines = content.split(/\r?\n/);
@@ -1072,82 +1091,25 @@ export function parseCompassFrontmatterText(content: string, filePath: string): 
   if (end === -1) {
     throw new Error(`unterminated YAML frontmatter in ${filePath} (no closing "---")`);
   }
+  const frontmatter = lines.slice(1, end).join("\n");
+  // One structural pass in the shared reader under the flat compass
+  // profile: nested maps and block scalars refuse with the file and line,
+  // and every entry carries its original scalar text, so nothing is
+  // rescanned here.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const entries = parseDocumentFrontmatterEntries(frontmatter, filePath, "flat");
   const doc: Record<string, unknown> = {};
-  let listKey: string | null = null;
-  for (let i = 1; i < end; i += 1) {
-    const line = lines[i] ?? "";
-    if (!line.trim() || line.trim().startsWith("#")) continue;
-    // `- item` lines (optionally indented) continue the most recent
-    // `key:` list (plans:).
-    if (listKey !== null && /^\s*-\s+/.test(line)) {
-      const item = line.replace(/^\s*-\s+/, "").trim().replace(/^["']|["']$/g, "");
-      if (!Array.isArray(doc[listKey])) doc[listKey] = [];
-      (doc[listKey] as string[]).push(item);
-      continue;
-    }
-    listKey = null;
-    const kv = line.match(/^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/);
-    if (!kv) {
-      throw new Error(`unsupported frontmatter line in ${filePath}: ${JSON.stringify(line)}`);
-    }
-    const value = kv[2]!.trim();
-    // A flat flow-style array (`plans: []` / `plans: [a, b]`) becomes an
-    // array of trimmed string items; anything else stays a scalar (empty
-    // value → null, like before).
-    doc[kv[1]!] =
-      value === ""
-        ? null
-        : value.startsWith('"') && value.endsWith('"') && value.length >= 2
-          ? // Double-quoted scalar (e.g. from JSON.stringify in roadmap export):
-            // decode \\ and \" (placeholder pass so \" survives the \\ decode).
-            value
-              .slice(1, -1)
-              // Single-pass JSON-escape decode: \\n → newline, \\t → tab,
-              // \\" → quote, \\\\ → backslash; a lone backslash before any
-              // other character is preserved (JSON.stringify parity).
-              .replace(/\\(.)/g, (_, ch: string) =>
-                ch === "n" ? "\n" : ch === "t" ? "\t" : ch === '"' ? '"' : ch === "\\" ? "\\" : `\\${ch}`,
-              )
-          : /^\[.*\]$/.test(value)
-            ? parseFlowArray(value, filePath)
-            : value.replace(/^["']|["']$/g, "");
-      listKey = value === "" ? kv[1] : null;
+  // Every projected key lands as an own data property: a plain assignment
+  // for the accepted key `__proto__` would invoke the inherited prototype
+  // setter, dropping the value and repointing the prototype instead.
+  // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+  for (const [key, entry] of entries) {
+    // A bare `key:` with no children is null in the compass contract; a list
+    // (bare key with `- item` children, flow array, or block list) projects
+    // its items; every other scalar is the value the flat profile decoded.
+    // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+    const bare = entry.kind !== "list" && entry.rawText === "";
+    setOwn(doc, key, bare ? null : entry.value);
   }
   return doc;
-}
-
-function parseFlowArray(raw: string, filePath: string): string[] {
-  const inner = raw.slice(1, -1);
-  if (/[[\]]/.test(inner)) {
-    throw new Error(
-      `nested flow-style array in ${filePath}: ${JSON.stringify(raw)} \u2014 only flat scalar items are supported (e.g. [a, b])`,
-    );
-  }
-  // Quote-aware scan BEFORE the naive split: a comma inside a quoted item
-  // (single OR double quotes) must stay part of its item, so `["a, b"]` /
-  // `['a, b']` cannot be split unambiguously and are rejected here (a
-  // post-split `item.includes(",")` check would be dead — split(",") items
-  // can never contain a comma). A different quote char inside a quoted item
-  // is a literal character (YAML parity), not a toggle.
-  let quote: string | null = null;
-  for (const ch of inner) {
-    if (ch === '"' || ch === "'") {
-      if (quote === null) quote = ch;
-      else if (quote === ch) quote = null;
-    } else if (ch === "," && quote !== null) {
-      throw new Error(
-        `ambiguous flow-style array in ${filePath}: ${JSON.stringify(raw)} \u2014 quoted item containing comma cannot be split unambiguously (flat scalar items only)`,
-      );
-    }
-  }
-  if (quote !== null) {
-    throw new Error(`unterminated ${quote} quote in flow-style array in ${filePath}: ${JSON.stringify(raw)}`);
-  }
-  const items: string[] = [];
-  for (const part of inner.split(",")) {
-    const item = part.trim().replace(/^["']|["']$/g, "");
-    if (item === "") continue;
-    items.push(item);
-  }
-  return items;
 }

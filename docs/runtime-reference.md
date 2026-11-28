@@ -5,7 +5,7 @@ Morning Star is an Agent Plugin for harness engineering workflows: a TypeScript 
 Read it when you are running Morning Star in your own repository or wiring it into a host. It does not replace:
 
 - **Installation and host setup** — commands, config files, path layouts, manual fallbacks → [`INSTALL.md`](../INSTALL.md).
-- **Slash commands** — the eight user entry points and the store CLI walkthrough → [`docs/commands.md`](commands.md).
+- **Slash commands** — the nine user entry points and the store CLI walkthrough → [`docs/commands.md`](commands.md).
 - **Behaviour rules** — each concern's own skill file. This page maps them and points at them instead of restating them.
 
 ## Components
@@ -16,7 +16,7 @@ Read it when you are running Morning Star in your own repository or wiring it in
 | Harness CLI | `@mstar-harness/cli` — the `mstar-harness` binary, with `mstar` as a short alias. It provides the installer bootstrap (`init`, `doctor`), the command surface, the stdio MCP server, and the offline report draft. |
 | Command registry | `@mstar-harness/commands` — one canonical definition per non-installer command. `--help`, refusal text, exit codes, and the MCP tools all derive from these definitions, so the help text and validation use the same definitions. It is **internal, never published**: the CLI and dsh artifacts bundle it, so a consumer installs neither package. |
 | Skills | `skills/` — the `mstar-*` family plus the `pm` entry and the bundled `grill-me` skill. These are the semantic source of truth for lifecycle, gates, roles, dispatch, review, and knowledge; the engine checks a subset of what they state. |
-| Entry commands | `commands/*.md` — the slash entries (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-test-audit`, `/amazing-e2e-check`). Each boots `project-manager` in your current session; argument forms and routing → [`docs/commands.md`](commands.md). |
+| Entry commands | `commands/*.md` — the slash entries (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/codebase-arch-governance`, `/amazing-pr-review`, `/amazing-test-audit`, `/amazing-e2e-check`). Each boots `project-manager` in your current session; argument forms and routing → [`docs/commands.md`](commands.md). |
 | Role shells | `agents/*.md` — the role identities hosts surface as named subagents (for example `fullstack-dev`, `qc-specialist`). |
 | Host plugins | `@mstar-harness/dsh`, `@mstar-harness/omp`, `@mstar-harness/opencode`, plus Cursor, Codex, Kimi, and ZCode packaging. They add skill discovery, session context, and — where the host exposes a refusal channel — engine-backed write gates. |
 | Portable package | The repository root `plugin.json` plus `skills/` form an [Agent Plugins v1.0.0](https://agent-plugins.org) package. Validate it with `mstar-harness plugin validate --root <path>`. |
@@ -88,7 +88,7 @@ Two persistence domains back that layout:
 - **Ordinary file bodies.** `ArtifactStore` persists review envelopes and unrelated JSON; authored docs and plain append-only notes stay files, not execution authority. Root status, workflow snapshots and legacy session files are read-only one-time import/history. `mstar store upgrade` imports recognized v1/v2 execution sources directly while retaining original bytes; no pre-activation file writer or runtime fallback remains. Without ACTIVE authority, use supported init/upgrade recovery or conversation tracking.
 - **Native authority.** ACTIVE control-root `{HARNESS_DIR}/store.db` owns issue, catalog, roadmap, workflow/plan execution and host machine state. Domain authorization, SQLite transactions/CAS and genuine business integration exclusion remain; application file/directory mutexes do not. Ordinary docs/notes are not frozen by backup or rolled back by restore. The store is not a JSON mirror.
 
-Git policy: the canonical `.gitignore` snippet — emitted by `mstar-harness harness scaffold`, never by the installer — ignores the harness directory wholesale, with no re-include: the tracked results `AGENTS.md`, `knowledge/**`, `specs/**` and `adr/**` live under `.agents/`, and only the legacy `.agents/`-harness snippet re-includes them; `.mstarc` is local. Process artifacts stay in the control checkout while knowledge/specs/adr follow Git branches. `mstar-harness harness scaffold` creates authored directories, the default project and missing canonical ignore/`AGENTS.md` files, not an initial status file or execution authority; follow it with `mstar store init` for a fresh store or `mstar store upgrade` for historical execution sources.
+Git policy: the canonical `.gitignore` snippet — emitted by `mstar-harness harness scaffold`, never by the installer — ignores the harness directory wholesale, with no re-include: the tracked results `AGENTS.md`, `knowledge/**`, `specs/**` and `adr/**` live under `.agents/`; `.mstarc` is tracked. Process artifacts stay in the control checkout while knowledge/specs/adr follow Git branches. `mstar-harness harness scaffold` creates authored directories, the default project and missing canonical ignore/`AGENTS.md` files, not an initial status file or execution authority; follow it with `mstar store init` for a fresh store or `mstar store upgrade` for historical execution sources.
 
 For administration of an existing store — verified backup before an upgrade, the single default `mstar store upgrade` path for importing legacy state, and restore/export commands — see the store section of [`docs/commands.md`](commands.md) and the `mstar-use-cli` skill.
 
@@ -121,7 +121,7 @@ Payload fields: reason (required) (string), references (requiredWhen: resolved) 
 
 `requiredWhen` names the dispositions that make a field required, so the help text, the schema command, and the validation refusal use one vocabulary.
 
-**Read-only views.** `mstar-harness dashboard` serves a read-only web UI of the issue store and the execution/roadmap projections on `127.0.0.1` (loopback only, GET only); flags are listed by `mstar-harness dashboard --help`.
+**Views and the one write route.** `mstar-harness dashboard` serves the issue store and the execution projections as read views on `127.0.0.1` (loopback only; GET only outside the one write path), plus `POST /api/milestones` — the project page's bounded milestone create/edit/assign/remove route, guarded by the observed store revision (a stale observation answers `milestone.revision-conflict`) and by the engine's own validation. No other write path exists; flags are listed by `mstar-harness dashboard --help`.
 
 Exact families, flags, and refusal codes are owned by the **`mstar-use-cli`** skill; this page only states the contract shape.
 

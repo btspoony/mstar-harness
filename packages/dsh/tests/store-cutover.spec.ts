@@ -21,27 +21,31 @@
  * 5. The current phase and the plan rows' recorded scope still come from the JSON execution authority.
  */
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
+
   StoreError,
   assertStoreRuntimeSupported,
   createFsStore,
   detectStoreRuntime,
+  ensureCollaborationAuthority,
+  initializeStore,
   openStore,
+  probeCollaborationAuthority,
   registerCatalogEntity,
   registerShippedCatalogExecution,
   setArtifactStore,
 } from '@mstar-harness/engine'
-import type { ToolExecution, ToolExecutionToken } from '@deepseek-ai/dsh-tools'
 import type { FsTarget } from '@deepseek-ai/dsh-fs'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { buildCatalogPayload, buildCatalogPayloadWithStore } from '../src/gates/catalog.ts'
 import { StatusVetoError, validateStatusValue } from '../src/gates/status.ts'
-import { bootApp, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
+import { bootApp, planFrontMatter, collaborationDbPathAt, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStagedCollaboration, seedStore, v2Register, v2ResidualEntry, v2Root, v2Snapshot, v2SnapshotWithPlans, v2WorkflowEntry, type BootResult } from './harness.ts'
 import type { StatusGateAdvisory } from '../src/index.ts'
 
 let booted: BootResult | undefined
@@ -90,6 +94,14 @@ async function corruptStore(harnessDir: string): Promise<void> {
   await mkdir(join(harnessDir, 'store.db'), { recursive: true })
 }
 
+/** note: Make the COLLABORATION database unopenable through the REAL engine channel
+ * (a directory where the file belongs → `collaboration.unreadable`). */
+async function corruptCollaboration(harnessDir: string): Promise<void> {
+  const dbPath = collaborationDbPathAt(harnessDir)
+  await rm(dbPath, { force: true })
+  await mkdir(dbPath, { recursive: true })
+}
+
 /** FsTarget for one workflow snapshot under the boot harness dir (local-backend shape). */
 function snapshotTarget(harnessDir: string, workflowId = 'wf-store'): FsTarget {
   const path = join(harnessDir, 'workflows', workflowId, 'snapshot.json')
@@ -119,36 +131,6 @@ function cleanupSnapshot(planId: string, mode: 'zero-residual' | 'allow-residual
 /** The same snapshot as JSON text (the on-disk seed form). */
 function cleanupSnapshotJson(planId: string, mode: 'zero-residual' | 'allow-residual' = 'zero-residual'): string {
   return JSON.stringify(cleanupSnapshot(planId, mode))
-}
-
-/** One pending tool call in the registry pipeline shape (dsh-tools ToolExecution). */
-let execSeq = 0
-function toolExec(name: string, args: unknown): ToolExecution {
-  return {
-    callId: `c${++execSeq}`,
-    name,
-    arguments: args,
-    signal: new AbortController().signal,
-    token: Symbol('dsh.tool.execution') as unknown as ToolExecutionToken,
-  } as unknown as ToolExecution
-}
-
-/** The Assignment-shaped dispatch call the `tools/pre-execute` gate sees. */
-function dispatchExec(): ToolExecution {
-  return toolExec('subagent', {
-    description: 'writable implement round',
-    prompt: ['## Assignment', '**Execute as**: fullstack-dev', '**Task category**: logic', '**Execution mode**: sdd', '', 'Implement the thing.'].join('\n'),
-  })
-}
-
-/** A shape-valid `workflow` fan-out call (no Assignment prompt — `meta.name` only). */
-function workflowExec(metaName = 'probe'): ToolExecution {
-  return toolExec('workflow', { script: 'probe', meta: { name: metaName, description: 'probe' } })
-}
-
-/** A shape-valid `ralph` fan-out call (no Assignment prompt — `objective` only). */
-function ralphExec(objective = 'probe the codebase'): ToolExecution {
-  return toolExec('ralph', { objective })
 }
 
 /**
@@ -206,7 +188,7 @@ async function seedPendingRegistration(harnessDir: string, operationId: string):
   // document is the registered title source), so the declared plan file must
   // exist and declare the registered title.
   await mkdir(join(harnessDir, 'plans'), { recursive: true })
-  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), '# Store cutover plan\n\n**plan_id:** plan-a\n')
+  await writeFile(join(harnessDir, 'plans', 'plan-a.md'), planFrontMatter("plan-a", "# Store cutover plan\n"))
   setArtifactStore(createFsStore(harnessDir))
   await expect(
     registerShippedCatalogExecution(
@@ -253,11 +235,12 @@ describe('store cutover — the authority is the store, never the retired files'
     // The knowledge digest came from the catalog table — no README.md exists.
     expect(state.knowledge).toEqual({ docCount: 1, categories: ['conventions'] })
     expect(state.storeFacts?.kind).toBe('store')
-    // A freshly initialized store has never built a projection generation, so
-    // the envelope reports `unavailable` — the pre-refresh state, disclosed
-    // rather than hidden.
-    expect(state.storeFacts?.projection).toBe('unavailable')
-    expect(state.storeFacts?.diagnostic).toContain('projection unavailable')
+    // note: The rollup discloses the collaboration observation that produced it —
+    // not an execution projection (this view reads no execution source).
+    expect(state.storeFacts?.completeness).toBe('complete')
+    expect(typeof state.storeFacts?.asOf).toBe('string')
+    expect(state.storeFacts?.projection).toBeNull()
+    expect(state.storeFacts?.diagnostic).toBeNull()
   })
 
   it('renders the compact delta from the async pre-read (the row the model actually sees)', async () => {
@@ -286,20 +269,22 @@ describe('store cutover — the authority is the store, never the retired files'
     expect(stored.kind).toBe('ok')
     if (stored.kind !== 'ok' || stored.emission === undefined) return
     const payload = JSON.parse(stored.emission.payloadJson) as {
-      state?: { residuals?: unknown; storeFacts?: { diagnostic?: string | null } }
+      state?: { residuals?: unknown; storeFacts?: { completeness?: string; diagnostic?: string | null } }
     }
     expect(payload.state?.residuals).toEqual([{ severity: 'critical', count: 1 }])
-    expect(payload.state?.storeFacts?.diagnostic).toContain('projection unavailable')
+    expect(payload.state?.storeFacts?.completeness).toBe('complete')
+    expect(payload.state?.storeFacts?.diagnostic).toBeNull()
     expect(stored.emission.turn).toBe(1)
   })
 })
 
 /* ===========================================================================
- * 2. Freshness disclosure: a stale projection is named, not silently sold
+ * invariant: 2. Freshness disclosure: a scoped observation names its own proof, and a
+ *    stale execution projection never stands in for it
  * ========================================================================== */
 
-describe('store cutover — projection freshness is disclosed', () => {
-  it('a stale projection is distinguished from a current one (issue rows stay authoritative)', async () => {
+describe('store cutover — collaboration freshness is disclosed', () => {
+  it('a stale execution projection neither hides nor impersonates the complete collaboration rollup', async () => {
     const { app, harnessDir } = await storeApp()
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-store')]),
@@ -322,9 +307,12 @@ describe('store cutover — projection freshness is disclosed', () => {
 
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     expect(state?.storeFacts?.kind).toBe('store')
-    expect(state?.storeFacts?.projection).toBe('stale')
-    expect(state?.storeFacts?.diagnostic).toContain('projection stale')
-    expect(state?.storeFacts?.diagnostic).toContain('workflows/wf-store/snapshot.json')
+    // note: The rollup's proof is the collaboration observation; execution
+    // projection health is neither read nor sold as it.
+    expect(state?.storeFacts?.completeness).toBe('complete')
+    expect(typeof state?.storeFacts?.asOf).toBe('string')
+    expect(state?.storeFacts?.projection).toBeNull()
+    expect(state?.storeFacts?.diagnostic).toBeNull()
     // The stale projection did NOT suppress the rows read from the authority.
     expect(state?.residuals).toEqual([{ severity: 'medium', count: 1 }])
   })
@@ -343,28 +331,25 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     })
     await seedOpenIssue(harnessDir, { title: 'invisible only while the store refuses', severity: 'critical', operationId: 'op-refused' })
 
-    // The below-floor/capability refusal cannot be staged in-process: the
+    // invariant: The below-floor/capability refusal cannot be staged in-process: the
     // engine reads the runtime off `globalThis.Bun`, which Bun exposes as a
     // non-writable, non-configurable property. So the REFUSAL CHANNEL is
-    // proven with a refusal the engine really raises (a corrupt store), and
-    // the floor refusal itself is pinned below through the engine's own check
-    // — the same single authority the readers surface (`openStore` calls it
-    // before touching a file, so the runtime case travels this same catch).
-    await corruptStore(harnessDir)
+    // proven with a refusal the engine really raises on the collaboration
+    // lane (an unopenable database), and the floor refusal itself is pinned
+    // below through the engine's own check — the same single authority the
+    // readers surface.
+    await corruptCollaboration(harnessDir)
 
-    let refusal: StoreError | undefined
-    try {
-      await openStore({ harnessDir }, 'read')
-    } catch (error) {
-      refusal = error as StoreError
-    }
-    expect(refusal?.code).toBe('store.corrupt')
+    const probe = await probeCollaborationAuthority({ harnessDir })
+    expect(probe).toMatchObject({ kind: 'unavailable', code: 'collaboration.unreadable' })
 
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     // The refusal is disclosed with the engine's own text — NOT an empty
     // "none open" rollup.
     expect(state?.storeFacts?.kind).toBe('unavailable')
-    expect(state?.storeFacts?.diagnostic).toContain('store.corrupt')
+    expect(state?.storeFacts?.completeness).toBe('unavailable')
+    expect(state?.storeFacts?.asOf).toBeNull()
+    expect(state?.storeFacts?.diagnostic).toContain('collaboration.unreadable')
     expect(state?.residualFindings).toBeNull()
     expect(state?.knowledge).toBeNull()
 
@@ -373,7 +358,7 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
     const gate = await validateStatusValue(cleanupSnapshot('plan-a'), 'snapshot', harnessDir)
     expect(gate.ok).toBe(false)
     expect(gate.violations.map((violation) => violation.code)).toContain('findings.cleanup-authority-unavailable')
-    expect(gate.violations[0]?.message).toContain('store.corrupt')
+    expect(gate.violations[0]?.message).toContain('collaboration.unreadable')
   })
 
   it('the below-floor/capability refusal is the engine\'s actionable one, not a local restatement', () => {
@@ -401,23 +386,35 @@ describe('store cutover — refusals are disclosed and fail closed', () => {
 
     const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
     expect(state?.storeFacts?.kind).toBe('unavailable')
-    expect(state?.storeFacts?.diagnostic).toContain('store.not-initialized')
+    expect(state?.storeFacts?.diagnostic).toContain('collaboration.not-initialized')
     expect(state?.residualFindings).toBeNull()
+
+    // invariant: A missing collaboration lane is an authority verdict, not a register
+    // permission: the register write is refused with the same cause.
+    const probe = await probeCollaborationAuthority({ harnessDir })
+    expect(probe).toMatchObject({ kind: 'absent', code: 'collaboration.not-initialized' })
 
     const gate = await validateStatusValue(cleanupSnapshot('plan-a'), 'snapshot', harnessDir)
     expect(gate.ok).toBe(false)
     expect(gate.violations.map((violation) => violation.code)).toContain('findings.cleanup-authority-unavailable')
   })
 
-  it('a staged store never passes as no findings (the authority must be active)', async () => {
-    const { harnessDir } = await storeApp()
-    const handle = await openStore({ harnessDir }, 'write')
-    handle.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run()
-    handle.close()
+  it('a staged collaboration lane never passes as no findings (the authority must be active)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-staged-collaboration')
+    await seedStagedCollaboration(harnessDir)
+
+    const probe = await probeCollaborationAuthority({ harnessDir })
+    expect(probe).toMatchObject({ kind: 'staged', code: 'collaboration.not-active' })
 
     const gate = await validateStatusValue(cleanupSnapshot('plan-a'), 'snapshot', harnessDir)
     expect(gate.ok).toBe(false)
-    expect(gate.violations[0]?.message).toContain('store.not-active')
+    expect(gate.violations[0]?.message).toContain('collaboration.not-active')
+
+    // invariant: The dsh aggregate never renders a staged lane as an empty success.
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    expect(state?.storeFacts?.kind).toBe('unavailable')
+    expect(state?.storeFacts?.diagnostic).toContain('collaboration.not-active')
+    expect(state?.residualFindings).toBeNull()
   })
 
   it("the plan's own open linked issues fail the configured cleanup gate; another plan's and an unlinked one do not", async () => {
@@ -520,6 +517,10 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
   async function sealStoreForReaders(harnessDir: string): Promise<void> {
     const handle = await openStore({ harnessDir }, 'read')
     handle.close()
+    // note: Warm the collaboration lane too: the host gates now read IT for a
+    // register verdict, and the first read after publication is the one the
+    // documented bun-test open flake affects.
+    expect(await probeCollaborationAuthority({ harnessDir })).toMatchObject({ kind: 'active' })
   }
 
   /** FsTarget for the authority database / a WAL sidecar at the harness root. */
@@ -601,14 +602,14 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     expect(advisories[0]!.result.violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
   })
 
-  it('a register write while the authority is UNREADABLE is vetoed with store.authority-unavailable (fail-closed)', async () => {
+  it('a register write while the collaboration authority is UNREADABLE is vetoed with store.authority-unavailable (fail-closed)', async () => {
     const { app, harnessDir } = await storeApp()
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-store')]),
       'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
       'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
     })
-    await corruptStore(harnessDir)
+    await corruptCollaboration(harnessDir)
 
     const outcome = await app.ctx
       .waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
@@ -617,25 +618,25 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     expect(outcome).toBeInstanceOf(StatusVetoError)
     const refusal = (outcome as StatusVetoError).violations[0]!
     expect(refusal.code).toBe('store.authority-unavailable')
-    expect(refusal.message).toContain('store.corrupt')
+    expect(refusal.message).toContain('collaboration.unreadable')
   })
 
-  it('a register write in a PRE-ACTIVATION workspace keeps the legacy document route (no refusal)', async () => {
-    const { app, harnessDir } = await appWithRoot('store-authority-legacy')
-    // Contract §7: no store / a staged store leaves the register the live
-    // findings authority — the write falls through to its document validator
-    // (the shape-valid register below passes silently).
+  it('a register write without an ACTIVE collaboration lane is refused by authority (never a legacy permission)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-absent')
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-store')]),
       'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
       'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
     })
-    const advisories = captureStatusAdvisories(app.ctx)
 
-    const intent = await app.ctx.waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
 
-    expect(intent).toEqual({ kind: 'createIfAbsent' }) // delegated: the legacy authority still owns the register
-    expect(advisories).toHaveLength(0)
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    const refusal = (outcome as StatusVetoError).violations[0]!
+    expect(refusal.code).toBe('store.authority-unavailable')
+    expect(refusal.message).toContain('collaboration.not-initialized')
   })
 
   it('the host hook refuses the same class: beforeStatusWrite maps the authority refusals to a structured code', async () => {
@@ -660,8 +661,8 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     expect(other.ok).toBe(true)
   })
 
-  it('a pre-activation workspace keeps the hook register validation (legacy authority)', async () => {
-    const { app, harnessDir } = await appWithRoot('store-authority-hook-legacy')
+  it('a workspace without an ACTIVE collaboration lane keeps the hook refusing the register by authority', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-hook-absent')
     await seedHarness(harnessDir, {
       'status.json': v2Root([v2WorkflowEntry('wf-store')]),
       'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
@@ -672,8 +673,8 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
       join(harnessDir, 'projects', '_default', 'residuals.json'),
       JSON.parse(v2Register({})) as Record<string, unknown>,
     )
-    expect(hook.ok).toBe(true)
-    expect(hook.code).toBe('host.beforeStatusWrite.ok')
+    expect(hook.ok).toBe(false)
+    expect(hook.code).toBe('store.authority-unavailable')
   })
 
   it('a CASE-VARIANT store.db basename (Store.db) is vetoed like the file itself (FW-3)', async () => {
@@ -760,10 +761,11 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     expect(hook.code).toBe('project.register.retired')
   })
 
-  it('a pre-activation register whose alias lands on ANOTHER pre-activation register keeps the legacy route (RV-2)', async () => {
-    const { app, harnessDir } = await appWithRoot('store-authority-cross-legacy-both')
-    // Both contexts pre-activation (issue contract §7): the landed register
-    // keeps its document validator — no authority veto on either side.
+  it('a register alias landing on ANOTHER register without an ACTIVE lane is refused by authority (RV-2)', async () => {
+    const { app, harnessDir } = await appWithRoot('store-authority-cross-absent')
+    // invariant: Neither context has an ACTIVE collaboration lane: the landed register's
+    // authority is the verdict, and it is a refusal — never the document
+    // validator.
     const destHarness = join(dirname(harnessDir), 'dest-workspace', '.mstar')
     await seedHarness(destHarness, {
       'status.json': v2Root([]),
@@ -777,15 +779,18 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
     await mkdir(join(harnessDir, 'projects', '_default'), { recursive: true })
     const sourceRegister = join(harnessDir, 'projects', '_default', 'residuals.json')
     await symlink(join(destHarness, 'projects', '_default', 'residuals.json'), sourceRegister)
-    const advisories = captureStatusAdvisories(app.ctx)
 
-    const intent = await app.ctx.waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
-    expect(intent).toEqual({ kind: 'createIfAbsent' })
-    expect(advisories).toHaveLength(0)
+    const outcome = await app.ctx
+      .waterfall('fs/write-intent', registerTarget(harnessDir), {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+    expect(outcome).toBeInstanceOf(StatusVetoError)
+    expect((outcome as StatusVetoError).violations.map((violation) => violation.code)).toEqual([
+      'store.authority-unavailable',
+    ])
 
     const hook = await app.ctx.dshHostAdapter.beforeStatusWrite(sourceRegister, JSON.parse(v2Register({})) as Record<string, unknown>)
-    expect(hook.ok).toBe(true)
-    expect(hook.code).toBe('host.beforeStatusWrite.ok')
+    expect(hook.ok).toBe(false)
+    expect(hook.code).toBe('store.authority-unavailable')
   })
 
   it('a fresh authority write through a SYMLINKED PARENT is refused by the landed classification (S-G4b-03)', async () => {
@@ -849,5 +854,132 @@ describe('store authority — fs-intent and adapter refuse authority bytes (FW-1
       .waterfall('fs/write-intent', { targetKey: plain as FsTarget['targetKey'], displayPath: plain }, {}, async () => ({ kind: 'createIfAbsent' as const }))
     expect(intent).toEqual({ kind: 'createIfAbsent' })
     expect(advisories).toHaveLength(0)
+  })
+})
+
+/* ===========================================================================
+ * note: 7. Collaboration host authority: every source combination names its own
+ *    cause, and the dsh aggregate discloses completeness/asOf.
+ * ========================================================================== */
+
+describe('collaboration host authority — source combinations and diagnostics', () => {
+  const targetOf = (path: string): FsTarget => ({ targetKey: path as FsTarget['targetKey'], displayPath: path })
+
+  async function intentOf(app: BootResult, path: string): Promise<unknown> {
+    return app.ctx
+      .waterfall('fs/write-intent', targetOf(path), {}, async () => ({ kind: 'createIfAbsent' as const }))
+      .then(() => undefined, (error: unknown) => error)
+  }
+
+  it('both authorities active: registers retired, execution documents refused, aggregate complete with asOf', async () => {
+    const { app, harnessDir } = await storeApp()
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({ 'plan-a': [v2ResidualEntry('R1', { severity: 'low', source_plan: 'plan-a' })] }),
+    })
+
+    const register = await intentOf(app, join(harnessDir, 'projects', '_default', 'residuals.json'))
+    expect(register).toBeInstanceOf(StatusVetoError)
+    expect((register as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+
+    const status = await intentOf(app, join(harnessDir, 'status.json'))
+    expect(status).toBeInstanceOf(StatusVetoError)
+    expect((status as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['execution.direct-write-refused'])
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    expect(state?.storeFacts).toMatchObject({ kind: 'store', completeness: 'complete' })
+    expect(typeof state?.storeFacts?.asOf).toBe('string')
+    expect(state?.storeFacts?.storeRevision).not.toBeNull()
+  })
+
+  it('execution-only: registers are unavailable (never a legacy write) while execution documents stay retired', async () => {
+    const { app, harnessDir } = await appWithRoot('collaboration-host-execution-only')
+    const handle = await initializeStore({ harnessDir })
+    handle.close()
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({}),
+    })
+
+    expect(await probeCollaborationAuthority({ harnessDir })).toMatchObject({
+      kind: 'absent',
+      code: 'collaboration.not-initialized',
+    })
+
+    const register = await intentOf(app, join(harnessDir, 'projects', '_default', 'residuals.json'))
+    expect(register).toBeInstanceOf(StatusVetoError)
+    const refusal = (register as StatusVetoError).violations[0]!
+    expect(refusal.code).toBe('store.authority-unavailable')
+    expect(refusal.message).toContain('collaboration.not-initialized')
+
+    const status = await intentOf(app, join(harnessDir, 'status.json'))
+    expect(status).toBeInstanceOf(StatusVetoError)
+    expect((status as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['execution.direct-write-refused'])
+
+    // invariant: The aggregate reports the missing proof as unavailable — never zero.
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    expect(state?.storeFacts).toMatchObject({ kind: 'unavailable', completeness: 'unavailable', asOf: null })
+    expect(state?.storeFacts?.diagnostic).toContain('collaboration.not-initialized')
+    expect(state?.residualFindings).toBeNull()
+  })
+
+  it('collaboration-only: registers retired without creating or implying an execution verdict', async () => {
+    const { app, harnessDir } = await appWithRoot('collaboration-host-collaboration-only')
+    await ensureCollaborationAuthority({ harnessDir })
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({}),
+    })
+
+    expect(existsSync(join(harnessDir, 'store.db'))).toBe(false)
+    const register = await intentOf(app, join(harnessDir, 'projects', '_default', 'residuals.json'))
+    expect(register).toBeInstanceOf(StatusVetoError)
+    expect((register as StatusVetoError).violations.map((violation) => violation.code)).toEqual(['project.register.retired'])
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    expect(state?.storeFacts).toMatchObject({ kind: 'store', completeness: 'complete' })
+    expect(typeof state?.storeFacts?.asOf).toBe('string')
+  })
+
+  it('hard and soft enforcement refuse a staged collaboration lane identically', async () => {
+    for (const enforcement of ['hard', 'soft'] as const) {
+      const { app, harnessDir } = await appWithRoot(`collaboration-host-staged-${enforcement}`, enforcement)
+      await seedStagedCollaboration(harnessDir)
+      await seedHarness(harnessDir, {
+        'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+        'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+        'projects/_default/residuals.json': v2Register({}),
+      })
+
+      const outcome = await intentOf(app, join(harnessDir, 'projects', '_default', 'residuals.json'))
+      expect(outcome, enforcement).toBeInstanceOf(StatusVetoError)
+      const refusal = (outcome as StatusVetoError).violations[0]!
+      expect(refusal.code).toBe('store.authority-unavailable')
+      expect(refusal.message).toContain('collaboration.not-active')
+    }
+  })
+
+  it('an unreadable collaboration lane is unavailable with its own cause, and says nothing about zero findings', async () => {
+    const { app, harnessDir } = await storeApp()
+    await seedHarness(harnessDir, {
+      'status.json': v2Root([v2WorkflowEntry('wf-store')]),
+      'workflows/wf-store/snapshot.json': cleanupSnapshotJson('plan-a'),
+      'projects/_default/residuals.json': v2Register({}),
+    })
+    await corruptCollaboration(harnessDir)
+
+    const register = await intentOf(app, join(harnessDir, 'projects', '_default', 'residuals.json'))
+    expect(register).toBeInstanceOf(StatusVetoError)
+    const refusal = (register as StatusVetoError).violations[0]!
+    expect(refusal.code).toBe('store.authority-unavailable')
+    expect(refusal.message).toContain('collaboration.unreadable')
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    expect(state?.storeFacts).toMatchObject({ kind: 'unavailable', completeness: 'unavailable', asOf: null })
+    expect(state?.storeFacts?.diagnostic).toContain('collaboration.unreadable')
+    expect(state?.residualFindings).toBeNull()
   })
 })

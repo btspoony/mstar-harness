@@ -1,8 +1,18 @@
-import { mkdtempSync, rmSync } from "node:fs";
+/**
+ * note: ingest.test.ts — the association rule over a listing the caller fetched with
+ * its own tools: repo + local + git author decide, and the ledger is the only
+ * thing that is written.
+ */
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, type StoreDb } from "../store-db.js";
+import * as nodeOs from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "../collaboration-identity.js";
+import { initializeCollaborationStore } from "../collaboration-store.js";
+import { busyTimeoutMs, connect, type StoreDb } from "../store-db.js";
 import { readItem } from "../issue-sync.js";
 import { ingestRecords, type IngestContext } from "./ingest.js";
 import { encodeMarker } from "./marker.js";
@@ -10,7 +20,19 @@ import type { ProviderItem } from "./provider.js";
 import { planItem, reconcileWith, recordResults, selectPushCandidates, type PushContext } from "./push.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-ingest-test-"));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
+
+/** why: The collaboration store is user-level, so the resolver's home is the fixture's. */
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(ROOT, { recursive: true, force: true });
+});
 
 const PROJECT = "p-ingest";
 const BINDING = "linear:" + PROJECT;
@@ -18,21 +40,66 @@ const REPO = "acme/widgets";
 const AUTHOR = "Ada Lovelace <ada@example.com>";
 const UPDATED = "2026-11-19T12:00:00.000Z";
 
+/**
+ * note: The ingest fixture: one ACTIVE collaboration authority, and ONE caller-owned
+ * transaction for the whole case — the ownership the command's `withSyncWrite`
+ * holds around an `ingest`. Rows and their receipts commit together at `close()`.
+ */
 async function openedStore(name: string): Promise<{ db: StoreDb; close: () => void }> {
   const harnessDir = mkdtempSync(join(ROOT, name));
-  const handle = await initializeStore({ harnessDir });
-  const db = handle.db;
+  const checkoutRoot = join(harnessDir, "checkout");
+  mkdirSync(checkoutRoot, { recursive: true });
+  execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["config", "user.name", "Ingest Test"], { cwd: checkoutRoot });
+  execFileSync("git", ["config", "user.email", "ingest@example.test"], { cwd: checkoutRoot });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(harnessDir)}.git`], {
+    cwd: checkoutRoot,
+  });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(harnessDir)}.git`],
+    { cwd: checkoutRoot },
+  );
+  writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=mirror\n");
+  const location = resolveCollaborationLocation({ harnessDir, checkoutRoot });
+  await initializeCollaborationStore(location);
+  const flip = new DatabaseSync(location.dbPath);
+  try {
+    flip.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+  } finally {
+    flip.close();
+  }
+  const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
+  db.exec("begin immediate");
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', ?, 'Ingest', 'projects', ?, 'now', 'now')",
   ).run(PROJECT, PROJECT + "/roadmap.md");
-  return { db, close: () => handle.close() };
+  return {
+    db,
+    close: () => {
+      try {
+        db.exec("commit");
+      } finally {
+        db.close();
+      }
+    },
+  };
+}
+
+/** note: v2 made the stable reference NOT NULL and unique; the fixture derives one from its display id. */
+function fixtureIssueRef(id: string): string {
+  return `mstar:issue:00000000-0000-4000-8000-${id.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
 }
 
 function addIssue(db: StoreDb, id: string, projectId: string = PROJECT): void {
   db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values (?, ?, ?, 'bug', 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?)",
-  ).run(id, projectId, "Issue " + id, "sync-issue-" + id);
+    "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+      " values (?, ?, ?, 'bug', 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?, ?)",
+  ).run(id, projectId, "Issue " + id, "sync-issue-" + id, fixtureIssueRef(id));
 }
 
 function ingestContext(overrides: Partial<IngestContext> = {}): IngestContext {
@@ -65,6 +132,10 @@ function pushRow(db: StoreDb, localId: string) {
   return readItem(db, { bindingId: BINDING, direction: "push", localId });
 }
 
+/**
+ * note: Push one local issue through the real planner and recorder, then hand back the
+ * remote record a Linear tool would report for it: the payload mstar sent.
+ */
 function pushAndRecord(db: StoreDb, localId: string, externalId: string): ProviderItem {
   const push = pushContext();
   const candidate = selectPushCandidates(db, BINDING).find((entry) => entry.localId === localId)!;

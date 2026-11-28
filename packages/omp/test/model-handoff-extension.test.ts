@@ -42,6 +42,7 @@ import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import type { ExtensionActions, ExtensionContext, ExtensionContextActions, ExtensionMode, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import {
+
   ExtensionRunner,
   RegisteredToolAdapter,
   loadExtensionFromFactory,
@@ -73,6 +74,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   createFsStore,
+  ensureCollaborationAuthority,
   initializeStore,
   mutateExecutionPlan,
   readExecutionAuthority,
@@ -81,6 +83,7 @@ import {
   setArtifactStore,
 } from "@mstar-harness/engine";
 import type { ExecutionCaller, ExecutionContext, ExecutionSessionRef } from "@mstar-harness/engine";
+import { planFrontMatter } from "./plan-frontmatter";
 
 /** Injected current runtime for a `node` consumer: at/above the declared floor. */
 const atOrAboveRuntime = (() => {
@@ -209,16 +212,17 @@ function buildControlRepo(
   git(["init", "-q", "-b", "main", main], root);
   git(["config", "user.email", "fixture@example.invalid"], main);
   git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-ext-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   writeFileSync(join(main, "README.md"), "fixture\n");
   git(["add", "README.md"], main);
   git(["commit", "-qm", "init"], main);
-  git(["remote", "add", "origin", bare], main);
-  git(["push", "-q", "-u", "origin", "main"], main);
+  git(["remote", "add", "local-remote", bare], main);
+  git(["push", "-q", "-u", "local-remote", "main"], main);
 
   const integrationBranch = "iteration/fixture";
   const integration = join(root, "integration");
   git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
-  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+  git(["push", "-q", "-u", "local-remote", integrationBranch], integration);
 
   const harness = join(main, ".mstar");
   mkdirSync(join(harness, "plans"), { recursive: true });
@@ -277,7 +281,10 @@ function createWorkflowArtifacts(repo: ControlRepo, sessionId: string, workflowI
   // its own `plan_id`, and readiness resolves every row pointer through the
   // shared resolver — so the fixture declares it like the real producer does.
   planPaths.forEach((path, index) =>
-    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+    writeFileSync(path, planFrontMatter(planIds[index]!, `# ${planIds[index]}
+
+Plan body.
+`)),
   );
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
@@ -1261,6 +1268,7 @@ async function seedBindableActiveWorkflow(
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionState({ harnessDir: harness });
   const context: ExecutionContext = {
     harnessDir: harness,
@@ -1830,7 +1838,10 @@ async function seedActiveHandoffAuthority(
   const guidesDir = join(iterationDir, "guides");
   for (const dir of [plansDir, sddDir, guidesDir]) mkdirSync(dir, { recursive: true });
   const planPath = join(plansDir, `${planId}.md`);
-  writeFileSync(planPath, `# ${planId}\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  writeFileSync(planPath, planFrontMatter(planId, `# ${planId}
+
+Plan body.
+`));
   const prepareEvidencePath = join(guidesDir, `${planId}-prepare.md`);
   writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
@@ -1860,6 +1871,7 @@ async function seedActiveHandoffAuthority(
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionState({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },

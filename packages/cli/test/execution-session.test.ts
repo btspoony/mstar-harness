@@ -29,17 +29,21 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { readDeclaredNodeFloor } from "@mstar-harness/engine";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { executeCommand } from "@mstar-harness/commands";
-import { receiptStable, runCli as runCliProcess, SRC_ENTRY, type RunResult } from "./harness";
+import { receiptStable, runCli as runCliProcess, SRC_ENTRY, writeFixtureRepoId, type RunResult } from "./harness";
 import {
+  captureIssue,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   getCatalog,
   initializeStore,
   openStore,
+  readCollaborationAuthority,
   readExecutionAuthority,
+  registerCatalogEntity,
   serializeExecutionValue,
   type ExecutionIdentity,
   type ExecutionPlanView,
@@ -47,6 +51,7 @@ import {
   type ExecutionState,
   type StoreContext,
 } from "@mstar-harness/engine";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 /** Injected current runtime for a `node` consumer: at/above the declared floor. */
 const atOrAboveRuntime = (() => {
@@ -59,6 +64,7 @@ const CLI_ENTRY = process.env.MSTAR_CLI_ENTRY ?? SRC_ENTRY;
 
 const WORKFLOW_ID = "wf-exec-session";
 const PLAN_ID = "20260921-execution-session-plan";
+
 const COORDINATOR_ID = "coord-exec-session";
 const SUCCESSOR_ID = "coord-exec-session-2";
 const WIRE_PREFIX = "exec-session-v1:";
@@ -156,6 +162,7 @@ async function activeFixture(label: string): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
@@ -164,12 +171,13 @@ async function activeFixture(label: string): Promise<Fixture> {
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
 
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const worktreePath = join(root, "wt-exec-session");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
   writeText(evidencePath, "# evidence\n");
   // A REAL checkout on the branch prepare records: prepare validates the actual
   // checkout and branch, not merely that a directory exists.
@@ -193,7 +201,7 @@ async function legacyFixture(label: string): Promise<Fixture> {
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const worktreePath = join(root, "wt-exec-session");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
   writeText(evidencePath, "# evidence\n");
   writeJson(join(harnessDir, "status.json"), { version: 2, updated_at: "2026-09-21", workflows: [] });
   mkdirSync(worktreePath, { recursive: true });
@@ -1368,7 +1376,7 @@ describe("workflow.register — catalog plan paths", () => {
     expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
     const storedPlanFile = join(fixture.harnessDir, "plans", entity.relativePath);
     expect(storedPlanFile).toBe(fixture.planMarkdown);
-    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`plan_id: ${PLAN_ID}`);
 
     const tokens = await tokensOf(fixture);
     const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
@@ -1389,7 +1397,7 @@ describe("workflow.register — catalog plan paths", () => {
     const fixture = await activeFixture("mstar-register-configured-plans-root");
     writeText(join(fixture.harnessDir, ".mstarc"), "[config]\nplan_dir=custom-plans\n");
     fixture.planMarkdown = join(fixture.harnessDir, "custom-plans", `${PLAN_ID}.md`);
-    writeText(fixture.planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+    writeText(fixture.planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
 
     const identity = coordinatorIdentity();
     const initial = await readExecutionAuthority(fixture.context);
@@ -1399,7 +1407,7 @@ describe("workflow.register — catalog plan paths", () => {
     expect(entity.relativePath).toBe(`${PLAN_ID}.md`);
     const storedPlanFile = join(fixture.harnessDir, "custom-plans", entity.relativePath);
     expect(storedPlanFile).toBe(fixture.planMarkdown);
-    expect(readFileSync(storedPlanFile, "utf8")).toContain(`**plan_id:** ${PLAN_ID}`);
+    expect(readFileSync(storedPlanFile, "utf8")).toContain(`plan_id: ${PLAN_ID}`);
 
     const tokens = await tokensOf(fixture);
     const coordinator = activeBind(fixture, identity, ["--coordinator"], tokens.workflow, "bind-coordinator");
@@ -1500,12 +1508,14 @@ async function activeDeliveryFixture(label: string): Promise<DeliveryFixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harnessDir = join(root, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
   const baseSha = headOf(root);
 
   const featurePath = join(root, "wt-feature");
@@ -1518,7 +1528,7 @@ async function activeDeliveryFixture(label: string): Promise<DeliveryFixture> {
   const planMarkdown = join(harnessDir, "plans", `${PLAN_ID}.md`);
   const sddDir = join(harnessDir, "sdd", PLAN_ID);
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planMarkdown, `# Execution session transport plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planMarkdown, planFrontMatter(PLAN_ID, "# Execution session transport plan\n"));
   writeText(evidencePath, "# evidence\n");
 
   const qcReport = join(sddDir, "review", "qc1.md");
@@ -2069,6 +2079,7 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
   const root = realpathSync(mkdtempSync(join(tmpdir(), `${label}-`)));
   roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const rootCommit = headAt(root);
 
@@ -2077,6 +2088,7 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
   const context: StoreContext = { harnessDir };
   const store = await initializeStore(context);
   store.close();
+  await ensureCollaborationAuthority(context);
 
   // Registration proves the named document IS this iteration's reviewed
   // compass, so the fixture states a complete one.
@@ -2092,7 +2104,14 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
       "plans:\n" +
       `  - ${CONTINUATION_PLAN_A}\n` +
       `  - ${CONTINUATION_PLAN_B}\n` +
-      "---\n",
+      "---\n" +
+      // Completion refuses while an EARLIER Done plan has no layer row, so the
+      // table ships empty and the loop records each plan's row as it completes.
+      // see skills/mstar-iteration/references/pr-stack.md
+      "## PR stack\n" +
+      "\n" +
+      "| # | Accountable plan | Repo / PR | Branch refs | Witnessed base -> head | Readiness | Merge evidence |\n" +
+      "|---|---|---|---|---|---|---|\n",
   );
 
   const integrationPath = join(root, "wt-integration");
@@ -2100,7 +2119,8 @@ async function continuationFixture(label: string): Promise<ContinuationFixture> 
 
   const plans: ContinuationPlan[] = [];
   for (const [index, planId] of [CONTINUATION_PLAN_A, CONTINUATION_PLAN_B].entries()) {
-    writeText(join(harnessDir, "plans", `${planId}.md`), `# Continuation plan ${index + 1}\n\n**plan_id:** ${planId}\n`);
+    writeText(join(harnessDir, "plans", `${planId}.md`), planFrontMatter(planId, `# Continuation plan ${index + 1}
+`));
     const worktree = join(root, `wt-${planId}`);
     const branch = `feature/${planId}`;
     execFileSync("git", ["worktree", "add", "-q", "-b", branch, worktree], { cwd: root });
@@ -2296,6 +2316,16 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
       );
       expect(jsonOf(completed).command).toBe("plan.complete");
 
+      // The plan's layer row lands right after its completion, because the next
+      // plan's completion refuses while an earlier Done plan has no row. The row
+      // is a record, so an empty integration range takes the em dash.
+      // see skills/mstar-iteration/references/pr-stack.md
+      appendFileSync(
+        join(fixture.harnessDir, CONTINUATION_COMPASS_REF),
+        `| s${index + 1} | ${plan.id} | \u2014 | ${plan.branch} | ${plan.mergeBase} -> ${plan.mergeResult} | landed | merged |\n`,
+        "utf8",
+      );
+
       // The very same session id is what the store records against the row.
       const row = await continuationPlanRow(fixture, plan.id);
       expect(row.plan.status).toBe("Done");
@@ -2348,11 +2378,24 @@ describe("mstar plan — ONE session drives two plans of one workflow (issue #40
 describe("mstar milestone assign — no execution identity required", () => {
   test("assign succeeds with no identity, replays its receipt, and refuses a non-PM actor", async () => {
     const fixture = await activeFixture("mstar-milestone-seat");
-    const store = await openStore(fixture.context, "write");
-    store.db.prepare("insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','milestone-cli-project','Milestone CLI smoke','projects','milestone-cli-project/roadmap.md','now','now')").run();
-    store.db.prepare("insert into issues(id,project_id,title,kind,severity,impact,acceptance,created_at,updated_at,identity_key) values('I-MILESTONE-CLI','milestone-cli-project','CLI issue','bug','high','impact','acceptance','now','now','I-MILESTONE-CLI')").run();
-    const initialStoreRevision = (store.db.prepare("select revision from store_meta where id=1").get() as { revision: number }).revision;
-    store.close();
+    // invariant: The project and its finding live in the repository collaboration lane
+    // now: a direct `store.db` insert would recreate the retired combined-store
+    // shape and refuse every milestone write as a cutover candidate.
+    await registerCatalogEntity(fixture.context, {
+      kind: "project", id: "milestone-cli-project", title: "Milestone CLI smoke",
+      rootKind: "projects", relativePath: "milestone-cli-project",
+    }, { operationId: "register-milestone-cli-project", actor: "project-manager" });
+    const captured = await captureIssue(fixture.context, {
+      projectId: "milestone-cli-project", title: "CLI issue", kind: "bug", severity: "high",
+      impact: "impact", acceptance: "acceptance",
+      sourceIdentity: "CLI issue", rootCauseKey: "CLI issue", acceptanceKey: "CLI issue", occurrenceKey: "CLI issue",
+      sourceKind: "test", location: "execution-session.test.ts", observedBehavior: "CLI issue",
+      evidence: ["isolated fixture"], discoveredAt: "2026-09-21T00:00:00.000Z",
+    }, { actor: "project-manager", operationId: "capture-milestone-cli" });
+    const cliIssueId = captured.issueId;
+    // note: Milestones moved to the collaboration lane: the CAS revision the CLI
+    // checks is the lane's own revision, observed after the fixture's writes.
+    const initialStoreRevision = (await readCollaborationAuthority(fixture.context)).revision;
 
     // No identity anywhere in this case: no MSTAR_EXECUTION_IDENTITY, no
     // --session-id, no --session-ref. The requested seat is the authorization.
@@ -2365,7 +2408,7 @@ describe("mstar milestone assign — no execution identity required", () => {
     expect(typeof milestoneId).toBe("string");
 
     const assignArgs = [
-      "milestone", "assign", "--project", "milestone-cli-project", "--issue", "I-MILESTONE-CLI",
+      "milestone", "assign", "--project", "milestone-cli-project", "--issue", cliIssueId,
       "--id", String(milestoneId), "--reason", "CLI seat smoke", "--expect-issue", "1",
       "--expect-store", String(dataOf(added).storeRevision), "--operation", "milestone-cli-assign",
       "--actor", "project-manager", "--harness", fixture.harnessDir,
@@ -2383,7 +2426,7 @@ describe("mstar milestone assign — no execution identity required", () => {
 
     // A leaf actor holds no capture seat: the engine's refusal, with its own code.
     const refused = runCli([
-      "milestone", "assign", "--project", "milestone-cli-project", "--issue", "I-MILESTONE-CLI",
+      "milestone", "assign", "--project", "milestone-cli-project", "--issue", cliIssueId,
       "--id", String(milestoneId), "--reason", "leaf actor must refuse", "--expect-issue", String(receipt.revision),
       "--expect-store", String(receipt.storeRevision), "--operation", "milestone-cli-leaf",
       "--actor", "fullstack-dev", "--harness", fixture.harnessDir,

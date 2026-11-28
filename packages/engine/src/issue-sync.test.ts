@@ -3,11 +3,16 @@
  * proof for the sync ledger state machine.
  * Run with `bun test packages/engine/src/issue-sync.test.ts`.
  */
-import { mkdtempSync, rmSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
-import { initializeStore, type StoreContext, type StoreDb } from "./store-db.js";
+import * as nodeOs from "node:os";
+import { basename, join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { initializeCollaborationStore, writeCollaborationBinding } from "./collaboration-store.js";
+import { busyTimeoutMs, connect, type StoreContext, type StoreDb } from "./store-db.js";
 import {
   acquireRun,
   claimItem,
@@ -24,28 +29,99 @@ import {
   releaseRun,
   replanItem,
   SyncError,
+  withSyncWrite,
   writeCursor,
 } from "./issue-sync.js";
+import { planItem as planPushItem, recordResults, selectPushCandidates } from "./issue-sync/push.js";
+import { defaultLinearMapping } from "./mstarc.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-issue-sync-test-"));
-afterAll(() => rmSync(ROOT, { recursive: true, force: true }));
+const HOME = join(ROOT, "home");
+mkdirSync(HOME);
 
+/**
+ * invariant: The collaboration store is user-level, so the resolver's home must be this
+ * fixture and never the operator's.
+ */
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
+});
+
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(ROOT, { recursive: true, force: true });
+});
+
+/** note: A synthetic checkout whose git origin names the collaboration authority. */
 function context(name: string): StoreContext {
-  return { harnessDir: mkdtempSync(join(ROOT, name)) };
+  const checkoutRoot = mkdtempSync(join(ROOT, name));
+  execFileSync("git", ["init", "-q"], { cwd: checkoutRoot, stdio: ["ignore", "ignore", "ignore"] });
+  execFileSync("git", ["config", "user.name", "Sync Ledger Test"], { cwd: checkoutRoot });
+  execFileSync("git", ["config", "user.email", "sync@example.test"], { cwd: checkoutRoot });
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(checkoutRoot)}.git`], {
+    cwd: checkoutRoot,
+  });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  execFileSync(
+    "git",
+    ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(checkoutRoot)}.git`],
+    { cwd: checkoutRoot },
+  );
+  writeFileSync(join(checkoutRoot, ".mstarc"), "[collaboration]\nmode=local\n");
+  const harnessDir = join(checkoutRoot, ".mstar");
+  mkdirSync(harnessDir, { recursive: true });
+  return { harnessDir, checkoutRoot };
 }
 
-async function openedStore(name: string): Promise<{ db: StoreDb; close: () => void }> {
-  const handle = await initializeStore(context(name));
-  const db = handle.db;
+/** note: Publish the staged lane and this checkout's binding, as real activation does. */
+function activate(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const db = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
+  try {
+    db.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(
+      new Date().toISOString(),
+    );
+    const row = db.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
+  } finally {
+    db.close();
+  }
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
+}
+
+/**
+ * why: The ledger fixture: one active collaboration authority holding the project row
+ * and the three local issues a binding can address. `db` is the case's own
+ * writable connection for seeding and assertions; the TRANSPORT owns the ledger
+ * transaction, so a case that needs one opens it with `withSyncWrite`.
+ */
+async function openedStore(name: string): Promise<{ context: StoreContext; db: StoreDb; close: () => void }> {
+  const storeContext = context(name);
+  const location = resolveCollaborationLocation(storeContext);
+  await initializeCollaborationStore(location);
+  activate(storeContext);
+  // why: A fixture connection, not a lane writer: it keeps the lane's rollback journal
+  // so the store stays admissible to `withSyncWrite`.
+  const db = await connect(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
   db.prepare(
     "insert into catalog_entities(kind, id, title, root_kind, relative_path, registered_at, updated_at) values('project', 'p-t', 'T', 'projects', 'p-t/roadmap.md', 'now', 'now')",
   ).run();
   const insertIssue = db.prepare(
-    "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key)" +
-      " values (?, 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?)",
+    "insert into issues(id, project_id, title, kind, severity, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
+      " values (?, 'p-t', 'Issue', 'bug', 'high', 'impact', 'acceptance', 'now', 'now', ?, ?)",
   );
-  for (const id of ["I-000301", "I-000302", "I-000303"]) insertIssue.run(id, `sync-issue-${id}`);
-  return { db, close: () => handle.close() };
+  // invariant: v2 made the stable reference NOT NULL and unique; the mirror fixture seeds real ones.
+  for (const [index, id] of ["I-000301", "I-000302", "I-000303"].entries()) {
+    insertIssue.run(id, `sync-issue-${id}`, `mstar:issue:00000000-0000-4000-8000-00000000030${String(index + 1)}`);
+  }
+  return { context: storeContext, db, close: () => db.close() };
 }
 
 const KEY = { bindingId: "linear:p-t", direction: "import" as const, localId: "I-000301" };
@@ -79,7 +155,9 @@ function rowOf(db: StoreDb): { item_state: string; revision: number; updated_at:
 }
 
 function receiptCount(db: StoreDb): number {
-  return (db.prepare("select count(*) as n from store_operations").get() as { n: number }).n;
+  return (db.prepare("select count(*) as n from collaboration_operations where key_space = 'standalone'").get() as {
+    n: number;
+  }).n;
 }
 
 /**
@@ -124,7 +202,7 @@ function failingReceipts(db: StoreDb): StoreDb {
     exec: (sql: string) => db.exec(sql),
     close: () => db.close(),
     prepare: (sql: string) => {
-      if (sql.trim().startsWith("insert into store_operations")) {
+      if (sql.trim().startsWith("insert into collaboration_operations")) {
         return {
           run: () => {
             throw new Error("simulated crash before the receipt committed");
@@ -136,23 +214,6 @@ function failingReceipts(db: StoreDb): StoreDb {
       return db.prepare(sql);
     },
   } as unknown as StoreDb;
-}
-
-/** Count the transaction statements a verb issues through this handle. */
-function transactionLog(db: StoreDb): { db: StoreDb; log: string[] } {
-  const log: string[] = [];
-  return {
-    log,
-    db: {
-      exec: (sql: string) => {
-        const verb = sql.trim().toLowerCase();
-        if (verb.startsWith("begin") || verb === "commit" || verb === "rollback") log.push(verb);
-        db.exec(sql);
-      },
-      prepare: (sql: string) => db.prepare(sql),
-      close: () => db.close(),
-    } as unknown as StoreDb,
-  };
 }
 
 describe("sync state machine transitions", () => {
@@ -238,44 +299,162 @@ describe("sync state machine transitions", () => {
   });
 });
 
-describe("transaction ownership (one transaction per verb)", () => {
-  test("each mutating verb opens exactly one begin and commits exactly once", async () => {
-    const { db, close } = await openedStore("tx-log");
-    const { db: logged, log } = transactionLog(db);
-    planItem(logged, PLAN);
-    expect(log).toEqual(["begin immediate", "commit"]);
-    log.length = 0;
-    markApplied(logged, { ...KEY, operationId: "op-tx-apply" });
-    expect(log).toEqual(["begin immediate", "commit"]);
-    log.length = 0;
-    const pushKey = { ...KEY, direction: "push" as const };
-    planItem(logged, { ...PLAN, ...pushKey, operationId: "op-tx-push-plan" });
-    markApplied(logged, { ...pushKey, operationId: "op-tx-push-apply", externalId: "EXT-2" });
-    log.length = 0;
-    markUnconfirmed(logged, { ...pushKey, operationId: "op-tx-unconfirmed" });
-    expect(log).toEqual(["begin immediate", "commit"]);
-    log.length = 0;
-    writeCursor(logged, { ...KEY, cursor: "cur-tx", operationId: "op-tx-cur" });
-    expect(log).toEqual(["begin immediate", "commit"]);
+describe("transaction ownership (the collaboration writer owns the transaction)", () => {
+  test("an effect cannot take the transaction control the writer owns", async () => {
+    const { context: store, db, close } = await openedStore("tx-control");
+    await expect(
+      withSyncWrite(store, (guarded) => guarded.exec("begin immediate")),
+    ).rejects.toMatchObject({ code: "store.corrupt" });
+    await expect(
+      withSyncWrite(store, (guarded) => guarded.prepare("commit").run()),
+    ).rejects.toMatchObject({ code: "store.corrupt" });
+    // note: Neither refusal wrote anything.
+    expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
+    expect(receiptCount(db)).toBe(0);
     close();
   });
 
   test("a failing receipt rolls the ledger row back, so the retry is not a one-way door", async () => {
-    const { db, close } = await openedStore("tx-rollback");
-    expect(() => planItem(failingReceipts(db), PLAN)).toThrow(/simulated crash/);
+    const { context: store, db, close } = await openedStore("tx-rollback");
+    await expect(
+      withSyncWrite(store, (guarded) => planItem(failingReceipts(guarded), PLAN)),
+    ).rejects.toThrow(/simulated crash/);
     // The row did not advance, and no receipt exists.
     expect(rowOf(db)).toBeUndefined();
     expect(receiptCount(db)).toBe(0);
     // The retry with the SAME operationId succeeds instead of being refused.
-    expect(planItem(db, PLAN).itemState).toBe("pending");
+    expect((await withSyncWrite(store, (guarded) => planItem(guarded, PLAN))).itemState).toBe("pending");
     expect(receiptCount(db)).toBe(1);
 
-    expect(() => markApplied(failingReceipts(db), { ...KEY, operationId: "op-tx-applied" })).toThrow(/simulated crash/);
+    await expect(
+      withSyncWrite(store, (guarded) =>
+        markApplied(failingReceipts(guarded), { ...KEY, operationId: "op-tx-applied" }),
+      ),
+    ).rejects.toThrow(/simulated crash/);
     expect(rowOf(db)?.item_state).toBe("pending");
     expect(rowOf(db)?.revision).toBe(1);
     // The same operationId now lands, because no orphan receipt blocks it.
-    expect(markApplied(db, { ...KEY, operationId: "op-tx-applied" }).itemState).toBe("applied");
+    expect(
+      (await withSyncWrite(store, (guarded) => markApplied(guarded, { ...KEY, operationId: "op-tx-applied" })))
+        .itemState,
+    ).toBe("applied");
     expect(rowOf(db)?.item_state).toBe("applied");
+    close();
+  });
+});
+
+describe("collaboration mirror binding", () => {
+  test("one committed mirror transaction advances the revision once, however many verbs it runs, and a replay advances none", async () => {
+    const { context: store, db, close } = await openedStore("binding-revision");
+    const revisionOf = (): number =>
+      (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+    expect(revisionOf()).toBe(0);
+
+    // why: Three plans in ONE transaction: the batch is one committed effect, so the
+    // counter advances once — not once per verb.
+    const planned = await withSyncWrite(store, (guarded) => [
+      planItem(guarded, PLAN),
+      planItem(guarded, { ...PLAN, localId: "I-000302", externalId: "EXT-2", operationId: "op-binding-plan-2" }),
+      planItem(guarded, { ...PLAN, localId: "I-000303", externalId: "EXT-3", operationId: "op-binding-plan-3" }),
+    ]);
+    expect(revisionOf()).toBe(1);
+    expect(planned.map((item) => item.itemState)).toEqual(["pending", "pending", "pending"]);
+
+    // note: A batch that only replays those receipts changed nothing.
+    const replayed = await withSyncWrite(store, (guarded) => [
+      planItem(guarded, PLAN),
+      planItem(guarded, { ...PLAN, localId: "I-000302", externalId: "EXT-2", operationId: "op-binding-plan-2" }),
+    ]);
+    expect(replayed).toEqual([planned[0], planned[1]]);
+    expect(revisionOf()).toBe(1);
+
+    await withSyncWrite(store, (guarded) =>
+      markApplied(guarded, { ...KEY, operationId: "op-binding-apply" }),
+    );
+    expect(revisionOf()).toBe(2);
+    close();
+  });
+
+  test("a storage failure inside a result batch aborts it instead of committing an item's row", async () => {
+    const { context: store, db, close } = await openedStore("batch-abort");
+    const push = {
+      bindingId: "linear:p-t",
+      identity: { repo: "acme/widgets", author: "Ada Lovelace <ada@example.test>" },
+      mapping: defaultLinearMapping(),
+    };
+    let runId = "";
+    await withSyncWrite(store, (guarded) => {
+      runId = acquireRun(guarded, {
+        bindingId: push.bindingId,
+        direction: "push",
+        holderPid: 1,
+        holderHost: "fixture",
+        reason: "batch-abort fixture",
+      }).runId;
+      const context = { ...push, runId };
+      for (const candidate of selectPushCandidates(guarded, push.bindingId)) {
+        planPushItem(guarded, context, candidate);
+      }
+    });
+    const pending = (): Array<{ local_id: string; item_state: string }> =>
+      db
+        .prepare("select local_id, item_state from issue_sync_state where direction = 'push' order by local_id")
+        .all() as Array<{ local_id: string; item_state: string }>;
+    expect(pending()).toEqual([
+      { local_id: "I-000301", item_state: "pending" },
+      { local_id: "I-000302", item_state: "pending" },
+      { local_id: "I-000303", item_state: "pending" },
+    ]);
+    expect(receiptCount(db)).toBe(3);
+
+    // invariant: The second item's row updates and then its receipt insert fails. A per-item
+    // catch would report that as a refusal and commit the row without its receipt;
+    // the batch must abort and roll back instead.
+    const context = { ...push, runId };
+    await expect(
+      withSyncWrite(store, (guarded) =>
+        recordResults(failingReceipts(guarded), context, [
+          { localId: "I-000301", outcome: "confirmed", externalId: "LIN-1" },
+          { localId: "I-000302", outcome: "confirmed", externalId: "LIN-2" },
+        ]),
+      ),
+    ).rejects.toThrow(/simulated crash/);
+    expect(pending()).toEqual([
+      { local_id: "I-000301", item_state: "pending" },
+      { local_id: "I-000302", item_state: "pending" },
+      { local_id: "I-000303", item_state: "pending" },
+    ]);
+    // note: No receipt beyond the three claims, and no revision advance for the rolled-back batch.
+    expect(receiptCount(db)).toBe(3);
+    expect(
+      (db.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision,
+    ).toBe(1);
+    close();
+  });
+
+  test("an operation id another collaboration domain recorded refuses a reused ledger payload", async () => {
+    const { context: store, db, close } = await openedStore("binding-operation");
+    db.prepare(
+      "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
+        " values ('standalone', 'shared-operation', 'issue-domain-hash', '{}', '2026-11-21T00:00:00.000Z')",
+    ).run();
+    await expect(
+      withSyncWrite(store, (guarded) => planItem(guarded, { ...PLAN, operationId: "shared-operation" })),
+    ).rejects.toMatchObject({ code: "sync.operation-conflict" });
+    expect(db.prepare("select count(*) as n from issue_sync_state").get()).toEqual({ n: 0 });
+    close();
+  });
+
+  test("a ledger effect refuses an authority stamp this repository cannot prove", async () => {
+    const { context: store, db, close } = await openedStore("binding-stamp");
+    await expect(
+      withSyncWrite(
+        store,
+        (guarded) => planItem(guarded, PLAN),
+        { repoKey: "github.com/acme/other", mode: "local", storeId: "foreign", epoch: 1 },
+      ),
+    ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
+    expect(receiptCount(db)).toBe(0);
     close();
   });
 });

@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+
   chmodSync,
   mkdirSync,
   mkdtempSync,
@@ -37,6 +38,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   createFsStore,
+  ensureCollaborationAuthority,
   initializeStore,
   mutateExecutionPlan,
   mutateExecutionWorkflow,
@@ -53,6 +55,7 @@ import type {
   Phase1Readiness,
 } from "../src/model-handoff-readiness";
 import { executionBindingOf } from "../src/coordinator-identity";
+import { planFrontMatter } from "./plan-frontmatter";
 
 const SPECIALISTS = ["product-manager", "architect", "writing-specialist"] as const;
 const SCRATCH: string[] = [];
@@ -136,15 +139,16 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
   git(["init", "-q", "-b", "main", main], root);
   git(["config", "user.email", "fixture@example.invalid"], main);
   git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-readiness-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   writeFileSync(join(main, "README.md"), "fixture\n");
   git(["add", "README.md"], main);
   git(["commit", "-qm", "init"], main);
-  git(["remote", "add", "origin", bare], main);
-  git(["push", "-q", "-u", "origin", "main"], main);
+  git(["remote", "add", "local-remote", bare], main);
+  git(["push", "-q", "-u", "local-remote", "main"], main);
 
   const integration = join(root, "integration");
   git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
-  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+  git(["push", "-q", "-u", "local-remote", integrationBranch], integration);
 
   const harness = join(main, ".mstar");
   const workflowsDir = join(harness, "workflows");
@@ -192,7 +196,10 @@ async function buildFixture(options: { workflowId?: string; planIds?: readonly s
   // shared resolver (registration, the Prepare append and readiness) requires
   // that declaration, so the fixture states it like any registered plan does.
   planPaths.forEach((path, index) =>
-    writeFileSync(path, `# ${planIds[index]}\n\n**plan_id:** ${planIds[index]}\n\nPlan body.\n`),
+    writeFileSync(path, planFrontMatter(planIds[index]!, `# ${planIds[index]}
+
+Plan body.
+`)),
   );
   const evidencePaths = planIds.map((id) => join(guidesDir, `${id}-prepare.md`));
   evidencePaths.forEach((path, index) => writeFileSync(path, `# Prepare evidence — ${planIds[index]}\n`));
@@ -387,15 +394,16 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   git(["init", "-q", "-b", "main", main], root);
   git(["config", "user.email", "fixture@example.invalid"], main);
   git(["config", "user.name", "fixture"], main);
+  writeFileSync(join(main, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=omp-readiness2-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   writeFileSync(join(main, "README.md"), "fixture\n");
   git(["add", "README.md"], main);
   git(["commit", "-qm", "init"], main);
-  git(["remote", "add", "origin", bare], main);
-  git(["push", "-q", "-u", "origin", "main"], main);
+  git(["remote", "add", "local-remote", bare], main);
+  git(["push", "-q", "-u", "local-remote", "main"], main);
 
   const integration = join(root, "integration");
   git(["worktree", "add", "-q", "-b", integrationBranch, integration], main);
-  git(["push", "-q", "-u", "origin", integrationBranch], integration);
+  git(["push", "-q", "-u", "local-remote", integrationBranch], integration);
 
   // No `status.json` and no `workflows/` directory: the execution authority is
   // initialized over an empty execution workspace, so no retired document can
@@ -408,10 +416,16 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   for (const dir of [plansDir, sddDir, guidesDir]) mkdirSync(dir, { recursive: true });
 
   const planPath = join(plansDir, `${planId}.md`);
-  writeFileSync(planPath, `# ${planId}\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  writeFileSync(planPath, planFrontMatter(planId, `# ${planId}
+
+Plan body.
+`));
   const movedPlanPath = join(plansDir, "moved", `${planId}.md`);
   mkdirSync(dirname(movedPlanPath), { recursive: true });
-  writeFileSync(movedPlanPath, `# ${planId} (moved)\n\n**plan_id:** ${planId}\n\nPlan body.\n`);
+  writeFileSync(movedPlanPath, planFrontMatter(planId, `# ${planId} (moved)
+
+Plan body.
+`));
   const prepareEvidencePath = join(guidesDir, `${planId}-prepare.md`);
   writeFileSync(prepareEvidencePath, `# Prepare evidence — ${planId}\n`);
   const reportPaths = SPECIALISTS.map((role) => join(guidesDir, `${role}-return.md`));
@@ -442,6 +456,7 @@ async function buildActiveFixture(options: ActiveFixtureOptions = {}): Promise<A
   setArtifactStore(createFsStore(harness));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   const initialized = await readExecutionAuthority({ harnessDir: harness });
   await registerCatalogEntity(
     { harnessDir: harness },

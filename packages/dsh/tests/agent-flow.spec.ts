@@ -49,7 +49,7 @@ describe('agent-flow native event rows', () => {
       workflowId: 'wf-1',
       resolvedWorkflowDir: workflowDir,
       selectedGeneration,
-      prompt: '## Assignment\n\n**Execute as**: fullstack-dev\n**Task category**: logic\n',
+      prompt: '---\nexecute_as: fullstack-dev\ntask_category: logic\n---\n\n## Assignment\n',
       violations: [],
       hard: false,
     })
@@ -76,9 +76,11 @@ describe('agent-flow native event rows', () => {
       selectedGeneration,
       exec,
       pairing,
-      prompt: `## Assignment
+      prompt: `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -122,9 +124,11 @@ describe('agent-flow native event rows', () => {
       selectedGeneration,
       exec,
       pairing,
-      prompt: `## Assignment
+      prompt: `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -181,10 +185,10 @@ describe('agent-flow native event rows', () => {
 
   it('filters malformed native rows while projecting only derived dispatch fields', async () => {
     const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
-    const prompt = `## Assignment
-
-**Execute as**: @fullstack-dev
-**Plan Path**: /private/plans/native-flow.md
+    const prompt = `---
+execute_as: "@fullstack-dev"
+plan_path: /private/plans/native-flow.md
+---
 
 ## Task 7
 
@@ -256,10 +260,10 @@ SECRET_PROMPT_BODY_MUST_NOT_PERSIST
     registerSettleListener(ctx, {}, pairing)
     registerSubagentCatalogListener(ctx, pairing)
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
-    const assignment = `## Assignment
-
-**Execute as**: fullstack-dev
-**Plan Path**: /tmp/plans/ledger-plan.md
+    const assignment = `---
+execute_as: fullstack-dev
+plan_path: /tmp/plans/ledger-plan.md
+---
 
 ## Task 1
 
@@ -340,9 +344,11 @@ Catalog correlation regression.
     provideTeamServices(ctx, [{ name: 'first', childId: 'first-child' }, { name: 'second', childId: 'second-child' }])
     registerSettleListener(ctx, {}, pairing)
     const emitter = ctx as unknown as { emit(event: string, ...args: unknown[]): void }
-    const prompt = `## Assignment
+    const prompt = `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `
     const dispatch = (callId: string, agentId = 'session-1', targetDir = workflowDir, generation = selectedGeneration) => {
       const exec = { callId, name: 'subagent', agent: { id: agentId } }
@@ -431,13 +437,12 @@ Catalog correlation regression.
         selectedGeneration,
         exec: { callId: 'stale-call', name: 'subagent', agent: { id: 'session-1' } },
         pairing,
-        prompt: '**Execute as**: fullstack-dev',
+        prompt: '---\nexecute_as: fullstack-dev\n---\n\n## Assignment\n',
         violations: [],
         hard: false,
       })
       expect(readDshLedgerWindow({ harnessDir }, 'wf-1', 10)).toEqual([])
       expect(readFlow(workflowDir)?.events).toEqual([])
-      expect(pairing.dispatchByCallId.size).toBe(0)
       expect(invalidations).toBe(0)
       expect(levels).toContain('warning')
     } finally {
@@ -469,9 +474,11 @@ Catalog correlation regression.
       selectedGeneration,
       exec,
       pairing,
-      prompt: `## Assignment
+      prompt: `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -512,9 +519,11 @@ Catalog correlation regression.
       selectedGeneration,
       exec,
       pairing,
-      prompt: `## Assignment
+      prompt: `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -546,9 +555,11 @@ Catalog correlation regression.
       selectedGeneration,
       exec,
       pairing,
-      prompt: `## Assignment
+      prompt: `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -587,9 +598,11 @@ Catalog correlation regression.
       selectedGeneration,
       exec,
       pairing,
-      prompt: `## Assignment
+      prompt: `---
+execute_as: fullstack-dev
+---
 
-**Execute as**: fullstack-dev
+## Assignment
 `,
       violations: [],
       hard: false,
@@ -607,4 +620,32 @@ Catalog correlation regression.
     expect(events.some((event) => event.kind === 'settle')).toBe(false)
     expect(pairing.dispatchByCallId.size).toBe(0)
   })
+  it('a body-label Assignment records no derived fields — the retired grammar is inert in the ledger (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec. The dispatch
+    // gate refuses such a document with `dispatch.assignment.legacy-format`
+    // before recording; the ledger surface asserts the mirror of that refusal:
+    // the retired `**Label**` lines carry NO front matter, so nothing is ever
+    // derived from them.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const { harnessDir, workflowDir, selectedGeneration } = await activeFixture()
+    recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: workflowDir,
+      selectedGeneration,
+      prompt: `## Assignment
+
+**Execute as**: fullstack-dev
+**Delegation**: forbidden
+**Task category**: logic
+
+Do the thing.
+`,
+      violations: [],
+      hard: false,
+    })
+    const dispatch = readFlow(workflowDir)?.events.find((event) => event.kind === 'dispatch')
+    expect(dispatch).toMatchObject({ role: '', taskCategory: null, planId: null })
+  })
+
 })

@@ -21,8 +21,10 @@
  * and a write to a project register of a store-backed workspace are refused
  * UNCONDITIONALLY (authority invariant, not the enforcement axis) —
  * `store.direct-write-refused`, `project.register.retired`,
- * `store.authority-unavailable`; a register keeps its document validator only
- * while no store / a staged store leaves it the live authority. Plan S4 adds
+ * `store.authority-unavailable`; a register is authorized only by the ACTIVE
+ * collaboration authority — a missing, staged or unreadable lane refuses
+ * (`store.authority-unavailable`) instead of leaving the register writable.
+ * Plan S4 adds
  * the EXECUTION authority's retired persistence route: a root `status.json` /
  * `workflows/<id>/snapshot.json` write is refused
  * `execution.direct-write-refused` while that authority is ACTIVE (fail-closed
@@ -59,6 +61,7 @@
 import type { Plugin } from "@opencode-ai/plugin";
 import {
   applyEnforcement,
+  assignmentFrontmatterEntries,
   assertStoreRuntimeSupported,
   caseFoldedRegisterRoot,
   composeDispatchGate,
@@ -68,9 +71,10 @@ import {
   isReadOnlyAssignmentRole,
   isStoreAuthorityTarget,
   landedPathOf,
-  parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseSimpleFrontmatter,
-  queryDashboard,
+  probeCollaborationAuthority,
+  readAssignmentSource,
   readJson,
   resolveExecutionReadRoute,
   resolveHarnessDir,
@@ -79,9 +83,8 @@ import {
   validateProjectRegister,
   validateStatus,
   validateWorkflowSnapshot,
-  withStoreRead,
 } from "@mstar-harness/engine";
-import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc } from "@mstar-harness/engine";
+import type { EnforcementFlag, GateResult, HarnessDocKind, StatusV2Doc, ValidationResult } from "@mstar-harness/engine";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -146,7 +149,10 @@ const loadAgentsFromDir = (agentsDirPath: string): Record<string, JsonObject> =>
     const filePath = joinBundledEntry(agentsDirPath, file);
     const content = fs.readFileSync(filePath, "utf8");
     const { frontmatter, body } = extractFrontmatterAndBody(content);
-    const parsed = parseSimpleFrontmatter(frontmatter);
+    // The loader names its file as the reader's source label, so a refusal
+    // attributes the violation to this asset (path, document line and fix).
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    const parsed = parseSimpleFrontmatter(frontmatter, filePath);
     const parsedName = typeof parsed.name === "string" ? parsed.name : "";
     const id = parsedName || file.replace(/\.md$/, "");
 
@@ -174,7 +180,7 @@ const loadBundledCommands = (): Record<string, JsonObject> => {
     const filePath = joinBundledEntry(bundledCommandsDir, file);
     const content = fs.readFileSync(filePath, "utf8");
     const { frontmatter, body } = extractFrontmatterAndBody(content);
-    const parsed = parseSimpleFrontmatter(frontmatter);
+    const parsed = parseSimpleFrontmatter(frontmatter, filePath);
     const parsedName = typeof parsed.name === "string" ? parsed.name : file.replace(/\.(?:md|mdc|markdown|txt)$/, "");
 
     const commandDef: JsonObject = {
@@ -243,31 +249,28 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === "" ? "store.authority-unreadable" : code, message };
 }
 
-/** What the issue store says about a register target. */
+/** invariant: What the collaboration authority says about a register target: `retired` =
+ * ACTIVE lane (the register is migration history), `unavailable` = the lane is
+ * missing, staged or unreadable and the write fails closed. A missing or staged
+ * lane is never a pre-activation permission. */
 type AuthorityRoute =
-  | { kind: "legacy" }
-  | { kind: "retired"; storeRevision: number }
+  | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
 
-/** The authority answers from the ACTIVE store: the runtime floor is asserted on
- * the ACTUAL runtime (`detectStoreRuntime` — the Bun global first, never Bun's
- * emulated `process.versions.node`), and a store revision read is the retirement
- * verdict. A missing/staged store is the pre-activation state, not a refusal. */
+/** invariant: The authority answers from the ACTIVE collaboration lane: the runtime floor is
+ * asserted on the ACTUAL runtime (`detectStoreRuntime` — the Bun global first,
+ * never Bun's emulated `process.versions.node`), then the lane's own probe
+ * decides. No execution-store read takes part in this verdict. */
 async function readAuthorityRoute(harnessDir: string): Promise<AuthorityRoute> {
   try {
     assertStoreRuntimeSupported(detectStoreRuntime());
   } catch (error) {
     return { kind: "unavailable", ...refusalOf(error) };
   }
-  try {
-    const envelope = await withStoreRead({ harnessDir }, queryDashboard("issues", { limit: 1 }));
-    return { kind: "retired", storeRevision: envelope.storeRevision };
-  } catch (error) {
-    const refusal = refusalOf(error);
-    return PRE_ACTIVATION_CODES.includes(refusal.code)
-      ? { kind: "legacy" }
-      : { kind: "unavailable", ...refusal };
-  }
+  const probe = await probeCollaborationAuthority({ harnessDir });
+  return probe.kind === "active"
+    ? { kind: "retired", storeRevision: probe.authority.revision }
+    : { kind: "unavailable", code: probe.code, message: probe.message };
 }
 
 /** The harness root of a project register this write reaches ONLY through a
@@ -279,6 +282,16 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(path.resolve(landed));
   return aliased?.kind === "register" ? aliased.harnessDir : null;
+}
+
+/** note: The harness root of the register a write LANDS on (stricter-wins veto): the
+ * landed destination is the authority the bytes belong to, even when the
+ * caller's own path already classified as a register elsewhere. */
+function landedRegisterDirOf(resolved: string, landed: string): string | null {
+  if (landed === resolved) return null;
+  const aliased = harnessDocKindOfTarget(path.resolve(landed));
+  if (aliased?.kind === "register") return aliased.harnessDir;
+  return caseFoldedRegisterRoot(landed);
 }
 
 /** One authority refusal as a refusal-capable GateResult: `hardBlocked` is
@@ -305,11 +318,11 @@ function storeDirectWriteRefusal(targetPath: string, log: StatusLogger): GateRes
   );
 }
 
-function registerRetiredRefusal(storeRevision: number, log: StatusLogger): GateResult {
+function registerRetiredRefusal(storeRevision: number | null, log: StatusLogger): GateResult {
   return authorityRefusal(
     REGISTER_RETIRED_CODE,
     "project registers are retired migration history — the issue store ({HARNESS_DIR}/store.db, revision " +
-      `${storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
+      `${storeRevision === null ? "unobserved" : storeRevision}) is the only findings authority; capture and close through \`mstar plan ` +
       "issue-add|issue-close` (plan-scoped) or `mstar issue add|close` (unscoped). This write is refused",
     log,
   );
@@ -401,11 +414,10 @@ async function readExecutionWriteRoute(harnessDir: string): Promise<ExecutionWri
  * refused outright, a root `status.json` / `workflows/<id>/snapshot.json`
  * write is refused while the control harness's EXECUTION authority is ACTIVE
  * (`execution.direct-write-refused` — the retired persistence route), and a
- * project register is routed through the DB-aware authority check — refused as
- * `project.register.retired` while the issue store is the active findings
- * authority, refused as `store.authority-unavailable` when that authority
- * cannot be read at all, and shape-validated only while no store / a staged
- * store leaves the register the live authority (issue contract §7). These
+ * project register is routed through the collaboration authority probe —
+ * refused as `project.register.retired` while that lane is ACTIVE, and
+ * refused as `store.authority-unavailable` when it is missing, staged or
+ * unreadable (there is no pre-activation register permission). These
  * refusal classes are decided on the path a target really LANDS on
  * (S-G4b-03): a symlink alias that resolves to a harness-root `store.db` or to
  * a project register is refused and routed exactly like the file itself, while
@@ -519,17 +531,14 @@ export async function validateStatusWrite(
             : (aliasedRegisterDir(resolved, landed) ??
               caseFoldedRegisterRoot(resolved) ??
               (landed !== resolved ? caseFoldedRegisterRoot(landed) : null)));
-    const target = classified ?? (registerDir === null ? null : { harnessDir: registerDir, kind: "register" as const });
-    if (!target) return null;
+    if (registerDir !== null) {
+      const route = await readAuthorityRoute(landedRegisterDirOf(resolved, landed) ?? registerDir);
+      return route.kind === "retired" ? registerRetiredRefusal(route.storeRevision, log) : authorityUnavailableRefusal(route, log);
+    }
+    if (classified === null) return null;
+    const target = classified;
 
     let result: GateResult | null;
-    if (registerDir !== null) {
-      const route = await readAuthorityRoute(registerDir);
-      if (route.kind === "retired") return registerRetiredRefusal(route.storeRevision, log);
-      if (route.kind === "unavailable") return authorityUnavailableRefusal(route, log);
-// `legacy` (no store / staged store): pre-activation, the register is
-// still the findings authority, so its own validator decides below.
-    }
 
     if (opts.doc !== undefined) {
       result = validateDocByKind(opts.doc, target.kind);
@@ -658,23 +667,81 @@ export function validateDispatchAssignment(
     if (typeof assignmentText !== "string") {
       return { ok: true, violations: [] };
     }
+// compass D14 — resolve the Assignment source ONCE through the engine
+// resolver (inline front-matter passthrough or the `Assignment file:
+// <abs>` pointer, containment-checked against the control harness root).
+// A refusal is itself the verdict: validating the pointer text would
+// report field violations on the wrong body. A null root refuses the
+// pointer (`dispatch.assignment.path`) — containment is never skipped.
+// A source-resolution refusal is CRITICAL by contract (unreadable /
+// out-of-home / unrooted / ambiguous pointer): there is no verified
+// assignment to dispatch on, so it is hard independently of document or
+// repo enforcement — every refusing-capable caller fails closed.
+// see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const harnessDir = resolveHarnessDir();
+    const source = readAssignmentSource(assignmentText, { harnessDir });
+    let violations: ValidationResult[];
+    let enforcementHard = false;
+    let terminal = false;
+    if (!source.ok) {
+      // Terminal by contract: no verified assignment to dispatch on. This
+      // host has no refusal channel (I-001258, advisory), so the terminal
+      // refusal is surfaced as the error line + `hardBlocked` for any
+      // refusal-capable caller.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      violations = [source];
+      terminal = source.terminal === true;
+    } else {
+      const text = source.text;
+      // File provenance (compass D14): a resolved `Assignment file:`
+      // pointer commits to the Assignment contract, so its bytes validate
+      // as one even without a recognized core key. Inline prompts keep the
+      // silent path.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      const carrier = source.path;
+      const fileCarrier = carrier !== undefined;
+ // One parse per decision: the role read and the composition share this
+ // parse (the composition also owns the D16 legacy refusal).
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      const entries = assignmentFrontmatterEntries(text);
  // Read-only roles (scout/explore) skip the branch-form/default-branch
  // gates — the engine composition's `writable` flag.
-    const writable = isReadOnlyAssignmentRole(parseAssignmentFields(assignmentText).executeAs ?? "") ? false : undefined;
-    const composed = composeDispatchGate(assignmentText, { writable });
- // Header flag, else repo-level hard (`.mstarc` → compass) — the same
- // precedence the status-write gate and dsh dispatches honor.
-    const harnessDir = resolveHarnessDir();
-    const hard = composed.enforcement.hard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
-    const gated: GateResult = applyEnforcement(composed, { hard });
+      const writable = isReadOnlyAssignmentRole(parseAssignmentFieldsFromFrontmatter(entries).executeAs ?? "") ? false : undefined;
+      const composed = composeDispatchGate(text, {
+        writable,
+        entries,
+        fileCarrier,
+        // Source-relative `worktree_path` resolves from the pointed file's
+        // own directory (CLI parity); Git discovery stays on the checkout
+        // (`cwd` unset), so an out-of-repo assignment home never changes the
+        // inspected repository.
+        // see docs/adr/implemented/architecture/2026-11-26-frontmatter-declaration-layer.md
+        assignmentDir: carrier === undefined ? undefined : path.dirname(carrier),
+      });
+      violations = composed.violations;
+      enforcementHard = composed.enforcement.hard;
+      // A TERMINAL violation (source refusal or the retired-format one) is
+      // a veto enforcement cannot soften. This host has no refusal channel
+      // (`I-001258`), so it is surfaced through `hardBlocked` + the error
+      // log for any refusal-capable caller — never downgraded to a warning.
+      // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+      terminal = violations.some((violation) => violation.terminal === true);
+    }
+ // Header flag, a terminal refusal, else repo-level hard (`.mstarc` →
+ // compass) — the same precedence the status-write gate and dsh dispatches
+ // honor.
+ // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const hard = terminal || enforcementHard || (harnessDir !== null && resolveRepoEnforcement(harnessDir).hard);
+    const gated: GateResult = applyEnforcement({ ok: violations.length === 0, violations }, { hard });
 
     if (!gated.ok) {
       for (const violation of gated.violations) {
         const fix = violation.fix ? ` (fix: ${violation.fix})` : "";
         if (hard) {
+          const reason = terminal ? "a terminal refusal" : "Enforcement: hard";
           log(
             "error",
-            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per Enforcement: hard; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
+            `assignment validation (hard gate): [${violation.severity}] ${violation.code}: ${violation.message}${fix} — hardBlocked per ${reason}; refusal requires a host refusal channel (skill: mstar-dispatch-gates)`,
           );
         } else {
           log(

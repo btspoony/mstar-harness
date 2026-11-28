@@ -12,8 +12,8 @@ import { getStoreCommandDefinitions } from "./families/store.js";
 import { getExecutionCommandDefinitions } from "./families/execution.js";
 import { getIssueCommandDefinitions } from "./families/issue.js";
 import { getCatalogCommandDefinitions } from "./families/catalog.js";
-import { getRoadmapCommandDefinitions } from "./families/roadmap.js";
 import { getMilestoneCommandDefinitions } from "./families/milestone.js";
+import { getPlanboardCommandDefinitions } from "./families/planboard.js";
 import { getProjectCommandDefinitions } from "./families/project.js";
 import { getIssueSyncCommandDefinitions } from "./families/issue-sync.js";
 import { getSddCommandDefinitions } from "./families/sdd.js";
@@ -148,10 +148,10 @@ const canonicalDefinitions: readonly CommandDefinition[] = [
   ...getWorkflowCommandDefinitions(),
   ...getIssueCommandDefinitions(),
   ...getMilestoneCommandDefinitions(),
+  ...getPlanboardCommandDefinitions(),
   ...getProjectCommandDefinitions(),
   ...getIssueSyncCommandDefinitions(),
   ...getCatalogCommandDefinitions(),
-  ...getRoadmapCommandDefinitions(),
   ...getStoreCommandDefinitions(),
   ...getExecutionLedgerCommandDefinitions(),
   ...getExecutionCommandDefinitions(),

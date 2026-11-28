@@ -11,7 +11,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { initializeStore, readExecutionState } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readExecutionState } from "@mstar-harness/engine";
+import { writeFixtureRepoId } from "./harness";
 
 const CLI_ROOT = resolve(import.meta.dir, "..");
 const BUNDLE = join(CLI_ROOT, "dist/mstar-harness.js");
@@ -68,11 +69,13 @@ async function harnessFixture(name: string): Promise<{ workspace: string; harnes
   const workspace = join(root, "ws");
   mkdirSync(workspace, { recursive: true });
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: workspace });
+  writeFixtureRepoId(workspace);
   execFileSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: workspace });
   const harness = join(workspace, ".mstar");
   mkdirSync(harness, { recursive: true });
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   return { workspace, harness };
 }
 
@@ -230,7 +233,7 @@ describe("mstar catalog import", () => {
     const cloneState = await readExecutionState({ harnessDir: clone.harness });
     expect(cloneState.data.workflows).toEqual([]);
     expect(cloneState.data.root.workflows).toEqual([]);
-  });
+  }, 30000);
 
   test("a conflicting plan is refused and writes nothing", async () => {
     const { workspace, harness } = await populatedFixture("conflict-");

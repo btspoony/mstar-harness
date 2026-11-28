@@ -1,9 +1,9 @@
 ---
 name: mstar-project-governance
-description: 项目治理：roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威读写（import/export、revision-guarded replace）、milestone 结构化目标与 issue 关联、issue capture、`_default` 归属。
+description: 项目治理：milestone 结构化目标与 issue 关联、issue capture、portable 项目身份与 `_default` 归属。
 ---
 
-# mstar-project-governance（项目治理层：roadmap + register）
+# mstar-project-governance（项目治理层：milestones + issues + portable identity）
 
 ## Load Order
 
@@ -17,28 +17,16 @@ description: 项目治理：roadmap 内容在 `{HARNESS_DIR}/store.db` 的权威
 
 | 文件 | 内容 |
 |------|------|
-| `roadmap.md` | 遗留文件 / Markdown import、export 候选与历史；不是项目 roadmap 的实时读写权威 |
 | `residuals.json` | Migration history only. Open items are store issues (→ § Issue capture); retain the file as a contract §7 migration-mapping source. |
 | `references/` | 主题化研究语料（surveys / epic 备注 / 第三方 notes）。与 `{SPECS_DIR}`（冻结规格/ADR）、`{KNOWLEDGE_DIR}`（compound 结晶实现 SSOT）、`{ITERATION_DIR}`（迭代 package）**不同**；engine 只列文件名（`listProjectReferenceFiles`），**不做** markdown schema 校验 |
 
 - **`_default` 回退**：无项目流程（未指定 project id 的 plan / 单 plan / hotfix）落到 **`projects/_default/`**（engine `_DEFAULT_PROJECT`）。项目归属由 plan 的 project id 决定；未归属即 `_default`。
-- Roadmap 正文的唯一权威是 `{HARNESS_DIR}/store.db` 中按 catalog project id 唯一定位的 `project_roadmaps` 记录；catalog 存项目身份与路径，不把文件路径或 Markdown 当正文权威。下述 frontmatter 与 body 约定仍由 engine 内容校验，读写/迁移走 roadmap 域边界。
-
-## Roadmap 内容权威与编写约定
-
-- **读**：先确定 catalog project id（未指定项目的流程使用 `_default`）；通过 roadmap 域读取该项目的内容、project revision、roadmap revision 与 hash。已知项目无 roadmap 记录是明确的 absence，不从 `projects/<id>/roadmap.md`、catalog 路径或其他文件静默回退；未知项目是拒绝，不当作空内容。
-- **Initial import**: `mstar roadmap import` previews an absolute Markdown candidate read-only and saves a review containing provenance source hash and observed project/roadmap revisions. Apply rereads that reviewed path and imports its current valid content without source-byte drift refusal; project/roadmap numeric revision conflicts still refuse. Legacy v1 `roadmap.md` is a reviewable transport candidate, not an automatically effective seed; scaffold/migration presence does not redirect readers to it.
-- **日常修改**：先读 store 的当前内容与版本；有记录时用 `mstar roadmap export` 导出**独立 Markdown 候选**，无记录时明确创建候选并预期 absent。编辑、复核候选后用 `mstar roadmap replace` 做整份正文的 revision-guarded replacement（同时校验 project 与 roadmap revision）。冲突重新读权威并复核候选，绝不覆盖 live `roadmap.md` 代替写入。export 也可输出 JSON transport，供跨环境 handoff；导出文件不随写入自动同步，也不反向成为权威。具体命令选项与 payload → built `mstar roadmap --help` 及各动词 `--help`，本 skill 不复写 flags。
-- **校验**：engine 统一校验 import/replace 的 Markdown 正文；frontmatter `project_id`（非空且与目标 catalog project 一致）、`title`（非空）、`status`（`active | paused | completed`）、`created_at`（`YYYY-MM-DD`）为 machine-checkable；`milestones` 可选非空字符串列表（空字段按缺省），`residuals_ref` 可选非空字符串（如迁移 register 文件名）。正文宜有 `## Direction` 与目标 task-list（`- [ ]` / `- [x]`）；缺少正文约定只报 warnings，不将 `ok` 翻成 false。目标与 residual 不自动关联；`residuals_ref` 只是迁移文件引用，不恢复 register 写权威。
-
-`projects/<id>/roadmap.md` 的旧 frontmatter / `milestones` 与 body 格式是 import/export/historical Markdown 的表示法，不是文件写作协议，也不是 live milestone 机制（→ 下节）。项目归属和路径解析 → `mstar-conventions`；ACTIVE 执行态权威在 store.db 的 `execution_*` 表（可重建 workflow 视图）；snapshot 文件仅为迁移源（由保留的 `mstar` 迁移工具 engine 内部写入，runtime consumer 不读不写）；open findings → 下文 Issue capture。
+- catalog 存项目身份与路径；项目的结构化目标与 issue 关联的权威是 collaboration 存储的 milestone 记录与 issue（→ 下两节），不写文件正文权威。
 
 ## Milestone（结构化路线目标）
 
-- **唯一机制**：项目路线的结构化目标是 `{HARNESS_DIR}/store.db` 的 `project_milestones` 记录 + `issues.milestone_id` 关联。`mstar milestone add | update` 写元数据（name / target / ordinal / status，CAS 于 store revision）；`mstar milestone assign` 是 issue milestone 归属（`issues.milestone_id`）的唯一设置/变更面（同项目约束，explicit move / clear，不落 roadmap 的宽松 authoring 面），授权与 `mstar issue` 直连写入一致：`--actor` 须为 `project-manager` 席位，并以 `--expect-issue` / `--expect-store` 对 issue 与 store revision 做 CAS（同一写事务内校验），不需要 workflow session，也不接受 `--session-id` / `--session-ref`；issue 自身的项目不对时，先用 `mstar issue move` 把它移到目标项目（重算 project-scoped identity；项目变更会清除 milestone 关联——`issues_milestone_project_update` 不允许保留异项目 milestone——被清除的 milestone id 记在 move 收据的 `clearedMilestoneId` 上）再 assign——两侧必须同项目；`list | status` 只读并给出 open / resolved / other-retired rollup。动词与标志以 `mstar milestone --help` 为准，本 skill 不复写。
-- **roadmap 语句引用 milestone**：Direction 与后续路线写 milestone ID + 关联 issue 的 acceptance / owner / dependency / trigger 证据；不用 `roadmap.md` stub 的 checkbox / frontmatter 名称表达目标状态。Direction 正文（`project_roadmaps.content_markdown`）与 milestone 是同一 read envelope 的两个组成，互不取代；已知项目无 roadmap 记录仍是明确 absence，milestone 数据不依赖 Markdown 正文存在。
+- **唯一机制**：项目路线的结构化目标是 collaboration 存储的 milestone 记录 + `issues.milestone_id` 关联——milestone 行在 user-level collaboration 库（`<user home>/.mstar/repos/<host>/<owner>/<repo>/collaboration.db`，以 `mstar path resolve` 输出的 `dbPath` 为准）的 `project_milestones` 表，local / mirror / remote 三种模式同一落点、无模式分支，不在 `{HARNESS_DIR}/store.db`；local 与 mirror 下该库即权威，remote 下权威是 bound provider、该库是可重建的 observation。`mstar milestone add | update` 写元数据（name / effort_sessions / ordinal / status，CAS 于 store revision；`effort_sessions` 的估算口径与量表 → **`mstar-conventions/references/effort-estimation.md`**，本 skill 不复述）；`mstar milestone assign` 是 issue milestone 归属（`issues.milestone_id`）的唯一设置/变更面（同项目约束，explicit move / clear），授权与 `mstar issue` 直连写入一致：`--actor` 须为 `project-manager` 席位，并以 `--expect-issue` / `--expect-store` 对 issue 与 store revision 做 CAS（同一写事务内校验），不需要 workflow session，也不接受 `--session-id` / `--session-ref`；issue 自身的项目不对时，先用 `mstar issue move` 把它移到目标项目（重算 project-scoped identity；项目变更会清除 milestone 关联——`issues_milestone_project_update` 不允许保留异项目 milestone——被清除的 milestone id 记在 move 收据的 `clearedMilestoneId` 上）再 assign——两侧必须同项目；`list | status` 只读并给出 open / resolved / other-retired rollup。动词与标志以 `mstar milestone --help` 为准，本 skill 不复写。
 - **交付判定**：`delivered` 的必要条件是至少一个关联 issue 且零 open（同事务校验）；交付只经显式状态变更，从不自动触发，也从不关闭 issue。retired（waived / duplicate / superseded）≠ resolved，rollup 分列展示，不把退役计成已完成工作。
-- **export / dashboard 是 reporting transport**：`mstar roadmap export`（JSON v2 / 分组 Markdown）与 dashboard 由同一 envelope 组合 Direction 与 milestones；`import | replace | show` 只改 Markdown 内容权威，**从不**修改 milestone 记录。
 
 ## Issue capture（`{HARNESS_DIR}/store.db`）
 
@@ -77,12 +65,11 @@ Live capture and closure use § Issue capture and contract §4 closure authority
 
 ## Workflow
 
-1. 确定 catalog 项目归属（无项目 → `_default`）；从 roadmap 域读现有内容与版本，absence 不走文件 fallback。
-2. 首次文件导入走 preview → review → apply；后续编辑走独立候选 → revision-guarded replace；文件只作为 transport。校验 frontmatter 及 body warnings 按上文。
-3. 路线目标：结构化目标建 milestone 并显式关联 issue（§ Milestone）；roadmap 语句引用 milestone ID + 关联 issue 证据，不用文件 stub 表达状态。
-4. 捕获 finding：走 § Issue capture 的 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；register 是迁移历史，**不再**是写入目标。
-5. 关闭：由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）。
-6. 汇总：`mstar status tech-debt` 打印 store 的 open-issue rollup（`total_open` / `by_severity` / `by_project`）。
+1. 确定 catalog 项目归属（无项目 → `_default`）。
+2. 路线目标：结构化目标建 milestone 并显式关联 issue（§ Milestone），不用文件 stub 表达状态。
+3. 捕获 finding：走 § Issue capture 的 issue 动词（计划内 `mstar plan issue-add`，计划外 `mstar issue add`）；register 是迁移历史，**不再**是写入目标。
+4. 关闭：由契约 §4 的关闭权威执行（`mstar issue close | waive | duplicate | supersede`，计划内 `mstar plan issue-close`）。
+5. 汇总：`mstar status tech-debt` 打印 store 的 open-issue rollup（`total_open` / `by_severity` / `by_project`）。
 
 ## Decision Rules
 
@@ -93,7 +80,7 @@ Live capture and closure use § Issue capture and contract §4 closure authority
 
 ## Evidence
 
-正确结果 = roadmap 域读取当前内容或明确 absence；reviewed import / replacement 返回新 revision 与 hash（冲突拒绝，无 live 文件覆盖）；milestone 写入返回 receipt（同请求 replay 幂等、冲突/stale 拒绝且无变更），`mstar milestone list | status` 的 rollup 与 store 一致；register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
+正确结果 = milestone 写入返回 receipt（同请求 replay 幂等、冲突/stale 拒绝且无变更），`mstar milestone list | status` 的 rollup 与 store 一致；register 迁移文档过 `validateProjectRegister`、`mstar status findings-cleanup <plan-id>` 按 Assignment mode 绿、`mstar status tech-debt` 输出与 store 的 open issues 一致。拒绝「仅对话声称」。
 
 ## References
 

@@ -48,6 +48,13 @@ import vm from "node:vm";
 import { SOURCE_CODE, SOURCE_COMMENT, maskLiterals, scanSource } from "./comment-scan.js";
 import type { SourceDialect } from "./comment-scan.js";
 import type { GateResult, Severity, ValidationResult } from "./core.js";
+import {
+  DocumentFrontmatterError,
+  extractFrontmatterAndBody,
+  parseDocumentFrontmatter,
+  type JsonObject,
+} from "./document-frontmatter.js";
+import { validateDocumentFrontmatterExtraction } from "./document-schema.js";
 
 function violation(severity: Severity, code: string, message: string, fix?: string): ValidationResult {
   return { ok: false, severity, code, message, fix };
@@ -1197,14 +1204,29 @@ function stripInlineCode(line: string): string {
 export function planQualityBar(planText: string): PlanQualityResult {
   const findings: PlanQualityFinding[] = [];
   const violations: ValidationResult[] = [];
+  // The front-matter boundary is discovered exactly once, here: the schema
+  // check validates the extracted block and the body scan starts after it —
+  // an unterminated fence never triggers a second walk of the document.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const extraction = extractFrontmatterAndBody(planText);
+  // Plan schema check (document-schema.ts PLAN_SCHEMA): missing, unknown and
+  // invalid plan front-matter fields are reported first under the lint
+  // namespace. With no closed fence the whole document is the body, so an
+  // unclosed fence is scanned as body exactly as before, and line numbers
+  // stay the file's own (the body's start line is the newline count before
+  // it, never a second fence search).
+  // see docs/knowledge/conventions/plan-frontmatter-declarations.md
+  for (const schemaViolation of validateDocumentFrontmatterExtraction("plan", extraction, "plan").violations) {
+    violations.push({
+      ...schemaViolation,
+      code: schemaViolation.code.replace(/^document\.frontmatter\./, "lint.plan.frontmatter."),
+    });
+  }
   const lines = planText.split(/\r?\n/);
-  // Skip a leading frontmatter block (`---` on line 1, closed by the next
-  // `---`): a plan's `status:` value is not a placeholder. An unclosed fence
-  // is scanned as body, and line numbers stay the file's own.
   let start = 0;
-  if (lines[0]?.trim() === "---") {
-    const close = lines.findIndex((line, index) => index > 0 && line.trim() === "---");
-    if (close !== -1) start = close + 1;
+  if (extraction.fenced) {
+    const prefix = planText.slice(0, planText.length - extraction.body.length);
+    start = (prefix.match(/\n/g) ?? []).length;
   }
   let inFence = false;
   // Body lines outside fences and frontmatter: the verification-set pass reads
@@ -1344,10 +1366,30 @@ const DESCRIPTION_MAX_WORDS = 120;
  * verb check. No content judgment (e.g. whether the trigger is narrow
  * enough) — that stays prompt.
  */
+/** Read one frontmatter field as the contract's string scalar: strings pass
+ * through, numbers and booleans coerce, null/undefined land as "" (missing),
+ * and a list or nested map counts as missing too — it is structurally
+ * invalid content, and `String(...)` on it would either pass coerced junk or
+ * throw on a non-callable `toString`.
+ * see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+ */
+function scalarAsString(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return "";
+}
+
 export function lintSkillFrontmatter(frontmatterText: string): GateResult {
   const violations: ValidationResult[] = [];
-  const fm = parseFrontmatter(frontmatterText);
-  if (fm === null) {
+  let fm: JsonObject | null = null;
+  let parseFailure: DocumentFrontmatterError | null = null;
+  try {
+    fm = parseFrontmatter(frontmatterText);
+  } catch (error) {
+    if (!(error instanceof DocumentFrontmatterError)) throw error;
+    parseFailure = error;
+  }
+  if (fm === null && parseFailure === null) {
     violations.push(
       violation(
         "medium",
@@ -1358,8 +1400,31 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
     );
     return { ok: false, violations };
   }
+  if (parseFailure !== null) {
+    // The shared reader refuses a line outside the accepted subset (an
+    // indented description continuation among them) at the strict gate \u2014
+    // the file carries no usable frontmatter, so the missing-contract
+    // violation names the offending document line.
+    // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+    violations.push(
+      violation(
+        "medium",
+        "lint.frontmatter.missing",
+        `frontmatter cannot be parsed \u2014 SKILL.md:${parseFailure.line}: ${parseFailure.message.replace(/^SKILL\.md:\d+: /, "")} (mstar-skill-authoring \u00a7 Frontmatter Contract)`,
+        parseFailure.fix,
+      ),
+    );
+    return { ok: false, violations };
+  }
 
-  const name = fm.name ?? "";
+  // why: the reader's scalars arrive typed (null/number/boolean/string); the
+  // contract reads them as text, so a bare `name:` (null) and a numeric
+  // scalar both coerce — null lands as "" and counts as missing. A list or
+  // nested-map value is not a string scalar at all: coercing it would either
+  // smuggle structurally invalid metadata past the gate or crash on a
+  // non-callable `toString`, so it counts as missing too.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const name = scalarAsString(fm!.name);
   if (name === "") {
     violations.push(
       violation(
@@ -1380,7 +1445,7 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
     );
   }
 
-  const description = fm.description ?? "";
+  const description = scalarAsString(fm!.description);
   if (description === "") {
     violations.push(
       violation(
@@ -1439,33 +1504,38 @@ export function lintSkillFrontmatter(frontmatterText: string): GateResult {
 }
 
 /**
- * Parse the leading `---`-fenced YAML-lite frontmatter block of a skill
- * document. Returns the key→value map, or `null` when the text does not
- * start with a frontmatter block AND no `name:`/`description:` keys appear
- * in the first lines (bare-body input is still parsed). Values support
- * single-line and indented-continuation YAML, with surrounding quotes
- * stripped. Keys are lowercased.
+ * Parse the leading `---`-fenced frontmatter block of a skill document by
+ * delegating to the one shared reader (`document-frontmatter.ts`): BOM and
+ * leading blank lines are stripped first (a skill file is a document, not a
+ * byte-exact dump), then the block is extracted and parsed with the strict
+ * `document` profile. Returns the reader's root `JsonObject`, or `null`
+ * when the text carries no closed frontmatter fence. A frontmatter line
+ * outside the accepted subset — an indented continuation among them —
+ * throws `DocumentFrontmatterError` naming the offending document line;
+ * there is no continuation join and no bare unfenced-body parse.
  */
-function parseFrontmatter(text: string): Record<string, string> | null {
-  const body = text.replace(/^\uFEFF/, "").replace(/^\s*/, "");
-  const lines = body.split(/\r?\n/);
-  const fields: Record<string, string> = {};
-  let inBlock = body.startsWith("---");
-  for (let i = inBlock ? 1 : 0; i < lines.length; i++) {
-    const line = lines[i];
-    if (inBlock && line.trim() === "---") break;
-    const keyMatch = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(line);
-    if (keyMatch) {
-      fields[keyMatch[1].toLowerCase()] = keyMatch[2].trim().replace(/^["']|["']$/g, "");
-    } else if (inBlock && fields.description !== undefined) {
- // indented continuation of the description value
-      fields.description = `${fields.description} ${line.trim()}`.trim();
-    } else if (!inBlock && i >= 10) {
-      break;
+export function parseFrontmatter(text: string): JsonObject | null {
+  const bomStripped = text.replace(/^\uFEFF/, "");
+  const body = bomStripped.replace(/^\s+/, "");
+  // Leading blank lines are stripped before the reader, so a refusal line is
+  // short by the count of removed newlines; the count is added back so the
+  // diagnostic names the document's real line.
+  // see docs/knowledge/architecture-patterns/shared-frontmatter-declaration-reader.md
+  const stripped = bomStripped.slice(0, bomStripped.length - body.length);
+  const removedLines = (stripped.match(/\n/g) ?? []).length;
+  const { frontmatter, fenced } = extractFrontmatterAndBody(body);
+  if (!fenced) return null;
+  try {
+    return parseDocumentFrontmatter(frontmatter, "SKILL.md");
+  } catch (error) {
+    if (error instanceof DocumentFrontmatterError && removedLines > 0) {
+      const reason = error.message
+        .replace(/^SKILL\.md:\d+: /, "")
+        .replace(`: ${JSON.stringify(error.lineText)} (fix: ${error.fix})`, "");
+      throw new DocumentFrontmatterError(error.source, error.line + removedLines, error.lineText, reason, error.fix);
     }
+    throw error;
   }
-  if (Object.keys(fields).length === 0) return null;
-  return fields;
 }
 
 /** Required STRATEGY.md sections (mstar-knowledge/references/strategy-document.md § Shape). */
@@ -1516,13 +1586,224 @@ export function lintStrategySections(docText: string): GateResult {
   return { ok: violations.length === 0, violations };
 }
 
+/** One compass table: its header cells and data rows, in document order. A
+ * separator row (`|---|---|`) is formatting, not a row.
+ * see https://spec.commonmark.org/0.31.2/#tables */
+type CompassTable = { header: string[]; rows: string[][] };
+
+/** The table under the heading, not every pipe row until the next heading: a
+ * later table in the same section is another document's example, never a row
+ * of this one. Prose or blank lines may precede the table.
+ * see https://spec.commonmark.org/0.31.2/ */
+function compassTable(lines: readonly string[], name: string): CompassTable | null {
+  const start = lines.findIndex((line) => line.trim().startsWith("## ") && hasSectionName([line.trim().slice(3).trim()], name));
+  if (start < 0) return null;
+  const rows: string[][] = [];
+  let started = false;
+  for (let index = start + 1; index < lines.length; index++) {
+    const line = lines[index]!.trim();
+    if (/^#{1,6}\s/.test(line)) break;
+    if (!line.startsWith("|")) {
+      if (started) break;
+      continue;
+    }
+    started = true;
+    const cells = rowCells(line);
+    if (cells.every((cell) => /^:?-{3,}:?$/.test(cell))) continue;
+    rows.push(cells);
+  }
+  const [header, ...data] = rows;
+  return { header: header ?? [], rows: data };
+}
+
+/** One table row's cells. `\|` is cell CONTENT — a display pipe in a name — not
+ * a column separator, so a name cannot shift a neighbouring column's value.
+ * see https://spec.commonmark.org/0.31.2/#tables */
+function rowCells(line: string): string[] {
+  return line
+    .replace(/^\|/, "")
+    .replace(/(?<!\\)\|$/, "")
+    .split(/(?<!\\)\|/)
+    .map((cell) => cell.trim().replace(/\\\|/g, "|"));
+}
+
+/** A cell's comparable text: bold WRAPPING the whole cell is formatting, but a
+ * code span's contents are literal once its backticks are gone (CommonMark
+ * keeps them verbatim, spaces included), so `_p1_`, `**p1**` and `p1` stay
+ * distinct ids.
+ * see https://spec.commonmark.org/0.31.2/#code-spans */
+function cellText(cell: string): string {
+  let text = cell.trim();
+  const code = /^(`+)(.*)\1$/s;
+  const bold = /^\*\*(.*)\*\*$/s;
+  for (;;) {
+    const codeMatch = code.exec(text);
+    if (codeMatch !== null) return codeMatch[2]!;
+    const boldMatch = bold.exec(text);
+    if (boldMatch === null) return text;
+    text = boldMatch[1]!.trim();
+  }
+}
+
+/** Index of the named column, or -1. Every consumed column is identified by
+ * NAME: a reworded or missing header is a malformed table, never a licence to
+ * read a neighbouring column's value as this one.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+function columnIndex(header: readonly string[], name: string): number {
+  return header.findIndex((cell) => cellText(cell).toLowerCase() === name.toLowerCase());
+}
+
+export type IterationCompassOptions = {
+  /**
+   * Stop the `## Plans` scan AT this plan id, exclusive: only rows above it are
+   * judged. The lint exposes this so a caller can inspect one earlier window;
+   * an id the table does not carry scans every row, like the unfiltered rule.
+   * Completion does not use it — it derives its window from the workflow's plan
+   * rows, never from a compass status cell.
+   * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+   */
+  untilPlanId?: string;
+};
+
+/** The `## Plans` columns both layer rules read by name. A table that renames
+ * or drops one states no plan id or no Done status, so neither rule can verify
+ * an obligation from it.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+const PLANS_REQUIRED_COLUMNS = ["plan_id", "Status"] as const;
+
+/** The `## Plans` columns this table spells differently or not at all.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+function missingPlansColumns(plans: CompassTable): string[] {
+  return PLANS_REQUIRED_COLUMNS.filter((name) => columnIndex(plans.header, name) < 0);
+}
+
+/** The plan ids a `## PR stack` table accounts for, or `null` when its table
+ * has no `Accountable plan` column: a row under another header accounts for
+ * nothing. An absent section accounts for nothing either, as an empty set.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+function accountablePlanIds(stack: CompassTable | null): Set<string> | null {
+  if (stack === null) return new Set();
+  const column = columnIndex(stack.header, "Accountable plan");
+  if (column < 0) return null;
+  return new Set(stack.rows.map((row) => cellText(row[column] ?? "")));
+}
+
+/** What an iteration compass says about layer publication for one window.
+ *
+ * Completion reads `earlierPlanIds` from the execution store — registration
+ * order and stored row status — so the compass supplies row existence only: a
+ * publication delayed by a size stop stays visible after the row is `Done`
+ * while its Status cell still lags. Completion therefore reads no `## Plans`
+ * column at all; the lint reads the compass status instead, because a
+ * file-only check has no store.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+export type EarlierLayerObligation =
+  | { ok: true }
+  | { ok: false; reason: "section-missing" }
+  | { ok: false; reason: "header-missing" }
+  | { ok: false; reason: "unpublished"; planIds: readonly string[] };
+
+/** Judge the layer obligation of the plans that precede a completing plan.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md */
+export function earlierLayerObligation(
+  text: string,
+  input: { earlierPlanIds: readonly string[] },
+): EarlierLayerObligation {
+  if (input.earlierPlanIds.length === 0) return { ok: true };
+  const stack = compassTable(unfencedLines(text), "PR stack");
+  const accountable = accountablePlanIds(stack);
+  if (accountable === null) return { ok: false, reason: "header-missing" };
+  const planIds = input.earlierPlanIds.filter((planId) => !accountable.has(planId));
+  if (planIds.length === 0) return { ok: true };
+  return stack === null ? { ok: false, reason: "section-missing" } : { ok: false, reason: "unpublished", planIds };
+}
+
+/**
+ * Lint an iteration delivery compass (`skills/mstar-iteration/references/
+ * pr-stack.md` § Records): every plan whose `## Plans` status is `Done` has a
+ * `## PR stack` row whose `Accountable plan` cell names it. Nothing else is
+ * inspected — not readiness, not the PR column's shape, not repo columns, not
+ * row order. A `—` PR cell still counts as a row (an empty integration range
+ * needs no PR).
+ *
+ * A `## Plans` table that cannot be read by column name verifies nothing, so it
+ * is a named violation rather than an empty obligation.
+ * see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+ */
+export function lintIterationCompass(text: string, options: IterationCompassOptions = {}): GateResult {
+  const violations: ValidationResult[] = [];
+  const lines = unfencedLines(text);
+  const plans = compassTable(lines, "Plans");
+  const missing = plans === null ? [] : missingPlansColumns(plans);
+  if (missing.length > 0) {
+    const names = missing.map((name) => `"${name}"`).join(" and ");
+    violations.push(
+      violation(
+        "medium",
+        "lint.iteration.plans-header-missing",
+        `the compass "## Plans" table carries no ${names} column, so no plan layer obligation can be verified (pr-stack.md \u00a7 Records)`,
+        `restore the "## Plans" table's \`| plan_id | Name | Status | Notes |\` header, naming ${names}`,
+      ),
+    );
+    return { ok: false, violations };
+  }
+  if (plans === null) return { ok: true, violations };
+  const stack = compassTable(lines, "PR stack");
+  const accountable = accountablePlanIds(stack);
+  const headerMissing = accountable === null;
+  const found: string[] = [];
+  const idColumn = columnIndex(plans.header, "plan_id");
+  const statusColumn = columnIndex(plans.header, "Status");
+  for (const row of plans.rows) {
+    const planId = cellText(row[idColumn] ?? "");
+    if (options.untilPlanId !== undefined && planId === options.untilPlanId) break;
+    if (planId === "" || cellText(row[statusColumn] ?? "").toLowerCase() !== "done") continue;
+    if (accountable?.has(planId) === true) continue;
+    found.push(planId);
+  }
+  // A compass with no `## PR stack` table records no layer obligation either;
+  // the registration and compass-shape checks own that absence. The missing
+  // section is a layer finding only when a Done plan needs a row it cannot have.
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+  if (stack === null && found.length > 0) {
+    violations.push(
+      violation(
+        "medium",
+        "lint.iteration.pr-stack-missing-section",
+        `the compass carries no "## PR stack" section, so no plan layer can be recorded (pr-stack.md \u00a7 Records); the Done plans it leaves unrecorded are ${found.map((planId) => `"${planId}"`).join(", ")}`,
+        "restore the `## PR stack` table with its `Accountable plan` column, then add one row per plan layer",
+      ),
+    );
+    return { ok: false, violations };
+  }
+  // An existing section whose table carries no `Accountable plan` column
+  // accounts for nothing: the repair is the header, not a row under another one.
+  // see docs/adr/implemented/process/2026-11-27-iteration-layer-publication-lint.md
+  for (const planId of found) {
+    violations.push(
+      violation(
+        "medium",
+        "lint.iteration.pr-stack-missing-row",
+        headerMissing
+          ? `the "## PR stack" table carries no "Accountable plan" column, so no row records a plan layer (pr-stack.md \u00a7 Records); plan "${planId}" is left unrecorded`
+          : `plan "${planId}" is Done but no \`## PR stack\` row names it as the Accountable plan (pr-stack.md \u00a7 Records)`,
+        headerMissing
+          ? "restore the `## PR stack` table's `| # | Accountable plan | Repo / PR | ... |` header, then add one row per plan layer"
+          : `add a PR stack row whose Accountable plan cell is "${planId}" and record the layer ref, witnessed base and head`,
+      ),
+    );
+  }
+  return { ok: violations.length === 0, violations };
+}
+
 /* ------------------------------------------------------------------ */
 /* Document layers: {SPECS_DIR} and {ADR_DIR}                          */
 /* ------------------------------------------------------------------ */
 
 /** A fence toggle line: three or more backticks or tildes, plus its info
  * string (CommonMark: at most three leading spaces; four or more is an
- * indented code block, not a fence). Shared by both document-layer checks. */
+ * indented code block, not a fence). Shared by both document-layer checks.
+ * see https://spec.commonmark.org/0.31.2/#fenced-code-blocks */
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
 
 /** Toggle line numbers (1-based) of every fence open or close. An odd count
@@ -1549,16 +1830,19 @@ function fenceLines(text: string): number[] {
 }
 
 /** The document's lines outside fenced code blocks: a `## ` line quoted in a
- * fence is example text, not a section. */
+ * fence is example text, not a section. An unclosed fence hides the tail, and
+ * that tail is bounded by the document itself — never by an unbounded sentinel.
+ * see https://spec.commonmark.org/0.31.2/#fenced-code-blocks */
 function unfencedLines(text: string): string[] {
+  const lines = text.split(/\r?\n/);
   const fenced = new Set<number>();
   const toggles = fenceLines(text);
   for (let index = 0; index < toggles.length; index += 2) {
     const from = toggles[index]!;
-    const to = toggles[index + 1] ?? Number.MAX_SAFE_INTEGER;
+    const to = toggles[index + 1] ?? lines.length + 1;
     for (let line = from + 1; line < to; line++) fenced.add(line);
   }
-  return text.split(/\r?\n/).filter((_, index) => !fenced.has(index + 1));
+  return lines.filter((_, index) => !fenced.has(index + 1));
 }
 
 /** `## <Name>` level-2 headings outside fences, bare names. */
@@ -1850,6 +2134,7 @@ export type AdrLintFailure = {
     | "lint.adr.section-banned"
     | "lint.adr.index-forbidden"
     | "lint.adr.name-shape"
+    | "lint.adr.implemented-superseded"
     | "lint.adr.fence-unclosed";
   message: string;
   recovery: string;
@@ -1866,6 +2151,12 @@ const ADR_STATUS_LINE = /^Status: (proposed|implemented|rejected) \u2014 .+$/;
 /** `Archived: YYYY-MM-DD — <reason>`: the one line that turns a fresh record
  * into a frozen snapshot. */
 const ADR_ARCHIVED_LINE = /^Archived: \d{4}-\d{2}-\d{2} \u2014 .+$/;
+
+/** see docs/adr/README.md - a demoted marker in any list-marker or emphasis
+ * spelling; the label is case-insensitive, and its emphasis pair may close
+ * before the colon or after it. The one list marker is a bullet or an ordered
+ * `1.`/`1)` form, never a nested level. */
+const ADR_SUPERSEDED_BY = /^\s*(?:(?:[-*+]|\d{1,9}[.)])\s+)?(?:\*+|_+)?superseded-by(?:\*+|_+)?:(?:\*+|_+)?\s*(.*)$/i;
 
 /** Required and banned sections per bucket. `archived` reuses the implemented
  * shape: it accepts implemented records only. */
@@ -1970,6 +2261,29 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
     }
   }
 
+  if (bucket === "implemented") {
+    // see docs/adr/README.md - `implemented/` is the live bucket: a record carrying a
+    // demoted `Superseded-by:` marker has one of two valid operations, both stated in
+    // the recovery below: move it to `archived/` when its replacement is implemented
+    // or promoted in this change, or remove the marker when the replacement is
+    // still proposed. Single-file rule - no cross-file lookup.
+    const demoted = header.map((line) => line.match(ADR_SUPERSEDED_BY)).find((match) => match !== null);
+    if (demoted != null) {
+      // see docs/adr/README.md - the emphasis limit covers the label and, in a
+      // wrapped value, the value's own pair; both are markup, not part of the name.
+      const value = demoted[1]!.trim().replace(/^(?:\*+|_+)|(?:\*+|_+)$/g, "");
+      const supersededBy = `Superseded-by: ${value}`;
+      const cls = relPath.split("/").at(-2);
+      const filename = basename(relPath);
+      push({
+        file: relPath,
+        code: "lint.adr.implemented-superseded",
+        message: `${relPath}: a record under implemented/ must not carry "${supersededBy}" \u2014 implemented/ holds only current decisions`,
+        recovery: `one of two valid operations applies: if the replacement is implemented or promoted in this change, move the record to archived/${cls}/${filename} under the same ADR tree, add one bare header line "Archived: <yyyy-mm-dd> \u2014 superseded by ${supersededBy.slice("Superseded-by:".length).trim()}" right after the Status line, and keep the Superseded-by: line; if the replacement is still proposed, the demotion is premature \u2014 remove the Superseded-by: line and leave the record in implemented/`,
+      });
+    }
+  }
+
   if (bucket === "archived") {
     // Archived is a freeze, not a fourth fate: the record keeps its implemented
     // Status line and gains exactly one Archived line.
@@ -1980,7 +2294,7 @@ function checkAdrRecord(path: string, relPath: string, bucket: AdrBucket, push: 
         code: "lint.adr.archive-line-missing",
         message: `${relPath}: archived record needs exactly one "Archived: YYYY-MM-DD \u2014 <reason>" header line, found ${archiveLines.length}`,
         recovery:
-          'add one bare header line "Archived: <yyyy-mm-dd> \u2014 <why this record no longer guides future work>" right after the Status line; a record without historical value is deleted, not archived',
+          'add one bare header line "Archived: <yyyy-mm-dd> \u2014 <why this record no longer guides future work>" right after the Status line; deletion instead of archival applies only to a mechanism gone without replacement and without historical value \u2014 supersession is never deletion',
       });
     } else if (!ADR_ARCHIVED_LINE.test(archiveLines[0]!)) {
       push({

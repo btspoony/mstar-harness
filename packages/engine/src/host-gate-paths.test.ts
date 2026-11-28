@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   MAX_SYMLINK_HOPS,
-  STORE_AUTHORITY_NAMES,
   SYMLINK_RESOLUTION_REFUSED_CODE,
   SymlinkResolutionError,
   caseFoldedDocKind,
@@ -96,8 +95,7 @@ describe("host-gate-paths.landedPathOf", () => {
 
 describe("host-gate-paths authority naming", () => {
   test("matches the authority names case-insensitively (FW-3)", () => {
-    expect(STORE_AUTHORITY_NAMES).toEqual(["store.db", "store.db-wal", "store.db-shm"]);
-    for (const name of ["store.db", "store.db-wal", "store.db-shm", "Store.db", "STORE.DB-WAL"]) {
+    for (const name of ["store.db", "store.db-wal", "store.db-shm", "store.db-journal", "Store.db", "STORE.DB-WAL"]) {
       expect(isStoreAuthorityName(name)).toBe(true);
     }
     expect(isStoreAuthorityName("notes.md")).toBe(false);
@@ -106,7 +104,48 @@ describe("host-gate-paths authority naming", () => {
   test("classifies the authority database only directly at a harness root", () => {
     expect(isStoreAuthorityTarget(join(harness, "store.db"))).toBe(true);
     expect(isStoreAuthorityTarget(join(harness, "Store.db"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(harness, "store.db-journal"))).toBe(true);
     expect(isStoreAuthorityTarget(join(harness, "nested", "store.db"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(harness, "nested", "store.db-journal"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(root, "store.db"))).toBe(false);
+  });
+});
+
+describe("host-gate-paths collaboration authority target", () => {
+  const reserved = (name: string): string => join(tmpdir(), "anywhere", "store", name);
+
+  test("reserves the collaboration database name and every sidecar everywhere", () => {
+    for (const name of ["collaboration.db", "collaboration.db-wal", "collaboration.db-shm", "collaboration.db-journal"]) {
+      expect(isStoreAuthorityTarget(reserved(name))).toBe(true);
+    }
+    // note: The name is the authority, not the location: a checkout root, a tree
+    // outside any namespace, or the harness itself all deny it.
+    expect(isStoreAuthorityTarget(join(root, "collaboration.db"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(harness, "collaboration.db"))).toBe(true);
+  });
+
+  test("matches the reserved names case-insensitively", () => {
+    for (const name of ["Collaboration.db", "COLLABORATION.DB-WAL", "Collaboration.Db-Shm", "collaboration.DB-Journal"]) {
+      expect(isStoreAuthorityTarget(reserved(name))).toBe(true);
+    }
+  });
+
+  test("follows aliases that land on the reserved name", () => {
+    const link = join(root, "collaboration-alias");
+    symlinkSync(reserved("collaboration.db"), link);
+    expect(isStoreAuthorityTarget(landedPathOf(link))).toBe(true);
+    const chain = join(root, "collaboration-chain");
+    symlinkSync("collaboration-alias", chain);
+    expect(isStoreAuthorityTarget(landedPathOf(chain))).toBe(true);
+    // invariant: A differently named alias is refused by what it lands on, not its own name.
+    expect(isStoreAuthorityTarget(link)).toBe(false);
+  });
+
+  test("leaves other basenames and the execution lane unchanged", () => {
+    expect(isStoreAuthorityTarget(reserved("notes.md"))).toBe(false);
+    expect(isStoreAuthorityTarget(reserved("collaboration.dbx"))).toBe(false);
+    expect(isStoreAuthorityTarget(join(harness, "store.db"))).toBe(true);
+    expect(isStoreAuthorityTarget(join(harness, "store.db-journal"))).toBe(true);
     expect(isStoreAuthorityTarget(join(root, "store.db"))).toBe(false);
   });
 });

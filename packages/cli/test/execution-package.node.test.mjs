@@ -74,6 +74,7 @@ import {
   bindExecutionSession,
   createExecutionWorkflow,
   encodeExecutionSessionRef,
+  ensureCollaborationAuthority,
   initializeExecutionAuthority,
   initializeStore,
   mutateExecutionPlan,
@@ -97,6 +98,8 @@ assert.ok(existsSync(join(CLI_ROOT, "package.json")), `CLI package root did not 
 
 const WORKFLOW_ID = "wf-r3-parity";
 const PLAN_ID = "20260921-r3-parity-plan";
+
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 const COORDINATOR_ID = "coord-r3";
 const BRANCH = "feature/r3-parity";
 const WIRE_PREFIX = "exec-session-v1:";
@@ -167,10 +170,15 @@ async function makeActiveWorkspace(label) {
   execFileSync("git", ["-c", "user.email=r3@test", "-c", "user.name=r3", "commit", "-q", "--allow-empty", "-m", "init"], {
     cwd: root,
   });
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-exec-pkg-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const harness = join(root, ".mstar");
   mkdirSync(harness, { recursive: true });
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await readExecutionAuthority({ harnessDir: harness });
   return { root, harness, worktreePath: join(root, "wt-fixture"), evidencePath: join(root, "evidence.md") };
 }
@@ -334,7 +342,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
   const sddDir = join(fixture.harness, "sdd", PLAN_ID);
   const worktreePath = join(fixture.root, "wt-r3");
   const evidencePath = join(sddDir, "evidence.md");
-  writeText(planPath, `# R3 parity plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(planPath, planFrontMatter(PLAN_ID, "# R3 parity plan\n"));
   writeText(evidencePath, "# evidence\n");
   // A REAL checkout on the branch prepare records: prepare validates the actual
   // checkout and branch.
@@ -551,7 +559,7 @@ test("built CLI runs bind/resume/read/write on a populated execution store (DB-o
 
 test("the store the built CLI wrote is a real node:sqlite authority", async () => {
   const fixture = await makeActiveWorkspace("mstar-r3-sqlite");
-  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), `# R3 sqlite plan\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeText(join(fixture.harness, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, "# R3 sqlite plan\n"));
   const rootToken = (await readExecutionAuthority({ harnessDir: fixture.harness })).token;
   ok(
     runCli(
@@ -742,7 +750,8 @@ test("H2's OMP source fixture recipe executes on the built engine under real Nod
   execFileSync("git", ["worktree", "add", "-q", "-b", BRANCH, worktreePath], { cwd: fixture.root });
   const planPath = join(fixture.harness, "plans", `${OMP_PLAN_ID}.md`);
   const sddDir = join(fixture.harness, "sdd", OMP_PLAN_ID);
-  writeText(planPath, `# Plan ${OMP_PLAN_ID}\n\n**plan_id:** ${OMP_PLAN_ID}\n`);
+  writeText(planPath, planFrontMatter(OMP_PLAN_ID, `# Plan ${OMP_PLAN_ID}
+`));
 
   await registerCatalogEntity(
     { harnessDir: fixture.harness },

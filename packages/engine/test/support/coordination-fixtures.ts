@@ -132,6 +132,11 @@ export function makeFixture(): Fixture {
   roots.push(root);
   git(["init", "-q", "-b", "main"], root);
   git(["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], root);
+  // note: The fixture has no origin; its explicit repo id makes the lane deterministic.
+  writeFileSync(
+    join(root, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
 
   const harness = join(root, ".mstar");
   const workflowDir = join(harness, "workflows", WORKFLOW_ID);
@@ -502,18 +507,3 @@ export function finding(id: string, overrides: Record<string, unknown> = {}): Re
   };
 }
 
-/** The open issues the issue store links to a plan (the authority the gate reads). */
-export async function linkedOpenIssues(fixture: Fixture, planId: string): Promise<Array<{ id: string; severity: string; disposition: string }>> {
-  const handle = await openStore({ harnessDir: fixture.harness }, "read");
-  try {
-    return handle.db
-      .prepare(
-        "select issues.id as id, issues.severity as severity, issues.disposition as disposition from issues " +
-          "join provenance on provenance.issue_id = issues.id and provenance.kind = 'plan' and provenance.target = ? " +
-          "where issues.disposition = 'open' order by issues.id asc",
-      )
-      .all(planId) as Array<{ id: string; severity: string; disposition: string }>;
-  } finally {
-    handle.close();
-  }
-}

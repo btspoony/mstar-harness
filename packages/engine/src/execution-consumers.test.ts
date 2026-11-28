@@ -46,6 +46,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -84,12 +85,15 @@ import {
   type ExecutionState,
 } from "./execution-store.js";
 import { resolveSddDir } from "./path.js";
+import { initializeCollaborationStore, readCollaborationAuthority, writeCollaborationBinding } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
 import { backupStore } from "./store-activation.js";
 import { initializeStore, openStore, type StoreContext } from "./store-db.js";
 import { upgradeStoreMinimal } from "./store-upgrade-minimal.js";
 import { queryDashboard, readExecutionSource, resolveExecutionReadRoute, withStoreRead } from "./store-read.js";
 import { WORKFLOW_SNAPSHOT_FILE, type WorkflowSnapshot } from "./workflow.js";
 import type { WorkflowEntry } from "./status.js";
+import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-consumers-"));
 afterAll(() => {
@@ -111,7 +115,26 @@ const CROSS_PLAN = "20260920-consumers-cross-domain";
  * ------------------------------------------------------------------------ */
 
 function controlRoot(label: string): StoreContext {
-  return { harnessDir: mkdtempSync(join(ROOT, `${label}-`)) };
+  const harnessDir = mkdtempSync(join(ROOT, `${label}-`));
+  execFileSync("git", ["init", "-q"], { cwd: harnessDir, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(
+    join(harnessDir, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${harnessDir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
+  return { harnessDir };
+}
+
+/** note: Publish the collaboration lane and this checkout's binding. */
+async function seedCollaboration(context: StoreContext): Promise<void> {
+  const location = resolveCollaborationLocation(context);
+  await initializeCollaborationStore(location);
+  const lane = new DatabaseSync(location.dbPath);
+  try {
+    lane.prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1").run(TS);
+  } finally {
+    lane.close();
+  }
+  writeCollaborationBinding(context, await readCollaborationAuthority(context));
 }
 
 function domainContext(context: StoreContext, caller: ExecutionCaller): ExecutionContext {
@@ -150,6 +173,7 @@ async function activeGraph(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   handle.close();
+  await seedCollaboration(context);
   // `initializeStore` activates the execution authority (issue #428), so the
   // root creation token is read back rather than re-initialized.
   const initialized = await readExecutionState(context);
@@ -453,6 +477,7 @@ async function registeredStore(label: string): Promise<StoreContext> {
   const context = controlRoot(label);
   const handle = await initializeStore(context);
   handle.close();
+  await seedCollaboration(context);
   // `initializeStore` activated the authority (issue #428); read its token.
   const initialized = await readExecutionState(context);
   // The SELECTED plan document the registration proves (§4/R1): its `plan_id`
@@ -464,11 +489,15 @@ async function registeredStore(label: string): Promise<StoreContext> {
   const planTitle = "Cross-domain accepted plan";
   const planDir = "plan-docs";
   const planFile = `${planDir}/${CROSS_PLAN}.md`;
-  writeFileSync(join(context.harnessDir, ".mstarc"), `[config]\nplan_dir=${planDir}\n`);
+  writeFileSync(
+    join(context.harnessDir, ".mstarc"),
+    `[config]\nplan_dir=${planDir}\n[collaboration]\nmode=local\nrepo_id=fixture-${context.harnessDir.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   mkdirSync(join(context.harnessDir, planDir), { recursive: true });
   writeFileSync(
     join(context.harnessDir, planDir, `${CROSS_PLAN}.md`),
-    `# ${planTitle}\n\n**plan_id:** ${CROSS_PLAN}\n`,
+    planFrontMatter(CROSS_PLAN, `# ${planTitle}
+`),
   );
   const execution = { harnessDir: context.harnessDir, caller: callerOf(CROSS_WORKFLOW) };
   const request = {
@@ -649,6 +678,7 @@ describe("retained evidence path checks across the authority switch", () => {
     // A store that holds an issue/catalog authority and no execution authority
     // yet: the evidence bodies are created before activation.
     const context = await legacyStore("retained-evidence-switch");
+    await seedCollaboration(context);
     const bodies = retainedBodies(context.harnessDir);
     writeBody(bodies.qc, QC_BODY);
     writeBody(bodies.consolidated, CONSOLIDATED_BODY);
@@ -795,12 +825,17 @@ async function retainedCompletionFixture(label: string): Promise<RetainedComplet
   git(repoRoot, ["init", "-q", "-b", "main"]);
   git(repoRoot, ["-c", "user.email=fixture@example.test", "-c", "user.name=harness-fixture", "commit", "-q", "--allow-empty", "-m", "init"]);
   const harnessRoot = join(repoRoot, ".mstar");
+  writeFileSync(
+    join(repoRoot, ".mstarc"),
+    `[collaboration]\nmode=local\nrepo_id=fixture-${repoRoot.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`,
+  );
   const planPath = join(harnessRoot, "plans", `${RETAINED_PLAN}.md`);
   mkdirSync(dirname(planPath), { recursive: true });
   writeFileSync(planPath, `# ${RETAINED_PLAN}\n`);
   const context: StoreContext = { harnessDir: harnessRoot };
   const store = await initializeStore(context);
   store.close();
+  await seedCollaboration(context);
   const initialized = await readExecutionState(context);
   await registerCatalogEntity(
     context,

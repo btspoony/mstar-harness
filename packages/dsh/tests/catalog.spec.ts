@@ -39,17 +39,16 @@ import { readFileSync, realpathSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { Context } from '@deepseek-ai/cordis'
 import {
+  addMilestone,
   appendDshLedgerRow,
   createExecutionWorkflow,
   initializeStore,
   openStore,
   readExecutionState,
-  importRoadmapAuthority,
   registerCatalogEntity,
-  reviewRoadmapImport,
-  replaceRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { ExecutionCaller, ExecutionContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
@@ -66,7 +65,7 @@ import {
 import * as catalog from '../src/gates/catalog.ts'
 import { readDshStatusEmission } from '@mstar-harness/engine'
 import { updateWorkflowSessionBinding } from '../src/engine-status-store.ts'
-import { bootApp, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
+import { bootApp, collaborationDbPathAt, FakeLoaderRegistry, seedActiveWorkflow, seedHarness, seedKnowledgeDoc, seedOpenIssue, seedStore, selectedGenerationFor, type BootResult } from './harness.ts'
 
 let booted: BootResult | undefined
 function appendLiveEvent(harnessDir: string, workflowId: string, event: Record<string, unknown>): void {
@@ -481,7 +480,7 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     expect(payload.state?.plans.map((plan) => plan.status)).toEqual(['Todo', 'Done'])
   })
 
-  it('panelDigestOf ignores ONLY the self-perturbing store revision — and never mutates the payload (D2)', async () => {
+  it('panelDigestOf ignores the self-perturbing store revision and observation time — and never mutates the payload (D2)', async () => {
     const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-panelkey-'))
     const harnessDir = join(root, '.mstar')
     await seedActiveWorkflow(harnessDir, 'wf-panelkey', [], {}, SESSION_ID, root, 'wf-panelkey')
@@ -503,6 +502,14 @@ describe('mstar-engine-status catalog — watermark-free projection + change-dri
     if (bumped.state === null || bumped.state.storeFacts === undefined) throw new Error('expected store facts')
     ;(bumped.state.storeFacts as { storeRevision: number | null }).storeRevision = revision + 1
     expect(panelDigestOf(bumped)).toBe(baseline)
+
+    // note: `asOf` is the moment each read established its snapshot: also volatile.
+    const reobserved = copy()
+    if (reobserved.state === null || reobserved.state.storeFacts === undefined) throw new Error('expected store facts')
+    // note: Fixture-only: the deep copy is mutable JSON while the payload type is readonly.
+    const reobservedFacts = reobserved.state.storeFacts as { asOf: string | null }
+    reobservedFacts.asOf = '2030-01-01T00:00:00.000Z'
+    expect(panelDigestOf(reobserved)).toBe(baseline)
 
     // A panel-visible detail change IS a change, even when the rollup the text
     // renders is byte-identical (the detail rows are panel-only facts).
@@ -703,7 +710,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
         { severity: 'nit', count: 5 },
       ],
       residualFindings: [{ planId: '', id: 'I-1', severity: 'high', title: 'a panel-only detail row' }],
-      project: { milestones: ['P1 foundation'], roadmapSource: { kind: 'present', absentProjectIds: [], diagnostic: null }, openResiduals: [] },
+      project: { milestones: ['P1 foundation'], milestoneSource: { kind: 'present', diagnostic: null }, openResiduals: [] },
       iterationBaseBranch: 'feature/x',
       targetBranch: 'main',
       specIntegrationBranch: 'iteration/iter-compact',
@@ -712,7 +719,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
       integrationWorktreePath: '/integration/wt',
       rowScopes: [{ planId: 'plan-a', workingBranch: 'feature/plan-a', worktreePath: '/wt/plan-a' }],
       knowledge: { docCount: 3, categories: ['conventions', 'testing'] },
-      storeFacts: { kind: 'store', projection: 'current', storeRevision: 42, diagnostic: 'a store diagnostic' },
+      storeFacts: { kind: 'store', projection: 'current', storeRevision: 42, completeness: 'complete', asOf: '2026-08-08T00:00:00.000Z', diagnostic: 'a store diagnostic' },
       direction: 'Golden direction.',
       agentFlow: {
         events: [{ ts: 1_700_000_000_000, kind: 'dispatch', agent: null, role: 'fullstack-dev', planId: 'plan-a', taskId: 'T1', taskCategory: null, verdict: 'ok', hard: false }],
@@ -758,10 +765,12 @@ describe('compact engine-status delta — the model-row comparison key', () => {
     const unavailable = copy(richPayload())
     const facts = unavailable.state?.storeFacts
     if (facts === undefined) throw new Error('expected store facts')
-    const mutable = facts as { kind: string; projection: unknown; storeRevision: unknown; diagnostic: unknown }
+    const mutable = facts as { kind: string; projection: unknown; storeRevision: unknown; completeness: unknown; asOf: unknown; diagnostic: unknown }
     mutable.kind = 'unavailable'
     mutable.projection = null
     mutable.storeRevision = null
+    mutable.completeness = 'unavailable'
+    mutable.asOf = null
     mutable.diagnostic = '[store.not-initialized] no store.db under the control root'
     const text = renderEngineStatusCatalog(unavailable)
     // ONE fixed-shape line naming the CAUSE and the RECOVERY.
@@ -795,7 +804,7 @@ describe('compact engine-status delta — the model-row comparison key', () => {
       ['row scopes', (mutated) => { if (mutated.state !== null) (mutated.state as { rowScopes: unknown }).rowScopes = [] }],
       ['branch policy', (mutated) => { if (mutated.state !== null) (mutated.state as { pushPolicy: unknown }).pushPolicy = null }],
       ['spec integration branch', (mutated) => { if (mutated.state !== null) (mutated.state as { specIntegrationBranch: unknown }).specIntegrationBranch = null }],
-      ['roadmap milestones', (mutated) => { if (mutated.state !== null) (mutated.state.project as { milestones: unknown }).milestones = [] }],
+      ['project milestones', (mutated) => { if (mutated.state !== null) (mutated.state.project as { milestones: unknown }).milestones = [] }],
       ['store diagnostic', (mutated) => { if (mutated.state !== null && mutated.state.storeFacts !== undefined) (mutated.state.storeFacts as { diagnostic: unknown }).diagnostic = null }],
       ['workflow type/status (digest facts)', (mutated) => { if (mutated.state !== null) { (mutated.state as { workflowType: unknown }).workflowType = 'plan'; (mutated.state as { workflowStatus: unknown }).workflowStatus = 'paused' } }],
     ]
@@ -1053,9 +1062,9 @@ describe('mstar-engine-status catalog — plan iterationRefs ', () => {
 
 describe('catalog TTL invalidation — ledger change refreshes within the TTL ', () => {
   /** A minimal Assignment for the ledger record (role derives to `fullstack-dev`). */
-  const ASSIGNMENT = `## Assignment
-
-**Execute as**: fullstack-dev
+  const ASSIGNMENT = `---
+execute_as: fullstack-dev
+---
 
 ## Task 2
 
@@ -1107,6 +1116,34 @@ Implement the invalidation.
     // names the step the model actually saw a row in.
     expect(flowRolesOf(emissionOf(harnessDir, SESSION_ID, root))).toEqual(['fullstack-dev'])
     expect(emissionRow(harnessDir, SESSION_ID, root).turn).toBe(1)
+  })
+
+  it('a body-label Assignment record derives no role — the retired grammar is inert in the ledger (the only legacy fixture)', async () => {
+    // D16 regression — the ONE body-label fixture of this spec: the dispatch
+    // gate refuses the retired `**Label**` grammar upstream, so its ledger
+    // mirror is a dispatch row with NO derived role.
+    // see docs/knowledge/architecture-patterns/assignment-file-carrier.md
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-legacy-'))
+    const harnessDir = await seedActiveTree(root)
+    plugin.recordDispatch({
+      harnessDir,
+      workflowId: 'wf-1',
+      resolvedWorkflowDir: join(harnessDir, 'workflows/wf-1'),
+      selectedGeneration: selectedGenerationFor(harnessDir),
+      prompt: `## Assignment
+
+**Execute as**: fullstack-dev
+
+## Task 2
+
+Implement the invalidation.
+`,
+      violations: [],
+      hard: false,
+    })
+    expect(plugin.readAgentFlow(join(harnessDir, 'workflows/wf-1'), 'wf-1')?.events).toEqual([
+      expect.objectContaining({ kind: 'dispatch', role: '', taskCategory: null, planId: null }),
+    ])
   })
 
   it('cross-workspace isolation: a ledger record in workspace A invalidates ONLY A — B\'s cached entry survives within the TTL ', async () => {
@@ -1353,9 +1390,9 @@ describe('catalog teardown — fiber.dispose removes the pre-step listener (HMR-
 })
 
 describe('D4 session-scoped catalog selection', () => {
-  const ASSIGNMENT = `## Assignment
-
-**Execute as**: fullstack-dev
+  const ASSIGNMENT = `---
+execute_as: fullstack-dev
+---
 
 ## Task
 
@@ -1558,5 +1595,88 @@ describe('D4 catalog identity encoding + selected compass path', () => {
     } finally {
       await rm(outsideDir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('the project milestone rollup feeds the gate from the store', () => {
+  /** see packages/dsh/tests/catalog.spec.ts - The store's own revision, read the way a milestone write observes it. */
+  async function observedRevision(harnessDir: string): Promise<number> {
+    const lane = new DatabaseSync(collaborationDbPathAt(harnessDir))
+    try {
+      return (lane.prepare('select revision from collaboration_meta where id = 1').get() as { revision: number }).revision
+    } finally {
+      lane.close()
+    }
+  }
+
+  async function seedProjectWithMilestones(harnessDir: string, projectId: string, title: string, milestones: readonly string[]): Promise<void> {
+    await registerCatalogEntity({ harnessDir }, {
+      kind: 'project',
+      id: projectId,
+      title,
+      rootKind: 'projects',
+      relativePath: projectId,
+      lifecycle: 'active',
+    }, { operationId: `seed-gate-project-${projectId}`, actor: 'project-manager' })
+    for (const [index, name] of milestones.entries()) {
+      await addMilestone({ harnessDir }, { projectId, name, effortSessions: null, ordinal: index }, {
+        operationId: `seed-gate-milestone-${projectId}-${index}`,
+        expectedStoreRevision: await observedRevision(harnessDir),
+      })
+    }
+  }
+
+
+  it('a project with stored milestones answers a present source carrying their names', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-'))
+    const harnessDir = join(root, '.mstar')
+    await mkdir(harnessDir, { recursive: true })
+    await seedStore(harnessDir)
+    await seedProjectWithMilestones(harnessDir, '_default', 'Default project', ['P1 foundation', 'Release the panel'])
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    if (state === null) throw new Error('expected a state section')
+    // see packages/dsh/tests/catalog.spec.ts - // The gate reads the store milestone rollup, not a hand-built payload: the
+    // names arrive in catalog-project order and ordinal order within the project.
+    expect(state.project.milestones).toEqual(['P1 foundation', 'Release the panel'])
+    expect(state.project.milestoneSource).toEqual({ kind: 'present', diagnostic: null })
+  })
+
+  it('a failed milestone read answers the explicit unavailable source, never an empty success', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-fail-'))
+    const harnessDir = join(root, '.mstar')
+    await mkdir(harnessDir, { recursive: true })
+    await seedStore(harnessDir)
+    await seedProjectWithMilestones(harnessDir, '_default', 'Default project', ['P1 foundation'])
+    // see packages/dsh/tests/catalog.spec.ts - // A missing milestone table is exactly the refusal class the gate must disclose: the one milestone-name read cannot answer, so it is unavailable, never the same empty success as a project that genuinely holds no milestones.
+    const lane = new DatabaseSync(collaborationDbPathAt(harnessDir))
+    try {
+      lane.exec('drop table project_milestones')
+    } finally {
+      lane.close()
+    }
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    if (state === null) throw new Error('expected a state section')
+    expect(state.project.milestones).toEqual([])
+    expect(state.project.milestoneSource.kind).toBe('unavailable')
+    expect(state.project.milestoneSource.diagnostic).not.toBeNull()
+  })
+
+  it('two projects answer their milestone names in project-then-ordinal order from one read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-mstar-catalog-milestones-two-'))
+    const harnessDir = join(root, '.mstar')
+    await mkdir(harnessDir, { recursive: true })
+    await seedStore(harnessDir)
+    await seedProjectWithMilestones(harnessDir, '_default', 'Default project', ['P1 foundation', 'Release the panel'])
+    await seedProjectWithMilestones(harnessDir, 'second', 'A second project', ['Earlier'])
+    const app = booted = await bootApp({ root, harnessDir })
+
+    const state = (await buildCatalogPayloadWithStore(app.ctx, harnessDir)).state
+    if (state === null) throw new Error('expected a state section')
+    expect(state.project.milestones).toEqual(['Earlier', 'P1 foundation', 'Release the panel'])
+    expect(state.project.milestoneSource).toEqual({ kind: 'present', diagnostic: null })
   })
 })

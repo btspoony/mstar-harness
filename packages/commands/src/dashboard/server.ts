@@ -22,6 +22,18 @@ import {
   readDashboardView,
   resolveDashboardRoute,
 } from "./store-read.js";
+import {
+  addMilestone,
+  assignIssueMilestone,
+  readProjectCatalogRow,
+  removeMilestone,
+  updateMilestone,
+  type IssueReceipt,
+  type MilestonePatch,
+  type MilestoneReceipt,
+  type StoreContext,
+} from "@mstar-harness/engine";
+import { SddScriptError } from "@mstar-harness/engine";
 import type { DashboardView } from "@mstar-harness/engine";
 import { dashboardCss, dashboardHtml, dashboardJs } from "./assets.generated.js";
 
@@ -58,7 +70,19 @@ function fail(code: string, message: string): ApiFailure {
 function statusForCode(code: string): number {
   if (code === "usage") return 400;
   if (code === "issue.not-found" || code === "not-found") return 404;
-  if (code.startsWith("store.") || code.startsWith("projection.")) return 503;
+  // see docs/specs/architecture/overview.md - a CAS conflict is a routine outcome, not a server fault.
+  if (code.endsWith(".revision-conflict")) return 409;
+  // invariant: An unavailable required source is service-unavailable, never a 404 that
+  // claims the record does not exist.
+  if (
+    code.startsWith("store.") ||
+    code.startsWith("projection.") ||
+    code.startsWith("collaboration.") ||
+    code.startsWith("execution.") ||
+    code.startsWith("remote.")
+  ) {
+    return 503;
+  }
   return 500;
 }
 
@@ -101,13 +125,111 @@ function escapeHtmlAttribute(value: string): string {
   return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
-async function assertProjectExists(harnessDir: string, projectId: string): Promise<void> {
-  const envelope = await readDashboardView({
-    context: { harnessDir },
-    view: "roadmap",
-    params: { project: projectId },
-  });
-  if (envelope.data === null) {
+/** see packages/commands/src/dashboard/server.ts - readJsonBody enforces this bound. */
+const MILESTONE_BODY_LIMIT = 16_384;
+
+/** see docs/specs/architecture/overview.md - the bound on waiting for a milestone request body. */
+const MILESTONE_BODY_DEADLINE_MS = 10_000;
+
+/** see docs/specs/architecture/overview.md - the body is read outside the serialized queue. */
+async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  let expired = false;
+  const timer = setTimeout(() => {
+    expired = true;
+    req.destroy();
+  }, MILESTONE_BODY_DEADLINE_MS);
+  try {
+    for await (const chunk of req) {
+      const buffer = chunk as Buffer;
+      size += buffer.length;
+      if (size > MILESTONE_BODY_LIMIT) throw new SddScriptError("the request body is too large", 2);
+      chunks.push(buffer);
+    }
+  } catch (error) {
+    if (expired) throw new SddScriptError(`the request body did not arrive within ${MILESTONE_BODY_DEADLINE_MS}ms`, 2);
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+  if (expired) throw new SddScriptError(`the request body did not arrive within ${MILESTONE_BODY_DEADLINE_MS}ms`, 2);
+  try {
+    const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    if (body === null || typeof body !== "object" || Array.isArray(body)) throw new Error("not an object");
+    return body as Record<string, unknown>;
+  } catch {
+    throw new SddScriptError("the request body must be one JSON object", 2);
+  }
+}
+
+/** see packages/commands/src/dashboard/server.ts - one typed field, or a usage refusal. */
+function requireField<T>(body: Record<string, unknown>, field: string, test: (value: unknown) => value is T): T {
+  const value = body[field];
+  if (!test(value)) throw new SddScriptError(`the milestone request requires a valid ${field}`, 2);
+  return value;
+}
+
+const isText = (value: unknown): value is string => typeof value === "string" && value !== "";
+const isCount = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+
+/** see packages/engine/src/milestone-store.ts - the route is a transport; the engine owns validation. */
+async function writeMilestoneRequest(
+  context: StoreContext,
+  body: Record<string, unknown>,
+): Promise<MilestoneReceipt | IssueReceipt> {
+  const verb = requireField(
+    body,
+    "verb",
+    (value): value is "create" | "update" | "remove" | "assign" =>
+      value === "create" || value === "update" || value === "remove" || value === "assign",
+  );
+  const projectId = requireField(body, "projectId", isText);
+  const operationId = requireField(body, "operationId", isText);
+  const expectedStoreRevision = requireField(body, "expectedStoreRevision", isCount);
+  const mutation = { operationId, expectedStoreRevision };
+  switch (verb) {
+    case "create": {
+      const input = body.input as { name?: unknown; effortSessions?: unknown; ordinal?: unknown } | null;
+      if (input === null || typeof input !== "object") throw new SddScriptError("the create verb requires an input object", 2);
+      if (!isText(input.name)) throw new SddScriptError("the create verb requires a name", 2);
+      if (input.effortSessions !== null && input.effortSessions !== undefined && typeof input.effortSessions !== "number") {
+        throw new SddScriptError("effortSessions must be a number or null", 2);
+      }
+      if (!isCount(input.ordinal)) throw new SddScriptError("the create verb requires an ordinal", 2);
+      return addMilestone(context, {
+        projectId,
+        name: input.name,
+        effortSessions: typeof input.effortSessions === "number" ? input.effortSessions : null,
+        ordinal: input.ordinal,
+      }, mutation);
+    }
+    case "update": {
+      const milestoneId = requireField(body, "milestoneId", isText);
+      const patch = body.patch as { name?: unknown; effortSessions?: unknown; status?: unknown } | null;
+      if (patch === null || typeof patch !== "object") throw new SddScriptError("the update verb requires a patch object", 2);
+      return updateMilestone(context, projectId, milestoneId, patch as MilestonePatch, mutation);
+    }
+    case "remove":
+      return removeMilestone(context, projectId, requireField(body, "milestoneId", isText), mutation);
+    case "assign": {
+      const issueId = requireField(body, "issueId", isText);
+      const issueRevision = requireField(body, "issueRevision", isCount);
+      const milestoneId = body.milestoneId === null ? null : requireField(body, "milestoneId", isText);
+      return assignIssueMilestone(context, issueId, { projectId, milestoneId, reason: "assigned from the project page" }, {
+        ...mutation,
+        actor: "project-manager",
+        expectedRevision: issueRevision,
+      });
+    }
+  }
+}
+
+/** see packages/engine/src/store-read.ts - the selector is proved against its own catalog row. */
+async function assertProjectExists(context: StoreContext, projectId: string): Promise<void> {
+  const found = await readProjectCatalogRow(context, projectId);
+  // see packages/engine/src/store-read.ts - only a catalog-backed row satisfies `--project`.
+  if (found === null) {
     throw new Error(`Unknown project ${JSON.stringify(projectId)}: no catalog project row exists. ` + "Check the id with `mstar catalog list` and retry.");
   }
 }
@@ -123,7 +245,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   }
   const context = { harnessDir: options.harnessDir };
   const token = randomUUID();
-  if (options.projectId !== undefined) await assertProjectExists(options.harnessDir, options.projectId);
+  if (options.projectId !== undefined) await assertProjectExists(context, options.projectId);
 
   // Serialized request execution: at most one read transaction runs at a time
   // (plan D2 "serialized request transactions"); new work after close is
@@ -143,13 +265,35 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
   };
 
   const server = http.createServer((req, res) => {
-    void enqueue(() => handleRequest(req, res)).catch(() => {
+    // see docs/specs/architecture/overview.md - only the request work is serialized; the body is
+    // drained outside the queue so a slow upload cannot hold the slot every read waits on.
+    void (async () => {
+      const admitted = admitRequest(req, res);
+      if (admitted === null) return;
+      const { requestHead, method, pathname, url } = admitted;
+      let body: Record<string, unknown> | null = null;
+      if (pathname === "/api/milestones" && method === "POST") {
+        try {
+          body = await readJsonBody(req);
+        } catch (error) {
+          const failure = dashboardFailure(error);
+          const message = failure.message.split(options.harnessDir).join("{HARNESS_DIR}");
+          sendJson(res, statusForCode(failure.code), fail(failure.code, message), requestHead);
+          return;
+        }
+      }
+      await enqueue(() => handleRequest(res, { requestHead, method, pathname, url, body }));
+    })().catch(() => {
       /* handled in handleRequest; a post-close race just ends the response */
       if (!res.headersSent) res.destroy();
     });
   });
 
-  async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  /** see docs/specs/architecture/overview.md - the transport guards, answered before any work is queued. */
+  function admitRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): { requestHead: boolean; method: string; pathname: string; url: URL } | null {
     const requestHead = req.method === "HEAD";
     const method = requestHead ? "GET" : req.method ?? "";
     const host = req.headers.host ?? "";
@@ -159,14 +303,14 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // DNS-rebinding guard: the Host header must be the actual loopback origin.
     if (host !== expectedHost) {
       sendJson(res, 403, fail("forbidden", `Host header must be ${expectedHost}`), requestHead);
-      return;
+      return null;
     }
     const origin = req.headers.origin;
     // No CORS ever: a cross-origin browser context is refused outright; an
     // absent Origin (direct navigation, curl) is the same-origin case.
     if (origin !== undefined && origin !== `http://${expectedHost}`) {
       sendJson(res, 403, fail("forbidden", `Origin ${JSON.stringify(origin)} is not the dashboard origin`), requestHead);
-      return;
+      return null;
     }
 
     let url: URL;
@@ -174,7 +318,7 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       url = new URL(req.url ?? "/", `http://${expectedHost}`);
     } catch {
       sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
-      return;
+      return null;
     }
     const cookieToken = (req.headers.cookie ?? "")
       .split(";")
@@ -184,12 +328,19 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     const queryToken = url.searchParams.get("token");
     if (queryToken !== token && cookieToken !== token) {
       sendJson(res, 403, fail("forbidden", "a valid dashboard token is required"), requestHead);
-      return;
+      return null;
     }
     if (queryToken === token) {
       res.setHeader("set-cookie", `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict`);
     }
-    const pathname = url.pathname;
+    return { requestHead, method, pathname: url.pathname, url };
+  }
+
+  async function handleRequest(
+    res: http.ServerResponse,
+    admitted: { requestHead: boolean; method: string; pathname: string; url: URL; body: Record<string, unknown> | null },
+  ): Promise<void> {
+    const { requestHead, method, pathname, url, body } = admitted;
 
     // Fixed static routes only: no filesystem serving, no traversal, no
     // arbitrary Markdown/HTML rendering.
@@ -227,6 +378,17 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
     // Route resolution (including the encoded-traversal id refusal) happens
     // before any store access, and its usage throws become structured 400s.
     try {
+      // see docs/specs/architecture/overview.md - /api/milestones carries both halves: POST is
+      // the write route, GET the milestone read the project page's body renders.
+      if (pathname === "/api/milestones" && method === "POST") {
+        if (body === null) {
+          sendJson(res, 400, fail("usage", "the milestone route requires one JSON object body"), requestHead);
+          return;
+        }
+        const receipt = await writeMilestoneRequest(context, body);
+        sendJson(res, 200, { data: receipt }, requestHead);
+        return;
+      }
       const route = resolveDashboardRoute(pathname);
       if (route === null) {
         sendJson(res, 404, fail("not-found", `no dashboard route matches ${JSON.stringify(pathname)}`), requestHead);
@@ -234,8 +396,8 @@ export async function startDashboard(options: StartDashboardOptions): Promise<Ru
       }
       // HEAD is accepted for static resources only; the API is GET-only and a
       // HEAD request must not reach the store read.
-      if (req.method !== "GET") {
-        sendJson(res, 405, fail("method-not-allowed", "the dashboard API is read-only: only GET is accepted"), requestHead);
+      if (requestHead || method !== "GET") {
+        sendJson(res, 405, fail("method-not-allowed", "no dashboard read route accepts a write: only GET is accepted here (milestone writes go to POST /api/milestones)"), requestHead);
         return;
       }
 

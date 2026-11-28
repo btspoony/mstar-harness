@@ -4,11 +4,13 @@
  * Every case runs the real CLI as a subprocess against an isolated temporary
  * harness. Registration is asserted through the store, never file transports.
  */
-import { initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority } from "@mstar-harness/engine";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { receiptStable, runCli, type RunResult } from "./harness";
+import { execFileSync } from "node:child_process";
+import { receiptStable, runCli, writeFixtureRepoId, type RunResult } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
 
 const WORKFLOW_ID = "20260916-plan-register-cli";
 const SESSION_ID = "registration-cli-session";
@@ -76,22 +78,26 @@ function registerArgs(harness: string, extra: string[] = []): string[] {
 
 /** Temp fixture harness; returns paths plus a byte-snapshot helper. */
 async function setupHarness(fn: (harness: string, paths: { root: string; snapshot: string }) => void | Promise<void>): Promise<void> {
-  const harness = mkdtempSync(join(tmpdir(), "mstar-workflow-register-"));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-workflow-register-")));
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
+  const harness = join(root, ".mstar");
   // The registration derives id/title from the SELECTED DOCUMENT (the plan
   // document is the registered title source), so the declared plan file must
   // exist and declare the registered title.
   mkdirSync(join(harness, "plans"), { recursive: true });
-  writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), "# CLI example plan\n\n**plan_id:** 20260916-plan-cli-example\n");
-  writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), "# Verification plan\n\n**plan_id:** 20260916-plan-verify\n");
+  writeFileSync(join(harness, "plans", "20260916-plan-cli-example.md"), planFrontMatter("20260916-plan-cli-example", "# CLI example plan\n"));
+  writeFileSync(join(harness, "plans", "20260916-plan-verify.md"), planFrontMatter("20260916-plan-verify", "# Verification plan\n"));
   const store = await initializeStore({ harnessDir: harness });
   store.close();
+  await ensureCollaborationAuthority({ harnessDir: harness });
   try {
     await fn(harness, {
       root: join(harness, "status.json"),
       snapshot: join(harness, "workflows", WORKFLOW_ID, "snapshot.json"),
     });
   } finally {
-    rmSync(harness, { recursive: true, force: true });
+    rmSync(root, { recursive: true, force: true });
   }
 }
 

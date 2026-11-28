@@ -11,13 +11,16 @@
  * stamp the identity-resolution tests cannot.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Command } from "commander";
 import { getCommandDefinitions, type InvocationContext } from "@mstar-harness/commands";
-import { initializeStore } from "@mstar-harness/engine";
+import { initializeStore, ensureCollaborationAuthority } from "@mstar-harness/engine";
 import { registerCliCommands } from "./command-adapter";
+import { writeFixtureRepoId } from "../test/harness";
+import { planFrontMatter } from "../test/support/plan-frontmatter.mjs";
 
 const MARKS = ["DSH_MSTAR_LEAF_SEAT", "MSTAR_LEAF_SEAT", "DSH_SESSION_ID", "MSTAR_HOST_SESSION_ID", "MSTAR_EXECUTION_IDENTITY"] as const;
 const saved = new Map(MARKS.map((key) => [key, process.env[key]]));
@@ -52,8 +55,14 @@ async function fixture(): Promise<{ base: string; root: string }> {
   mkdirSync(join(root, "plans"), { recursive: true });
   // The registered document is the registration authority: its H1 title and the
   // `plan_id` header must be the ids the argv declares.
-  writeFileSync(join(root, "plans", `${PLAN_ID}.md`), `# ${PLAN_TITLE}\n\n**plan_id:** ${PLAN_ID}\n`);
+  writeFileSync(join(root, "plans", `${PLAN_ID}.md`), planFrontMatter(PLAN_ID, `# ${PLAN_TITLE}
+`));
+  // note: The negative control registers against the collaboration authority, which
+  // resolves the owning checkout's repo identity and needs its lane active.
+  execFileSync("git", ["init", "-q", "-b", "main"], { cwd: base });
+  writeFixtureRepoId(base);
   (await initializeStore({ harnessDir: root })).close();
+  await ensureCollaborationAuthority({ harnessDir: root });
   return { base, root };
 }
 

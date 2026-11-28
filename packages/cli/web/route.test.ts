@@ -44,19 +44,19 @@ describe("every destination in the table", () => {
 });
 
 describe("the project feature segment", () => {
-  test("#project/<id> is the Roadmap feature", () => {
-    expect(parseRoute("#project/engine").route).toEqual({ name: "project", id: "engine", feature: "roadmap" });
+  test("#project/<id> is the default feature", () => {
+    expect(parseRoute("#project/engine").route).toEqual({ name: "project", id: "engine", feature: "issues" });
   });
 
   test("each named feature resolves", () => {
-    expect(parseRoute("#project/engine/roadmap").route).toEqual({ name: "project", id: "engine", feature: "roadmap" });
     expect(parseRoute("#project/engine/issues").route).toEqual({ name: "project", id: "engine", feature: "issues" });
     expect(parseRoute("#project/engine/iterations").route).toEqual({ name: "project", id: "engine", feature: "iterations" });
   });
 
-  test("an unknown feature resolves to roadmap, never to a fourth feature", () => {
-    expect(parseRoute("#project/engine/workflows").route).toEqual({ name: "project", id: "engine", feature: "roadmap" });
-    expect(parseRoute("#project/engine/ROADMAP").route).toEqual({ name: "project", id: "engine", feature: "roadmap" });
+  test("an unknown feature resolves to the default, never to a third feature", () => {
+    expect(parseRoute("#project/engine/workflows").route).toEqual({ name: "project", id: "engine", feature: "issues" });
+    // see packages/cli/web/route.test.ts - // The retired feature's address is unknown input now, not an alias.
+    expect(parseRoute("#project/engine/roadmap").route).toEqual({ name: "project", id: "engine", feature: "issues" });
   });
 });
 
@@ -73,8 +73,8 @@ describe("unknown input lands on the documented default", () => {
 
 describe("#roadmap is removed, not aliased", () => {
   test("it resolves to the landing destination", () => {
-    // The roadmap is a project feature now (D8). A compatibility alias would keep
-    // a dead vocabulary alive, so the route is simply not in the table.
+    // see packages/cli/web/route.test.ts - // The roadmap domain is retired. A compatibility alias would keep a dead
+    // vocabulary alive, so the route is simply not in the table.
     expect(parseRoute("#roadmap").route).toEqual({ name: "overview" });
   });
 
@@ -84,9 +84,9 @@ describe("#roadmap is removed, not aliased", () => {
     for (const hash of ["#overview", "#issues", "#workflows", "#iterations", "#projects", "#issue/I-1"]) {
       expect(routeHash(parseRoute(hash).route)).not.toBe("#roadmap");
     }
-    // A project's roadmap feature is a different, nested address and must not be
-    // confused with the removed destination.
-    expect(routeHash(parseRoute("#project/engine").route)).toBe("#project/engine/roadmap");
+    // see packages/cli/web/route.test.ts - // A project page's default feature is a different, nested address and must
+    // not be confused with the removed destination.
+    expect(routeHash(parseRoute("#project/engine").route)).toBe("#project/engine/issues");
   });
 });
 
@@ -132,13 +132,13 @@ describe("parents, for Escape and the breadcrumb", () => {
     expect(parentOf({ name: "iteration", id: "i" })).toEqual({ name: "iterations" });
   });
 
-  test("a project feature returns to the project's roadmap, then to the list", () => {
-    expect(parentOf({ name: "project", id: "engine", feature: "issues" })).toEqual({
+  test("a project feature returns to the project's default feature, then to the list", () => {
+    expect(parentOf({ name: "project", id: "engine", feature: "iterations" })).toEqual({
       name: "project",
       id: "engine",
-      feature: "roadmap",
+      feature: "issues",
     });
-    expect(parentOf({ name: "project", id: "engine", feature: "roadmap" })).toEqual({ name: "projects" });
+    expect(parentOf({ name: "project", id: "engine", feature: "issues" })).toEqual({ name: "projects" });
   });
 
   test("a list returns to the landing destination", () => {
@@ -169,13 +169,13 @@ describe("Escape and the breadcrumb are the same move, from two controls", () =>
     expect(routeHash(parent!.route, parent!.query)).toBe("#issues?disposition=resolved&severity=high");
   });
 
-  test("breadcrumb: a project feature goes to the project's roadmap with the query preserved", () => {
+  test("breadcrumb: a project feature goes to the project's default feature with the query preserved", () => {
     // The breadcrumb inside a project page steps to the project's default feature
     // before leaving the project, and the filter state comes along.
-    const address = parseRoute("#project/engine/issues?severity=high");
+    const address = parseRoute("#project/engine/iterations?severity=high");
     const parent = parentAddress(address);
-    expect(parent?.route).toEqual({ name: "project", id: "engine", feature: "roadmap" });
-    expect(routeHash(parent!.route, parent!.query)).toBe("#project/engine/roadmap?severity=high");
+    expect(parent?.route).toEqual({ name: "project", id: "engine", feature: "issues" });
+    expect(routeHash(parent!.route, parent!.query)).toBe("#project/engine/issues?severity=high");
   });
 
   test("at the landing destination there is no parent, so Escape does nothing", () => {

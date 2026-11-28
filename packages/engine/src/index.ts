@@ -36,29 +36,9 @@
  * `cleanup` is the pure worktree/branch cleanup planner (immutable facts
  * in, stable `cleanup.*` remove/keep/refuse decisions out).
  */
-export type {
-  RoadmapContent,
-  RoadmapExpected,
-  RoadmapImportReview,
-  RoadmapRecord,
-  RoadmapRead,
-  RoadmapWriteReceipt,
-  RoadmapOperation,
-} from "./roadmap-store.js";
-export {
-  RoadmapError,
-  importRoadmapAuthority,
-  listRoadmapAuthority,
-  readRoadmapAuthority,
-  readRoadmapAuthorityOn,
-  replaceRoadmapAuthority,
-  reviewRoadmapImport,
-} from "./roadmap-store.js";
-export { parseRoadmapContent } from "./roadmap-content.js";
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, applyEnforcement, readDeclaredNodeFloor, warnUncheckableNodeFloor, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {
-  HarnessKind,
   ResolveHarnessDirOptions,
   ResolveSpecsDirOptions,
   ResolveTrackedDirOptions,
@@ -69,6 +49,7 @@ export type {
 } from "./path.js";
 export type { LinearBinding, LinearBindingRefusal, LinearFacetMapping, MstarcConfig, MstarcStringKey, RepoLinearBinding } from "./mstarc.js";
 export {
+  COLLABORATION_SECTION,
   LINEAR_MAPPING_SECTION,
   LINEAR_SECTION,
   MSTARC_FILE,
@@ -86,10 +67,160 @@ export {
   readRepoLinearBinding,
   resolveRepoRoot,
 } from "./mstarc.js";
+export type { CollaborationIdentityCode, CollaborationLocation, CollaborationMode } from "./collaboration-identity.js";
+export {
+  CollaborationIdentityError,
+  collaborationLocationOfRepoKey,
+  resolveCollaborationLocation,
+} from "./collaboration-identity.js";
+// note: The collaboration lane's own store: independent staged schema, create-only
+// publication and active-only handles. No execution table or method.
+export type {
+  CollaborationAdoption,
+  CollaborationAuthority,
+  CollaborationAuthorityProbe,
+  CollaborationBinding,
+  CollaborationStamp,
+  CollaborationStoreHandle,
+  CollaborationUpgradeReceipt,
+  IssueRef,
+} from "./collaboration-store.js";
+export {
+  adoptCollaborationBinding,
+  assertIssueRef,
+  COLLABORATION_MIGRATIONS,
+  initializeCollaborationStore,
+  ISSUE_REF_PATTERN,
+  mintIssueRef,
+  openCollaborationStore,
+  openRemoteCache,
+  probeCollaborationAuthority,
+  readCollaborationAuthority,
+  readCollaborationBinding,
+  readRemoteCacheAuthority,
+  upgradeCollaborationStore,
+  upgradeExistingCollaborationStore,
+  withCollaborationWrite,
+  withRemoteCacheWrite,
+  writeCollaborationBinding,
+  writeRemoteCollaborationBinding,
+} from "./collaboration-store.js";
+// note: The remote authority boundary: strict verification/observation DTOs, the explicit bind
+// that materializes the selected provider scope, scoped observation ingest into the cache, and
+// the status read. No provider call, credential or transport lives here.
+export type {
+  ObservationSubmission,
+  ProviderIssueIdentity,
+  ProviderProjectScope,
+  RemoteAvailability,
+  RemoteBindResult,
+  RemoteCatalogEntity,
+  RemoteCatalogLink,
+  RemoteConfirmedEffect,
+  RemoteMilestone,
+  RemoteMstarIssue,
+  RemoteObservationResult,
+  RemoteObservedSubject,
+  RemoteEvent,
+  RemoteEventChange,
+  RemoteIntent,
+  RemoteIntentBinding,
+  RemoteIntentExecutionKey,
+  RemoteIntentRequest,
+  RemoteIntentState,
+  RemotePendingIntent,
+  RemotePendingIntents,
+  RemoteProjectStatus,
+  RemoteSnapshot,
+  RemoteAdoptionRequest,
+  RemoteDispatchPermit,
+  RemoteDispatchResult,
+  ForkObservation,
+  RemoteIntentRead,
+  RemoteIssueWrite,
+  RemoteNoChange,
+  RemoteProjectWrite,
+  RemoteReceiptOutcome,
+  RemoteReceiptRecord,
+  RemoteResolution,
+  RemoteStatus,
+  RemoteWriteOrigin,
+  ScopeCapabilities,
+  ScopeCheck,
+  ScopeOutcome,
+  SnapshotCoverage,
+  VerificationBatch,
+} from "./collaboration-remote.js";
+export {
+  abandonRemoteIntent,
+  bindRemoteAuthority,
+  dispatchRemoteIntent,
+  frozenIntent,
+  ingestRemoteObservation,
+  pendingRemoteEffect,
+  prepareRemoteAdoption,
+  prepareRemoteIntent,
+  prepareRemoteIssueWrite,
+  prepareRemoteProjectWrite,
+  prepareRemoteResolution,
+  readPendingIntents,
+  readRemoteIntent,
+  readRemoteStatus,
+  recordRemoteReceipt,
+  reconcileRemoteIntent,
+  remoteEventHead,
+} from "./collaboration-remote.js";
+// note: The remote READ boundary: the same domain DTOs over admitted snapshots. It
+// refuses a failed/partial/stale required scope rather than reading local rows.
+export type {
+  RemoteCatalogLinks,
+  RemoteCatalogRow,
+  RemoteIssueRead,
+  RemoteProjectEvidence,
+  RemoteReadView,
+} from "./collaboration-remote-read.js";
+export { openRemoteReadView } from "./collaboration-remote-read.js";
+// note: The one-way authority cutover: reviewed manifest, verified staged copy,
+// activation claim, durable source fence, guarded publication and replay.
+export type {
+  CutoverActivationOptions,
+  CutoverManifest,
+  CutoverReceipt,
+  CutoverSource,
+} from "./collaboration-cutover.js";
+export {
+  activateCollaborationCutover,
+  applyCollaborationCutover,
+  planCollaborationCutover,
+} from "./collaboration-cutover.js";
+// note: One record's staged move: the source row is the ledger and the fence, and the phase set is
+// forward-only. The published surface is the routes a transport calls — `moveAcrossAuthorities` for
+// the one-checkout topology, `moveAcrossByDocument` for the two-checkout exchange, and
+// `discardAcrossAuthorities` to abandon either one (a checkout can only release the lanes it holds) —
+// plus `moveDocumentOf` to parse the handoff a peer wrote. The phase engine
+// (`stageMove`/`verifyMove`/`switchMove`/`publishMove`), `discardMove` (the one-checkout release) and
+// the ledger primitives stay internal to the module.
+export type { IssueMovePhase, IssueMoveRecord, IssueMoveRole, IssueMoveRoute } from "./cross-authority-move.js";
+export type { MoveCounts, MoveReceipt, MoveRequest } from "./cross-authority-move.js";
+// note: The two-checkout exchange: one half per checkout, exchanging documents, for a move across a
+// `local`/`remote` boundary.
+export type {
+  ExchangeReceipt,
+  IssueMoveConfirmation,
+  IssueMoveDocument,
+  IssueMoveDocumentPhase,
+  ObservedMoveSubject,
+} from "./cross-authority-move.js";
+export {
+  discardAcrossAuthorities,
+  discardMove,
+  moveAcrossAuthorities,
+  moveAcrossByDocument,
+  moveDocumentOf,
+} from "./cross-authority-move.js";
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
-  detectHarnessKind,
   emitGitignoreSnippet,
   HarnessRootRetiredError,
   hasHarnessRootDeclaration,
@@ -203,8 +334,10 @@ export { planWorktreeCleanup } from "./cleanup.js";
 export type {
   AssignmentBranchForms,
   AssignmentFields,
+  AssignmentSourceResult,
   ComposeDispatchGateOptions,
   ComposeDispatchGateResult,
+  AssignmentFrontmatterParse,
   DefaultBranchOptions,
   EnforcementFlag,
   EnforcementSource,
@@ -220,15 +353,25 @@ export {
   assertDefaultBranchProtected,
   assertTriIdentity,
   assignmentHeaderRegion,
+  assignmentBranchFormsOf,
+  assignmentFrontmatterEntries,
+  assignmentFrontmatterParse,
+  classifyReviewOrAuditRound,
   composeDispatchGate,
+  declaredAssignmentBranches,
   executionModeToN,
   isReadOnlyAssignmentRole,
+  legacyAssignmentShape,
+  legacyFormatViolation,
   parseAssignmentBranchForms,
   parseAssignmentFields,
+  parseAssignmentFieldsFromFrontmatter,
   parseBranchPolicyDirectOnBranch,
   parseEnforcementFlag,
+  parseEnforcementFlagFromFrontmatter,
   validateAssignmentFields,
   validateControlWriteAssignment,
+  readAssignmentSource,
 } from "./dispatch.js";
 export type {
   BranchProbeOptions,
@@ -304,6 +447,10 @@ export {
 } from "./iteration.js";
 export type {
   BindingErrorCode,
+  CollaborationObservation,
+  CollaborationProviderScope,
+  CollaborationScope,
+  FindingsObservation,
   ProjectBinding,
   ProjectBindingMutation,
   ProjectBindingRead,
@@ -311,23 +458,18 @@ export type {
   ProjectBindingTarget,
   ProjectRegisterDoc,
   ProjectRegisterEntry,
-  RoadmapFrontmatter,
-  RoadmapStatus,
-  RoadmapValidation,
 } from "./project.js";
 export {
   BindingError,
   PROJECT_REFERENCES_DIR,
   PROJECT_REGISTER_FILE,
-  PROJECT_ROADMAP_FILE,
-  ROADMAP_STATUSES,
   _DEFAULT_PROJECT,
   bindProject,
   findingsCleanupGate,
   listProjectReferenceFiles,
+  observePlanFindings,
   readProjectBinding,
   validateProjectRegister,
-  validateRoadmap,
 } from "./project.js";
 export type { HarnessDocKind, ValidateStatusWriteDocOptions } from "./gates.js";
 export {
@@ -339,8 +481,17 @@ export {
   validateStatusWriteDoc,
   violationLine,
 } from "./gates.js";
-export type { FrontmatterAndBody, JsonObject } from "./document-frontmatter.js";
-export { extractFrontmatterAndBody, parseSimpleFrontmatter } from "./document-frontmatter.js";
+export type { FrontmatterAndBody, FrontmatterEntry, JsonObject } from "./document-frontmatter.js";
+export {
+  DocumentFrontmatterError,
+  extractFrontmatterAndBody,
+  fencedCodeTracker,
+  parseDocumentFrontmatterEntries,
+  parseDocumentFrontmatter,
+  parseSimpleFrontmatter,
+} from "./document-frontmatter.js";
+export type { DocumentField, DocumentFieldType, DocumentKind, DocumentSchema } from "./document-schema.js";
+export { documentSchema, validateDocumentFrontmatter } from "./document-schema.js";
 export {
   MAX_SYMLINK_HOPS,
   STORE_AUTHORITY_FILES,
@@ -433,6 +584,7 @@ export type {
   CommentPointer,
   CommentedCodeFinding,
   EphemeralCitation,
+  IterationCompassOptions,
   PlanQualityFinding,
   PlanQualityResult,
   ProvenanceCitation,
@@ -458,6 +610,7 @@ export {
   findUntrackedTodos,
   sourceDialect,
   lintAdrTree,
+  lintIterationCompass,
   lintSkillFrontmatter,
   lintSpecsDoc,
   lintSpecsTree,
@@ -651,7 +804,7 @@ export {
   writeDshSessionBinding,
 } from "./host-state-store.js";
 export { rowValidationRoute } from "./workflow.js";
-export { upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
+export { advanceSchemaWithGeneratedAttestation, upgradeStoreMinimal, type MinimalStoreUpgradeResult } from "./store-upgrade-minimal.js";
 // Coordinator-only execution authority: version tokens, registration,
 // current coordinator binding and required workflow/plan reads.
 export type {
@@ -690,6 +843,17 @@ export {
 // Coordinator-only direct plan operation union and transition entrypoint.
 export type { CoordinationOperation } from "./execution-coordination.js";
 export { mutateExecutionPlan } from "./execution-coordination.js";
+// note: The cross-domain composite contract: the admitted intent, its local effect key
+// and the collaboration receipt. The frame itself stays internal to the engine;
+// only the admitted owning verb may run one.
+export type {
+  CollaborationCompositeEffects,
+  CollaborationEffectReceipt,
+  CompositeIntent,
+  CompositeKey,
+  CompositeKind,
+} from "./collaboration-operations.js";
+export { remoteCompositeEntryOperationId, remoteCompositeOperationId } from "./collaboration-operations.js";
 // §3 the WORKFLOW-level surface: the closed `WorkflowExecutionOperation` union
 // (phase, lifecycle, execution-policy, integration-worktree, delivery) plus the
 // explicit coordinator recovery bootstrap — the one transition that replaces a
@@ -713,7 +877,9 @@ export type {
   IssueLink,
   IssueMove,
   IssuePage,
+  IssueProvenanceKind,
   IssueReceipt,
+  IssueRelationKind,
   IssueReopen,
   IssueTriage,
   MutationContext,
@@ -728,10 +894,12 @@ export {
   appendOccurrence,
   assertIssueLinkVocabulary,
   assertIssueTriageVocabulary,
+  assertIssueWriteSeat,
   captureIssue,
   closeIssue,
   computeIdentityKey,
   getIssue,
+  showIssue,
   linkIssue,
   listIssues,
   moveIssue,
@@ -744,18 +912,35 @@ export {
   ISSUE_ACTION_NAMES,
   ISSUE_DISPOSITIONS,
   ISSUE_KINDS,
+  ISSUE_PROVENANCE_KINDS,
+  ISSUE_RELATIONS,
   ISSUE_SEVERITIES,
   ISSUE_PAYLOAD_SCHEMAS,
   TERMINAL_DISPOSITIONS,
   vocabularyMap,
 } from "./issue.js";
+// why: The engine-owned structural definitions of the strict remote/outbox `--input`
+// documents (F-07 convergence): the published command derives its `payloadSchemas
+// .inputDocument` descriptors from these, so discovery and the runtime parsers share one
+// structural owner and the engine's vocabularies are never restated in a second package.
+export {
+  moveHandoffDocumentSchema,
+  remoteAdoptionDocumentSchema,
+  remoteBindDocumentSchema,
+  remoteForkObservationDocumentSchema,
+  remoteObserveDocumentSchema,
+  remoteReceiptDocumentSchema,
+  remoteReconcileDocumentSchema,
+  remoteResolutionDocumentSchema,
+} from "./remote-documents.js";
 // why: The remote record shapes the sync ledger consumes (issue-sync): what an
 // agent's external issue tools hand back, normalized. The engine owns no
 // transport and no credential, so no provider interface, page envelope or
 // failure list lives here — a listing is the caller's own array.
 export type { ProviderItem, ProviderWritePayload } from "./issue-sync/provider.js";
-// Sync ledger (migration 15): the per-item state machine and its read path.
-// Every mutation owns its transaction; a caller composes the verbs sequentially.
+// invariant: Sync ledger: the per-item state machine and its read path on the collaboration
+// authority. The transport owns the collaboration write transaction
+// (`withCollaborationWrite`); the verbs compose inside it and never begin one.
 export type {
   AcquireRunInput,
   CursorInput,
@@ -791,6 +976,7 @@ export {
   releaseRun,
   replanItem,
   resetCursor,
+  withSyncWrite,
   writeCursor,
 } from "./issue-sync.js";
 // why: One-way push (M1): candidates, the payload plan, the ledger protocol, the
@@ -865,6 +1051,11 @@ export {
   registerCatalogEntity,
   updateCatalogEntity,
 } from "./catalog.js";
+// see packages/engine/src/index.ts - // The `{HARNESS_DIR}/planboard.md` grammar and the findings `mstar planboard
+// check` reports. Pointers only: the planboard holds no state, and its read
+// touches the issue store without writing either side.
+export type { PlanboardFinding, PlanboardFindingCode, PlanboardFindings } from "./planboard.js";
+export { PLANBOARD_FINDING_CODES, PLANBOARD_FILE, PLANBOARD_SECTION_CAP, checkPlanboard, parsePlanboard } from "./planboard.js";
 // Catalog import/discovery/portability: discovery is a read-only proposal,
 // import applies a reviewed plan through the catalog domain verbs, export is
 // versioned transport. The CLI family
@@ -926,6 +1117,7 @@ export {
   CATALOG_REGISTRATION_JOURNAL_VERSION,
   CatalogRegistrationError,
   abortCatalogExecution,
+  assertCatalogExecutionCommitted,
   listPendingCatalogRegistrations,
   readCatalogRevisions,
   purgeCatalogRegistration,
@@ -998,6 +1190,7 @@ export type {
   DashboardFilters,
   DashboardView,
   DashboardViewData,
+  ExecutionObservation,
   ExecutionReadRoute,
   ExecutionSourceRead,
   IssueFlow,
@@ -1009,6 +1202,7 @@ export type {
   IterationPlanDTO,
   LeaseDTO,
   MilestoneDTO,
+  OpenIssueRollup,
   OverviewDTO,
   OverviewMember,
   ProjectListDTO,
@@ -1016,9 +1210,9 @@ export type {
   ReadEnvelope,
   ReadProjection,
   ResidualCounts,
-  RoadmapDTO,
   StoreReadErrorCode,
   StoreReadQuery,
+  StoreReadSources,
   WorkflowDTO,
   WorkflowListDTO,
   WorkflowPlanDTO,
@@ -1027,7 +1221,9 @@ export {
   StoreReadError,
   queryDashboard,
   queryIssueFlow,
+  queryOpenIssueRollup,
   readExecutionSource,
+  readProjectCatalogRow,
   resolveCurrentAuthority,
   resolveExecutionReadRoute,
   withStoreRead,
@@ -1091,7 +1287,9 @@ export type {
   AttestationDisposition,
   BackupExecutionMeta,
   BackupReceipt,
+  CollaborationBackupImage,
   InstalledConsumerAttestation,
+  RepositoryBackupReceipt,
   RetiredRegister,
   RetiredSection,
   RetirementReceipt,
@@ -1110,8 +1308,11 @@ export {
   appliedReceiptFor,
   assertAuthorityCurrent,
   assertBackupDescribesStore,
+  backupRepositoryStores,
   backupStore,
   currentAuthorityHandle,
+  ensureCollaborationAuthority,
+  restoreCollaborationBackup,
   retireStoreSources,
   StoreActivationError,
   validateActivationAttestation,
@@ -1158,6 +1359,7 @@ export type {
   MilestoneReceipt,
   MilestoneIssueDTO,
   MilestoneRead,
+  MilestoneNamesRead,
 } from "./milestone-store.js";
 export {
   MilestoneError,
@@ -1166,6 +1368,7 @@ export {
   removeMilestone,
   readMilestonesOn,
   queryMilestones,
+  queryMilestoneNames,
 } from "./milestone-store.js";
 export type {
   ExecutionDiagnosticExport,

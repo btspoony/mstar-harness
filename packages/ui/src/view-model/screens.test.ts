@@ -8,7 +8,7 @@
  * that happens.
  */
 import { describe, expect, test } from "bun:test";
-import type { IterationDTO, OverviewDTO, RoadmapDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
+import type { IterationDTO, MilestoneRead, OverviewDTO, WorkflowDTO, WorkflowListDTO } from "@mstar-harness/engine";
 
 
 import { flowModel, overviewModel, residualModel } from "./overview.ts";
@@ -84,43 +84,25 @@ const iteration = (over: Partial<IterationDTO> = {}): IterationDTO =>
   ...over,
 }) as IterationDTO & { gateStep: 2 };
 
-const roadmap = (milestoneCount: number): RoadmapDTO => ({
+const milestoneRead = (milestoneCount: number): MilestoneRead => ({
   projectId: "engine",
-  catalog: {
-    kind: "project",
-    id: "engine",
-    title: "Engine",
-    description: null,
-    rootKind: "projects",
-    relativePath: "engine",
-    documentKind: null,
-    lifecycle: "active",
-    revision: 12,
-    registeredAt: "2026-08-09T02:00:00.000Z",
-    updatedAt: "2026-10-23T09:42:00.000Z",
-  },
-  authority: { state: "present", revision: 7, contentHash: "sha256:abcd" },
-  content: null,
-  milestones: {
+  milestones: Array.from({ length: milestoneCount }, (_, index) => ({
+    milestoneId: `m-${index}`,
     projectId: "engine",
-    milestones: Array.from({ length: milestoneCount }, (_, index) => ({
-      milestoneId: `m-${index}`,
-      projectId: "engine",
-      name: `Milestone ${index}`,
-      target: "2026-11-07",
-      status: "active" as const,
-      ordinal: index,
-      revision: 1,
-      createdAt: "2026-10-01T00:00:00.000Z",
-      updatedAt: "2026-10-02T00:00:00.000Z",
-      totalIssues: 10,
-      openIssues: 4,
-      resolvedIssues: 6,
-      otherRetiredIssues: 0,
-    })),
-    issues: [],
-    unassignedIssues: 3,
-  },
+    name: `Milestone ${index}`,
+    effortSessions: 12,
+    status: "active" as const,
+    ordinal: index,
+    revision: 1,
+    createdAt: "2026-10-01T00:00:00.000Z",
+    updatedAt: "2026-10-02T00:00:00.000Z",
+    totalIssues: 10,
+    openIssues: 4,
+    resolvedIssues: 6,
+    otherRetiredIssues: 0,
+  })),
+  issues: [],
+  unassignedIssues: 3,
 });
 
 const read = <T>(data: T) => ({ state: "read" as const, data });
@@ -131,7 +113,7 @@ const overviewRead = (over: Partial<OverviewDTO> = {}): OverviewDTO => ({
     open: 26,
     bySeverity: { critical: 2, high: 5, medium: 9, low: 7, nit: 3 },
   }),
-  milestones: read(roadmap(5).milestones),
+  milestones: read(milestoneRead(5)),
   latestIteration: read(iteration()),
   issueFlow: read({ buckets: [], unknownCaptureDates: 0, unknownClosureDates: 0, currentOpen: 26, incompleteHistory: false }),
   ...over,
@@ -233,7 +215,7 @@ describe("Overview — the fact set of §8.2", () => {
     expect(zeros.total).toBe(0);
   });
 
-  test("milestones are capped at three and carry status, target, progress and open count", () => {
+  test("milestones are capped at three and carry status, effort, progress and open count", () => {
     if (model.milestones.kind !== "populated") throw new Error("expected milestones");
     expect(model.milestones.value).toHaveLength(3);
     expect(model.milestones.value[0]).toEqual({
@@ -241,7 +223,7 @@ describe("Overview — the fact set of §8.2", () => {
       name: "Milestone 0",
       status: "active",
       statusTone: "accent",
-      target: "2026-11-07",
+      effortSessions: 12,
       progress: { retired: 6, total: 10 },
       openIssues: 4,
     });
@@ -433,8 +415,8 @@ describe("Overview — the fact set of §8.2", () => {
     });
   });
 
-  test("a roadmap that exists with no milestones is empty, not absent", () => {
-    const noMilestones = overviewModel(overviewRead({ milestones: read(roadmap(0).milestones) }), { projection });
+  test("a project with no milestones is empty, not absent", () => {
+    const noMilestones = overviewModel(overviewRead({ milestones: read(milestoneRead(0)) }), { projection });
     expect(noMilestones.milestones).toEqual({ kind: "empty" });
   });
 });

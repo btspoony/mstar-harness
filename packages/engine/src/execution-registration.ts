@@ -1,5 +1,5 @@
 /**
- * execution-registration.ts — the ACTIVE registration route: the ONE verb that
+ * why: execution-registration.ts — the ACTIVE registration route: the ONE verb that
  * publishes a reviewed catalog delta together with the execution lifecycle it
  * registers, on the DB authority (primary spec §7).
  *
@@ -18,7 +18,7 @@
  * - records no journal phases. A transaction either commits the lifecycle and
  *   catalog delta together or leaves no partial ACTIVE registration;
  * - NEVER adopts legacy journal work. A `prepared` / `execution-written` row
- *   refuses through `pendingRegistrationOf` + `refusePendingRegistration`;
+ *   refuses through `pendingRegistrationInTransaction` + `refusePendingRegistration`;
  *   recovery is explicit `catalog reconcile --abort` or identity-checked
  *   `catalog purge-registration`, never file-effect adoption;
  * - is idempotent by operation id SEMANTICALLY: a retry of the same reviewed
@@ -39,25 +39,48 @@ import {
   linkCatalogEntitiesOn,
   readCatalogStoreVersionsOn,
   registerCatalogEntityOn,
+  type CatalogEntityInput,
+  type CatalogKey,
+  type CatalogLinkInput,
+  type CatalogReceipt,
   type ComposedStoreRevision,
 } from "./catalog.js";
+import {
+  advanceCollaborationRevision,
+  hasPreparedCompositeIntent,
+  noteOutstandingAcknowledgement,
+  repairCompositeAcknowledgement,
+  remoteCompositeOperationId,
+  reserveCompositeIntent,
+  runCollaborationComposite,
+  type CompositeIntent,
+  type CompositeKey,
+} from "./collaboration-operations.js";
+import { openCollaborationStore, readCollaborationAuthority, readRemoteCacheAuthority, type CollaborationStamp } from "./collaboration-store.js";
+import { resolveCollaborationLocation } from "./collaboration-identity.js";
+import { prepareRemoteProjectWrite } from "./collaboration-remote.js";
 import {
   assertRegisteredCompassDocument,
   assertRegisteredPlanDocuments,
   bindingInputOf,
   canonicalRegistrationIdentity,
   normalizeIterationPlanPaths,
-  pendingRegistrationOf,
+  openSplitJournal,
+  pendingRegistrationInTransaction,
   refusePendingRegistration,
   resolveCatalogExecutionPlan,
+  withSplitJournal,
   workflowEntryOf,
   writeBinding,
   type CatalogExecutionCatalogDelta,
+  type CatalogExecutionPlan,
   type CatalogExecutionReceipt,
   type CatalogExecutionRequest,
   type CatalogExecutionWorkflow,
+  type SplitJournal,
 } from "./catalog-registration.js";
 import { isPlainObject } from "./coordination-write.js";
+import { readCatalogPlanSelection } from "./coordination.js";
 import { canonicalRegisteredPlanPath } from "./plan-path.js";
 import { relative, sep } from "node:path";
 import {
@@ -71,10 +94,13 @@ import {
   withExecutionTransaction,
   writeExecutionCreation,
   writeOperationReceipt,
+  type CreationCatalogSelection,
   type ExecutionCaller,
   type ExecutionContext,
   type ExecutionToken,
+  type ExecutionTransaction,
 } from "./execution-store.js";
+import { StoreError } from "./store-db.js";
 import { selectSemanticFields, type SemanticSelection } from "./recovery-intent.js";
 import { createHash } from "node:crypto";
 import { derivePlanRegistration, stableJson } from "./workflow.js";
@@ -230,6 +256,12 @@ function priorReleaseDelta(workflow: CatalogExecutionWorkflow): CatalogExecution
   };
 }
 
+/** note: Test-only hook observing the split-read→transaction gap of a DB registration. */
+let registrationJournalGapForTest: (() => void) | undefined;
+export function setRegistrationJournalGapForTest(callback: (() => void) | undefined): void {
+  registrationJournalGapForTest = callback;
+}
+
 /**
  * §7 register one execution lifecycle together with its reviewed catalog delta,
  * atomically, on an ACTIVE execution authority.
@@ -288,19 +320,17 @@ export async function commitExecutionRegistration(
   const requestHash = registrationRequestHash(context.caller, identity);
   const legacyRequestHash = legacyRegistrationRequestHash(context.caller, identity);
 
-  return withExecutionTransaction(context, (tx) => {
+  // invariant: §4.1 semantic replay first, BEFORE the collaboration lane is touched: the
+  // retry of the same reviewed intent must not be judged by a CAS — or a
+  // catalog expectation — its own first attempt already advanced, and a lost
+  // response must still be answered when that lane is unavailable.
+  const preflight = await withExecutionTransaction(context, (tx) => {
     assertActiveExecutionAuthority(
       tx,
       `state: ${tx.execution.authorityState}; registration requires the active execution authority. ` +
         `Upgrade required: mstar store upgrade --operator <name>.`,
     );
-    // §4.1 semantic replay first: the retry of the same reviewed intent must not
-    // be judged by a CAS — or a catalog expectation — its own first attempt
-    // already advanced, whatever tokens the caller re-read after the lost
-    // response. Only the CURRENT epoch's committed receipt replays, so an
-    // authority that changed generation under this call is re-resolved instead
-    // of being served (or written to) under a generation that no longer exists.
-    const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+    return readOperationReplay<CatalogExecutionReceipt>(tx, {
       operationId: identity.operationId,
       requestHash,
       legacyRequestHash,
@@ -308,105 +338,634 @@ export async function commitExecutionRegistration(
       planId: null,
       token: { kind: "root", key: [] },
     });
-    if (replayed !== null) return replayed.data;
-
-    // §3.1 only a NEW registration normalizes the pointers (canonical stored
-    // form, containment) and proves the reviewed documents: the committed
-    // attempt already proved them, so its receipt replays even when they have
-    // since been removed, edited or left behind as a dangling alias (I-000868,
-    // PR #578).
-    const plan = resolveCatalogExecutionPlan(context, request);
-    const operationId = plan.request.operationId;
-    // The entry/snapshot pair the review describes: the identity anchors, the
-    // new/unbound/unleased requirement and the plan rows' own seals are the C3
-    // creation gates, reused verbatim.
-    const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
-    assertRegisteredCompassDocument(plan.request.workflow);
-    assertRegisteredPlanDocuments(plan.request.workflow);
-
-    // §3.1 CAS: the parent (root) token of THIS store, epoch and revision.
-    assertExecutionToken(request.expected, {
-      kind: "root",
-      storeId: tx.storeId,
-      epoch: tx.epoch,
-      key: [],
-      revision: tx.execution.revision,
-    });
-
-    // §7 the reviewed catalog expectation, read on THIS transaction's handle so
-    // no concurrent catalog write can move it between this check and the
-    // publish below.
-    const versions = readCatalogStoreVersionsOn(tx.db);
-    if (versions.catalogRevision !== plan.request.expectedCatalogRevision) {
-      throw new CatalogError(
-        "catalog.revision-conflict",
-        `the reviewed delta expects catalog revision ${plan.request.expectedCatalogRevision}, but the store is at ` +
-          `${versions.catalogRevision}; nothing was registered.`,
-      );
-    }
-
-    // A legacy operation still in flight must be settled explicitly before this
-    // ACTIVE transaction can register; it never adopts legacy journal state.
-    const pending = pendingRegistrationOf(tx.db, plan.workflowId);
-    if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
-
-    const now = new Date().toISOString();
-    writeExecutionCreation(tx, { caller: context.caller, creation, now });
-    // §3.1 the ONE shared store revision this accepted multi-domain transaction
-    // advances has already run inside the creation write above, so each reviewed
-    // catalog row JOINS it: the delta's row count never moves
-    // `store_meta.revision`, while the catalog revision keeps advancing once per
-    // published row (that counter is the catalog domain's own).
-    const composed: ComposedStoreRevision = { committedStoreRevision: readCatalogStoreVersionsOn(tx.db).storeRevision };
-
-    for (const [index, entity] of plan.request.delta.entities.entries()) {
-      registerCatalogEntityOn(
-        tx.db,
-        context,
-        entity,
-        {
-          operationId: `${operationId}:entity:${index}`,
-          actor: plan.request.actor,
-        },
-        composed,
-      );
-    }
-    for (const [index, link] of (plan.request.delta.links ?? []).entries()) {
-      linkCatalogEntitiesOn(
-        tx.db,
-        context,
-        link,
-        {
-          operationId: `${operationId}:link:${index}`,
-          actor: plan.request.actor,
-        },
-        composed,
-      );
-    }
-
-    // The binding is written against the revision the delta just published: it
-    // is registration history plus the pin the plan readers consume, never a
-    // pointer that a later catalog edit may move.
-    const published = readCatalogStoreVersionsOn(tx.db);
-    writeBinding(tx.db, plan, bindingInputOf(plan), published.catalogRevision);
-
-    const receipt: CatalogExecutionReceipt = {
-      operationId,
-      workflowId: plan.workflowId,
-      catalogRevision: published.catalogRevision,
-      // ACTIVE creation and catalog publication committed in this transaction.
-      recovered: false,
-    };
-    writeOperationReceipt(tx, {
-      operationId,
-      requestHash,
-      workflowId: plan.workflowId,
-      planId: null,
-      now,
-      receipt: { data: receipt, token: executionRootTokenOf(tx), storeId: tx.storeId, epoch: tx.epoch },
-    });
-    return receipt;
   });
+  if (preflight !== null) {
+    return noteOutstandingAcknowledgement(
+      preflight.data,
+      await repairCompositeAcknowledgement(context, {
+        executionStoreId: preflight.storeId,
+        executionEpoch: preflight.epoch,
+        operationId: identity.operationId,
+      }),
+    );
+  }
+
+  // invariant: A `remote` registration publishes its reviewed catalog delta into ONE project
+  // journal (Q2: outbox operations address one project), so the journal is resolved BEFORE any
+  // reservation exists; an ambiguous or absent project refuses with nothing reserved.
+  const remote = resolveCollaborationLocation(context).mode === "remote";
+  const journalProject = remote ? remoteRegistrationProject(request.workflow) : null;
+  if (remote && journalProject === null) {
+    throw new CatalogError(
+      "catalog.invalid-entity",
+      "A remote registration publishes its catalog delta into one project journal, so the reviewed workflow must name " +
+        "exactly one project (a plan's `project`, or one iteration project). Split a multi-project iteration into one " +
+        "registration per project. Nothing was reserved.",
+    );
+  }
+  // invariant: A legacy operation still in flight must be settled explicitly before this
+  // registration can commit; it never adopts legacy journal state. A SPLIT owner's lane stays
+  // OPEN across the transaction below, so its verdict is read at the transaction's own position
+  // (after the root-token CAS) instead of a stale pre-read. The lane and the execution store are
+  // separate databases and cannot be serialized together — see `SplitJournal` for that residual.
+  const splitJournal = await openSplitJournal(context);
+  // invariant: The witness preflight: a registration publishes the reviewed delta into the
+  // repository's collaboration lane, so that lane must be the ACTIVE one this
+  // operation freezes as its target. It resolves INSIDE the lane guard: a lane that
+  // refuses here (a staged authority) must not strand the connection the split
+  // owner already holds.
+  const prepared = await withSplitJournal(splitJournal, async () => {
+    const target = await collaborationStamp(context);
+    // note: A regression plants a journal row here — after the owner verdict, before the
+    // transaction takes its lock — to prove the verdict is re-read at the transaction position.
+    registrationJournalGapForTest?.();
+    return await withExecutionTransaction(context, (tx) => {
+      // why: Only the CURRENT epoch's committed receipt replays, so an authority that
+      // changed generation under this call is re-resolved instead of being served
+      // (or written to) under a generation that no longer exists.
+      const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+        operationId: identity.operationId,
+        requestHash,
+        legacyRequestHash,
+        workflowId: identity.workflow.workflowId,
+        planId: null,
+        token: { kind: "root", key: [] },
+      });
+      if (replayed !== null) return { kind: "replay" as const, receipt: replayed };
+
+      // why: §3.1 only a NEW registration normalizes the pointers (canonical stored
+      // form, containment) and proves the reviewed documents: the committed
+      // attempt already proved them, so its receipt replays even when they have
+      // since been removed, edited or left behind as a dangling alias (I-000868,
+      // PR #578).
+      const plan = resolveCatalogExecutionPlan(context, request);
+      const operationId = plan.request.operationId;
+      // why: The entry/snapshot pair the review describes: the identity anchors, the
+      // new/unbound/unleased requirement and the plan rows' own seals are the C3
+      // creation gates, reused verbatim.
+      const creation = resolveCreateWorkflow(context.caller, workflowEntryOf(plan, plan.snapshot), plan.snapshot, operationId);
+      if (remote) {
+        // invariant: A plan row's catalog pin names a LOCAL catalog store identity; a remote
+        // registration has no such store, so a pinned row is refused before anything is reserved.
+        const pinned = creation.plans.filter((entry) => entry.pin !== null);
+        if (pinned.length > 0) {
+          throw new StoreError(
+            "collaboration.mode-unavailable",
+            `Plan ${pinned.map((entry) => entry.planId).join(", ")} carries a catalog pin from a local catalog store, which a ` +
+              `remote registration cannot satisfy. Re-register these plans against the provider project, or drop the pin. ` +
+              `Nothing was reserved.`,
+          );
+        }
+      }
+      assertRegisteredCompassDocument(plan.request.workflow);
+      assertRegisteredPlanDocuments(plan.request.workflow);
+
+      // invariant: §3.1 CAS: the parent (root) token of THIS store, epoch and revision.
+      assertExecutionToken(request.expected, {
+        kind: "root",
+        storeId: tx.storeId,
+        epoch: tx.epoch,
+        key: [],
+        revision: tx.execution.revision,
+      });
+
+      // invariant: The pending journal is decided HERE, after the root-token CAS, so a stale
+      // token keeps reporting its conflict instead of the journal verdict. The verdict is read at
+      // this position for both owners: a split owner's held lane is queried now, so a row
+      // committed after the owner was resolved still refuses.
+      const pending = pendingRegistrationInTransaction(splitJournal, tx.db, plan.workflowId);
+      if (pending !== null) refusePendingRegistration(plan.workflowId, pending);
+
+      // Create-only admission: a workflow identity another lifecycle already
+      // holds is a deterministic conflict, so it is refused BEFORE the catalog
+      // delta publishes. `writeExecutionCreation` remains the authoritative check
+      // at finalization; admitting it here is what keeps a duplicate from
+      // publishing an effect and then reporting an unresumable partial. The
+      // wording is kept identical to that guard deliberately.
+      // simplify: a second copy of the create-only guard, not yet composable
+      // because execution-store keeps `assertWorkflowIdentityIsNew` private.
+      // upgrade: export `assertWorkflowIdentityIsNew` from execution-store and
+      // compose the guard, or when a third copy would be required.
+      const existing = tx.db
+        .prepare("select revision from execution_workflows where workflow_id = ?")
+        .get(plan.workflowId) as { revision?: unknown } | undefined;
+      if (existing !== undefined) {
+        throw new ExecutionError(
+          "execution.not-empty",
+          `execution_workflows already holds workflow ${plan.workflowId} (revision ${String(existing.revision)}). A workflow ` +
+            `identity is create-only: re-creating it never restores registry membership, resets revisions or rewrites its ` +
+            `rows. Nothing was created.`,
+        );
+      }
+
+      const key: CompositeKey = { executionStoreId: tx.storeId, executionEpoch: tx.epoch, operationId };
+      // why: The reviewed catalog expectation is a transport constraint, not business
+      // intent: a resumed reservation keeps the value its FIRST attempt admitted,
+      // so an interruption that already published the delta still resumes under
+      // the revision the delta was reviewed against.
+      const expectedCatalogRevision = frozenCatalogExpectation(tx, key) ?? plan.request.expectedCatalogRevision;
+      const intent: CompositeIntent = {
+        key,
+        kind: "execution-register",
+        requestHash,
+        target,
+        scope: { workflowId: plan.workflowId, planId: null },
+        actor: plan.request.actor,
+        expectedExecution: executionRootTokenOf(tx),
+        // invariant: The frozen payload IS the resume identity: the reviewed workflow, its
+        // delta and the catalog revision they were reviewed against. A changed
+        // document or expectation cannot reinterpret a pending registration.
+        frozenPayload: stableJson({
+          operationId,
+          actor: plan.request.actor,
+          workflow: plan.request.workflow,
+          delta: plan.request.delta,
+          expectedCatalogRevision,
+        }),
+      };
+      // note: The reservation spends none of the execution facts: the creation is
+      // create-only and commits at finalization.
+      const reservation = reserveCompositeIntent(tx, intent, { revision: tx.execution.revision });
+      return {
+        kind: "reserved" as const,
+        intent: { ...intent, requestHash: reservation.requestHash },
+        plan,
+        creation,
+        expectedCatalogRevision,
+      };
+    });
+  });
+  if (prepared.kind === "replay") {
+    return noteOutstandingAcknowledgement(
+      prepared.receipt.data,
+      await repairCompositeAcknowledgement(context, {
+        executionStoreId: prepared.receipt.storeId,
+        executionEpoch: prepared.receipt.epoch,
+        operationId: identity.operationId,
+      }),
+    );
+  }
+
+  const { plan, creation, expectedCatalogRevision } = prepared;
+  // invariant: The pinned catalog identities live on the collaboration lane: read them
+  // BEFORE the composite's execution finalization, so no cross-file read runs
+  // inside a write transaction. Entities this delta publishes join the evidence
+  // deterministically (the apply transaction publishes exactly them).
+  const pinnedPlanIds = [...new Set(creation.plans.filter((entry) => entry.pin !== null).map((entry) => entry.planId))];
+  const selection = remote ? { storeId: null, planIds: [] } : await readCatalogPlanSelection(context.harnessDir, pinnedPlanIds);
+  const reviewedPlanIds = (plan.request.delta.entities ?? [])
+    .filter((entity) => entity.kind === "plan")
+    .map((entity) => entity.id);
+  const creationCatalog: CreationCatalogSelection = {
+    storeId: selection.storeId,
+    planIds: [...new Set([...selection.planIds, ...reviewedPlanIds])],
+  };
+  return runCollaborationComposite<CatalogExecutionReceipt>(context, prepared.intent, {
+    apply(handle) {
+      // why: §7 the reviewed catalog expectation, re-read under the writer lock so no
+      // concurrent catalog write can move it between the review and the publish.
+      const before = readCatalogStoreVersionsOn(handle.db);
+      if (before.catalogRevision !== expectedCatalogRevision) {
+        throw new CatalogError(
+          "catalog.revision-conflict",
+          `the reviewed delta expects catalog revision ${expectedCatalogRevision}, but the collaboration catalog is at ` +
+            `${before.catalogRevision}; nothing was registered.`,
+        );
+      }
+      // why: §3.1 ONE collaboration revision advance for the whole effect transaction:
+      // every published row joins it instead of moving the counter again.
+      const composed: ComposedStoreRevision = { committedStoreRevision: advanceCollaborationRevision(handle) };
+      const entities: PublishedRegistrationEntity[] = [];
+      for (const [index, entity] of plan.request.delta.entities.entries()) {
+        const receipt = registerCatalogEntityOn(
+          handle.db,
+          context,
+          entity,
+          { operationId: `${plan.request.operationId}:entity:${index}`, actor: plan.request.actor },
+          composed,
+        );
+        entities.push({
+          reviewed: { kind: entity.kind, id: entity.id },
+          published: { kind: receipt.kind, id: receipt.id, revision: receipt.revision },
+        });
+      }
+      for (const [index, link] of (plan.request.delta.links ?? []).entries()) {
+        linkCatalogEntitiesOn(
+          handle.db,
+          context,
+          link,
+          { operationId: `${plan.request.operationId}:link:${index}`, actor: plan.request.actor },
+          composed,
+        );
+      }
+      // invariant: The reviewed catalog EFFECT facts the execution half must pin: the exact
+      // committed catalog revision and the row each reviewed entity resolved to
+      // (a location collision attaches to an existing id instead of a new one).
+      return stableJson({ catalogRevision: readCatalogStoreVersionsOn(handle.db).catalogRevision, entities });
+    },
+    async remote(context) {
+      // invariant: The provider journal IS the remote catalog. The reviewed delta is frozen as one
+      // project-replace against the observed journal head; portable identity, metadata and
+      // lifecycle publish, while checkout-only location facts stay out of the document.
+      const operationId = remoteCompositeOperationId(prepared.intent.key);
+      return prepareRemoteProjectWrite(context, {
+        projectId: journalProject as string,
+        operationId,
+        executionKey: { ...prepared.intent.key, operationId },
+        reservation: prepared.intent.key,
+        next: (current) => {
+          const entities = current.catalogEntities as Array<Record<string, unknown>>;
+          const nextEntities = [...entities];
+          for (const entity of plan.request.delta.entities) {
+            const desired = portableCatalogRow(entity);
+            const existing = nextEntities.find((row) => row.kind === entity.kind && row.id === entity.id);
+            if (existing !== undefined) {
+              // invariant: An observed row that ALREADY carries exactly the reviewed portable
+              // content is the same published outcome, so it is adopted: a correction after a
+              // partially settled repair publishes only what is missing instead of replaying (or
+              // silently overwriting) settled rows. Different content is another write, not a
+              // duplicate of this review, and is refused.
+              if (!samePortableCatalogRow(existing, desired)) {
+                throw new CatalogError(
+                  "catalog.duplicate",
+                  `${entity.kind} ${entity.id} is already registered in the observed project with different content; ` +
+                    `nothing was enqueued. Settle the reviewed field first with its own remote catalog write ` +
+                    `(\`mstar catalog update ${entity.kind} ${entity.id} --project ${journalProject as string} ` +
+                    `--expect <observed-revision> --operation-id <uuid> --actor <role>\`), dispatch and confirm that ` +
+                    `journal write, re-observe, then reissue this SAME registration: the settled row is adopted ` +
+                    `identically instead of rewritten.`,
+                );
+              }
+              continue;
+            }
+            nextEntities.push(desired);
+          }
+          const known = new Set(nextEntities.map((row) => `${String(row.kind)}:${String(row.id)}`));
+          let nextLinks = [...(current.catalogLinks as Array<Record<string, unknown>>)];
+          for (const link of plan.request.delta.links ?? []) {
+            for (const endpoint of [link.from, link.to]) {
+              if (!known.has(`${endpoint.kind}:${endpoint.id}`)) {
+                throw new CatalogError(
+                  "catalog.link-refused",
+                  `${endpoint.kind} ${endpoint.id} is not registered in the observed project; a dangling link is never published.`,
+                );
+              }
+            }
+            const desired = portableCatalogLink(link);
+            // invariant: A reviewed relation is ONE edge of the journal: its identity is its endpoints
+            // and relation, and its ordinal is content. EVERY row the journal carries for that identity
+            // is replaced by that one reviewed edge (the reviewed ordinal wins), so a journal that
+            // already duplicated the membership settles as one edge instead of publishing a second
+            // parallel one the finalization would decline.
+            nextLinks = [...nextLinks.filter((row) => !samePortableLinkEndpoints(row, desired)), desired];
+          }
+          return { ...current, catalogEntities: nextEntities, catalogLinks: nextLinks };
+        },
+        origin: {
+          verb: "execution-register",
+          request: { projectId: journalProject, delta: plan.request.delta },
+        },
+      });
+    },
+    finalize(tx, receipt) {
+      const facts = remote
+        ? remoteRegistrationFacts(receipt.facts, plan.request.delta, journalProject as string)
+        : registrationEffectFacts(receipt.facts);
+      const binding = plan.request.delta.binding;
+      const bound = facts.entities.find(
+        (entity) => entity.reviewed.kind === binding.catalogKind && entity.reviewed.id === binding.catalogId,
+      );
+      if (bound === undefined) {
+        throw new StoreError(
+          "store.corrupt",
+          `the committed catalog effect of registration ${JSON.stringify(prepared.intent.key.operationId)} carries no ` +
+            `published row for its binding entity ${binding.catalogKind} ${JSON.stringify(binding.catalogId)}; the binding is ` +
+            `not written from a guessed identity.`,
+        );
+      }
+      const now = new Date().toISOString();
+      writeExecutionCreation(tx, { caller: context.caller, creation, catalog: creationCatalog, now });
+      // invariant: The binding records the row the catalog effect COMMITTED, pinned to the
+      // exact catalog revision in that receipt — never a later re-read state.
+      writeBinding(
+        tx.db,
+        plan,
+        bound.published.id,
+        { ...bindingInputOf(plan), id: bound.published.id },
+        receipt.catalogRevision,
+      );
+      const result: CatalogExecutionReceipt = {
+        operationId: plan.request.operationId,
+        workflowId: plan.workflowId,
+        catalogRevision: receipt.catalogRevision,
+        recovered: false,
+      };
+      writeOperationReceipt(tx, {
+        operationId: plan.request.operationId,
+        requestHash: prepared.intent.requestHash,
+        workflowId: plan.workflowId,
+        planId: null,
+        now,
+        receipt: { data: result, token: executionRootTokenOf(tx), storeId: tx.storeId, epoch: tx.epoch },
+        allowReservedIntent: true,
+      });
+      return result;
+    },
+    remoteIds: () => [remoteCompositeOperationId(prepared.intent.key)],
+  });
+}
+
+/** note: One reviewed catalog entity and the catalog row the effect committed for it. */
+type PublishedRegistrationEntity = Readonly<{
+  reviewed: CatalogKey;
+  published: Readonly<{ kind: string; id: string; revision: number }>;
+}>;
+
+/** note: The recorded catalog expectation of a pending reservation, or null for a new admission. */
+function frozenCatalogExpectation(tx: ExecutionTransaction, key: CompositeKey): number | null {
+  const row = tx.db
+    .prepare(
+      "select frozen_payload from execution_collaboration_intents where execution_store_id = ? and execution_epoch = ? " +
+        "and operation_id = ? and phase = 'prepared'",
+    )
+    .get(key.executionStoreId, key.executionEpoch, key.operationId) as { frozen_payload?: unknown } | undefined;
+  if (typeof row?.frozen_payload !== "string") return null;
+  try {
+    const parsed: unknown = JSON.parse(row.frozen_payload);
+    return isPlainObject(parsed) && typeof parsed.expectedCatalogRevision === "number"
+      ? parsed.expectedCatalogRevision
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** note: The committed catalog effect facts a finalization pins, validated before use. */
+function registrationEffectFacts(facts: string): { catalogRevision: number; entities: PublishedRegistrationEntity[] } {
+  const parsed: unknown = JSON.parse(facts);
+  if (!isPlainObject(parsed) || typeof parsed.catalogRevision !== "number" || !Array.isArray(parsed.entities)) {
+    throw new StoreError("store.corrupt", "the committed registration effect carries no readable catalog facts");
+  }
+  return parsed as unknown as { catalogRevision: number; entities: PublishedRegistrationEntity[] };
+}
+
+/**
+ * note: The ONE project journal a remote registration addresses. A plan names its project
+ * directly; an iteration names exactly one project for a remote registration, since one outbox
+ * operation addresses one journal. Null means the reviewed workflow does not decide it.
+ */
+function remoteRegistrationProject(workflow: CatalogExecutionWorkflow): string | null {
+  if (workflow.kind === "plan") {
+    const project = workflow.options.project;
+    return typeof project === "string" && project.trim() !== "" ? project.trim() : null;
+  }
+  const declared = workflow.options.projects ?? (workflow.options.project === undefined ? [] : [workflow.options.project]);
+  const projects = [...new Set(declared.filter((entry) => typeof entry === "string" && entry.trim() !== ""))];
+  return projects.length === 1 ? projects[0]! : null;
+}
+
+/** note: One reviewed catalog entity as the PORTABLE row a remote project journal publishes. */
+function portableCatalogRow(entity: CatalogEntityInput): Record<string, unknown> {
+  return {
+    kind: entity.kind,
+    id: entity.id,
+    title: entity.title,
+    description: entity.description ?? null,
+    documentKind: entity.documentKind ?? null,
+    lifecycle: entity.lifecycle ?? "active",
+    revision: 1,
+  };
+}
+
+/** note: One reviewed link as the portable journal row (an absent ordinal is the journal's 0). */
+function portableCatalogLink(link: CatalogLinkInput): Record<string, unknown> {
+  return {
+    fromKind: link.from.kind,
+    fromId: link.from.id,
+    relation: link.relation,
+    toKind: link.to.kind,
+    toId: link.to.id,
+    ordinal: link.ordinal ?? 0,
+  };
+}
+
+/**
+ * invariant: The portable content of one journal row, compared field by field: the metadata and
+ * lifecycle a registration publishes, at the journal's own normalization (`description` and
+ * `documentKind` null, `lifecycle` active). The row's own revision is not reviewed content.
+ * Checkout-only location facts (`rootKind`, `relativePath`) are never part of the journal.
+ */
+function samePortableCatalogRow(row: Record<string, unknown>, desired: Record<string, unknown>): boolean {
+  const field = (value: unknown): unknown => value ?? null;
+  return (
+    row.kind === desired.kind &&
+    row.id === desired.id &&
+    row.title === desired.title &&
+    field(row.description) === desired.description &&
+    field(row.documentKind) === desired.documentKind &&
+    (row.lifecycle ?? "active") === desired.lifecycle
+  );
+}
+
+/**
+ * note: The IDENTITY of one journal link: its endpoints and relation. The ordinal is content (the
+ * order within that relation), so the same edge at another ordinal is the same membership, not a
+ * second one.
+ */
+function samePortableLinkEndpoints(row: Record<string, unknown>, desired: Record<string, unknown>): boolean {
+  return (
+    row.fromKind === desired.fromKind &&
+    row.fromId === desired.fromId &&
+    row.relation === desired.relation &&
+    row.toKind === desired.toKind &&
+    row.toId === desired.toId
+  );
+}
+
+/**
+ * invariant: The refusal of a settled remote effect that does not carry the reviewed business
+ * outcome. It names the operation and record the provider actually settled and a supported
+ * same-outcome correction: a re-observed, NEW registration of the SAME workflow adopts the rows
+ * the settlement already carries identically and publishes only what is missing, so settled work
+ * is never re-sent or overwritten. A settlement that CHANGED a reviewed field is not corrected by
+ * reissuing alone — that reissue meets `catalog.duplicate` — so the caller supplies that field's
+ * own reviewed settlement as the ONE ordered route, addressed at the SAME project journal.
+ */
+function remoteEffectMismatch(
+  settled: ReadonlyArray<{ operationId: string; recordId: string | null }>,
+  what: string,
+  details: Record<string, unknown>,
+  recovery?: string,
+): StoreError {
+  const operations = settled.map((entry) => entry.operationId).join(", ") || "(unrecorded)";
+  const records = settled.map((entry) => entry.recordId).filter((id): id is string => id !== null);
+  const route =
+    recovery ??
+    `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+      `${settled[0]?.operationId ?? "<uuid>"}\`, then re-observe the project with ` +
+      `\`mstar store collaboration remote observe --harness <abs> --input <file|->\` and reissue this SAME registration ` +
+      `for the SAME workflow under a NEW operation id: rows the settlement already carries identically are adopted, only ` +
+      `the missing work is published, and the settled effect is never re-sent.`;
+  return new StoreError(
+    "remote.effect-mismatch",
+    `the confirmed provider effect ${operations}${records.length === 0 ? "" : ` (record ${records.join(", ")})`} ${what}, ` +
+      `so the reviewed registration's business outcome never fully landed and the execution binding is not written from ` +
+      `a guessed identity. ${route}`,
+    {
+      settled_operations: settled.map((entry) => entry.operationId),
+      settled_records: records,
+      // invariant: The settled provider work is DURABLE; a replayed decline names it so the
+      // operator never re-sends it while the execution acknowledgement stays unapplied.
+      confirmed_components: settled.map((entry) => `provider:${entry.operationId}`),
+      recovery: route,
+      ...details,
+    },
+  );
+}
+
+/**
+ * invariant: The effect facts a REMOTE registration's finalization pins. The confirmed EVENT each
+ * receipt names is the published content — the original event, or the confirmed repair's own
+ * replacement — so the reviewed delta's NORMALIZED PORTABLE FIELDS and LINKS must all be readable
+ * in one of those journals before any binding is written from them. Presence of a `(kind, id)` is
+ * never enough: a settlement that alters a reviewed title/lifecycle or drops a `belongs-to` link is
+ * disclosed and declined (`remote.effect-mismatch`), never finalized from the original request. The
+ * portable document holds no catalog revision, so the pinned revision is 0 rather than a local
+ * counter.
+ */
+function remoteRegistrationFacts(
+  facts: string,
+  delta: CatalogExecutionCatalogDelta,
+  projectId: string,
+): { catalogRevision: number; entities: PublishedRegistrationEntity[] } {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(facts);
+  } catch {
+    parsed = null;
+  }
+  if (!isPlainObject(parsed) || !("remote" in parsed) || !Array.isArray(parsed.remote)) {
+    throw new StoreError(
+      "store.corrupt",
+      "the committed remote registration effect carries no readable remote facts",
+    );
+  }
+  const rows = new Map<string, Record<string, unknown>>();
+  const links: Array<Record<string, unknown>> = [];
+  const settled: Array<{ operationId: string; recordId: string | null }> = [];
+  for (const entry of parsed.remote) {
+    if (!isPlainObject(entry) || !isPlainObject(entry.event)) {
+      throw new StoreError(
+        "collaboration.unreadable",
+        "the confirmed remote registration effect carries no readable provider event, so it proves no published row",
+      );
+    }
+    const change = entry.event.change;
+    if (
+      !isPlainObject(change) ||
+      change.kind !== "project-replace" ||
+      !isPlainObject(change.project) ||
+      !Array.isArray(change.project.catalogEntities)
+    ) {
+      throw new StoreError(
+        "collaboration.unreadable",
+        "the confirmed remote registration effect is not a readable project journal with catalog rows",
+      );
+    }
+    settled.push({
+      operationId: typeof entry.operationId === "string" ? entry.operationId : "(unrecorded)",
+      recordId: typeof entry.recordId === "string" ? entry.recordId : null,
+    });
+    for (const row of change.project.catalogEntities) {
+      if (!isPlainObject(row) || typeof row.kind !== "string" || typeof row.id !== "string") continue;
+      rows.set(`${row.kind}:${row.id}`, row);
+    }
+    for (const link of Array.isArray(change.project.catalogLinks) ? change.project.catalogLinks : []) {
+      if (isPlainObject(link)) links.push(link);
+    }
+  }
+  for (const entity of delta.entities) {
+    const row = rows.get(`${entity.kind}:${entity.id}`);
+    if (row === undefined) {
+      throw remoteEffectMismatch(settled, `publishes no ${entity.kind} ${JSON.stringify(entity.id)} row`, {
+        missing_entity: { kind: entity.kind, id: entity.id },
+      });
+    }
+    if (!samePortableCatalogRow(row, portableCatalogRow(entity))) {
+      throw remoteEffectMismatch(
+        settled,
+        `publishes ${entity.kind} ${JSON.stringify(entity.id)} with different portable content than the reviewed delta`,
+        { mismatched_entity: { kind: entity.kind, id: entity.id } },
+        `Inspect the settled effect with \`mstar store collaboration remote outbox-show --harness <abs> --operation ` +
+          `${settled[0]?.operationId ?? "<uuid>"}\`; re-observe the settled project with ` +
+          `\`mstar store collaboration remote observe --harness <abs> --input <file|->\`; settle the reviewed field in ` +
+          `that journal with \`mstar catalog update ${entity.kind} ${entity.id} --project ${projectId} ` +
+          `--expect <observed-revision> --operation-id <uuid> --actor <role>\` plus the reviewed ` +
+          `--title/--description/--document-kind/--lifecycle; dispatch and confirm that write with ` +
+          `\`mstar store collaboration remote outbox-dispatch\` and \`outbox-receipt\`; re-observe the confirmed journal ` +
+          `again; then reissue this SAME registration for the SAME workflow under a NEW operation id: the settled row ` +
+          `is adopted identically and is never rewritten.`,
+      );
+    }
+  }
+  for (const link of delta.links ?? []) {
+    const desired = portableCatalogLink(link);
+    // invariant: One reviewed relation is exactly ONE journal edge, proved by identity (endpoints and
+    // relation); its ordinal is content, so a settled edge at another ordinal is settled, while a
+    // second parallel edge for the same relation means the reviewed membership was duplicated.
+    const edges = links.filter((row) => samePortableLinkEndpoints(row, desired)).length;
+    if (edges !== 1) {
+      throw remoteEffectMismatch(
+        settled,
+        edges === 0
+          ? `publishes no ${link.from.kind} ${JSON.stringify(link.from.id)} ${link.relation} ${link.to.kind} ` +
+              `${JSON.stringify(link.to.id)} link`
+          : `publishes ${String(edges)} parallel ${link.from.kind} ${JSON.stringify(link.from.id)} ${link.relation} ` +
+              `${link.to.kind} ${JSON.stringify(link.to.id)} edges for one reviewed relation`,
+        {
+          ...(edges === 0 ? { missing_link: { from: { kind: link.from.kind, id: link.from.id }, relation: link.relation, to: { kind: link.to.kind, id: link.to.id } } } : {}),
+          link_edges: edges,
+        },
+      );
+    }
+  }
+  return {
+    catalogRevision: 0,
+    entities: delta.entities.map((entity) => {
+      const row = rows.get(`${entity.kind}:${entity.id}`) as Record<string, unknown>;
+      return {
+        reviewed: { kind: entity.kind, id: entity.id },
+        published: {
+          kind: entity.kind,
+          id: entity.id,
+          revision: typeof row.revision === "number" ? row.revision : 1,
+        },
+      };
+    }),
+  };
+}
+
+/** note: The frozen collaboration target stamp of this repository's ACTIVE lane. */
+async function collaborationStamp(context: ExecutionContext): Promise<CollaborationStamp> {
+  // invariant: A `remote` checkout's registration publishes its catalog delta into the provider
+  // journal, so its stamp is the private cache's own identity, never a local lane.
+  if (resolveCollaborationLocation(context).mode === "remote") {
+    const authority = await readRemoteCacheAuthority(context);
+    return { repoKey: authority.repoKey, mode: "remote", storeId: authority.storeId, epoch: authority.epoch };
+  }
+  // invariant: WRITE admission: the binding must hold before this verb reserves an intent,
+  // so an unbound checkout refuses here instead of after the reservation.
+  const handle = await openCollaborationStore(context, "write");
+  try {
+    return {
+      repoKey: handle.authority.repoKey,
+      mode: handle.authority.mode,
+      storeId: handle.authority.storeId,
+      epoch: handle.authority.epoch,
+    };
+  } finally {
+    handle.close();
+  }
 }
 
 /**
@@ -481,9 +1040,10 @@ function catalogDeltaFor(workflow: CatalogExecutionWorkflow): CatalogExecutionCa
   };
 }
 /**
- * Register a shipped workflow on the ACTIVE store. Expectations are read from
- * one transaction so the root token and catalog revision describe one snapshot;
- * commitExecutionRegistration rechecks both under its own atomic write.
+ * Register a shipped workflow on the ACTIVE store. The reviewed catalog
+ * revision is read from the repository's ACTIVE collaboration lane (the catalog
+ * moved there), the root token from one execution transaction, and
+ * `commitExecutionRegistration` rechecks both under its own composite.
  *
  * §4.1 the recorded receipt is resolved BEFORE the optional supplied
  * expectations are enforced: an identical retry after a lost response
@@ -549,76 +1109,102 @@ export async function registerShippedCatalogExecution(
   // id keeps its single lookup plus the legacy fingerprints.
   const legacyOperationIds =
     input.operationId === undefined ? legacyDerivedOperationIds(input.actor, identity) : [];
-  const resolved = await withExecutionTransaction<
-    { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; catalogRevision: number }
-  >(context, (tx) => {
-    const expected = executionRootTokenOf(tx);
-    // §4.1 resolve the recorded receipt FIRST: a retry that re-presents the
-    // constraints its own first attempt advanced must replay through
-    // `readOperationReplay` (the one idempotency rule) instead of being judged
-    // stale before the lookup. Only a genuinely new attempt is constrained.
-    const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-      operationId: identity.operationId,
-      requestHash,
-      legacyRequestHash: replayHashes,
-      workflowId: identity.workflow.workflowId,
-      planId: null,
-      token: { kind: "root", key: [] },
-    });
-    if (replayed !== null) return { replayed: replayed.data };
-    for (const legacyOperationId of legacyOperationIds) {
-      // A previous release addressed this same intent by a derived id this
-      // version no longer computes: its receipt replays here instead of the
-      // retry being judged a NEW registration (which would refuse
-      // `execution.not-empty`).
-      const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
-        operationId: legacyOperationId,
+  const replay = await withExecutionTransaction<
+    { replayed: CatalogExecutionReceipt } | { expected: ExecutionToken; resuming: boolean }
+  >(
+    context,
+    (tx) => {
+      const expected = executionRootTokenOf(tx);
+      // invariant: §4.1 resolve the recorded receipt FIRST: a retry that re-presents the
+      // constraints its own first attempt advanced must replay through
+      // `readOperationReplay` (the one idempotency rule) instead of being judged
+      // stale before the lookup. Only a genuinely new attempt is constrained.
+      const replayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+        operationId: identity.operationId,
         requestHash,
         legacyRequestHash: replayHashes,
         workflowId: identity.workflow.workflowId,
         planId: null,
         token: { kind: "root", key: [] },
       });
-      if (legacyReplayed !== null) return { replayed: legacyReplayed.data };
-    }
-    // A NEW shipped registration normalizes the pointers (canonical stored
-    // form, containment) and proves its reviewed documents here; the replayed
-    // operation id above already proved them and keeps its receipt (I-000868,
-    // PR #578).
-    const canonical = resolveCatalogExecutionPlan(context, request);
-    assertRegisteredCompassDocument(canonical.request.workflow);
-    assertRegisteredPlanDocuments(canonical.request.workflow);
-    const versions = readCatalogStoreVersionsOn(tx.db);
-    if (input.expected !== undefined) {
-      // The ADDRESS half keeps its own precise refusal; the REVISION half is
-      // compared below so this seam can name the recovery for a stale root
-      // expectation instead of the bare shared message.
-      assertExecutionToken(input.expected, {
-        kind: "root",
-        storeId: tx.storeId,
-        epoch: tx.epoch,
-        key: [],
-      });
-      if (input.expected !== expected) {
-        throw new ExecutionError(
-          "execution.stale-token",
-          "the supplied root expectation is not this store's current execution token. Re-read the current root token " +
-            "with `mstar status validate` (output field data.token) and retry with it; an operation id already committed " +
-            "for this intent replays instead of being refused.",
-        );
+      if (replayed !== null) return { replayed: replayed.data };
+      for (const legacyOperationId of legacyOperationIds) {
+        // invariant: A previous release addressed this same intent by a derived id this
+        // version no longer computes: its receipt replays here instead of the
+        // retry being judged a NEW registration (which would refuse
+        // `execution.not-empty`).
+        const legacyReplayed = readOperationReplay<CatalogExecutionReceipt>(tx, {
+          operationId: legacyOperationId,
+          requestHash,
+          legacyRequestHash: replayHashes,
+          workflowId: identity.workflow.workflowId,
+          planId: null,
+          token: { kind: "root", key: [] },
+        });
+        if (legacyReplayed !== null) return { replayed: legacyReplayed.data };
       }
-    }
-    if (input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== versions.catalogRevision) {
-      throw new CatalogError(
-        "catalog.revision-conflict",
-        `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the store is at ` +
-          `${versions.catalogRevision}. Read the current store and catalog revisions (the ACTIVE catalog-revisions read), ` +
-          "or omit the catalog expectation on the shipped registration so it derives the current revision, then retry.",
-      );
-    }
-    return { expected, catalogRevision: versions.catalogRevision };
+      // A NEW shipped registration normalizes the pointers (canonical stored
+      // form, containment) and proves its reviewed documents here; the replayed
+      // operation id above already proved them and keeps its receipt (I-000868,
+      // PR #578).
+      const canonical = resolveCatalogExecutionPlan(context, request);
+      assertRegisteredCompassDocument(canonical.request.workflow);
+      assertRegisteredPlanDocuments(canonical.request.workflow);
+      if (input.expected !== undefined) {
+        // why: The ADDRESS half keeps its own precise refusal; the REVISION half is
+        // compared below so this seam can name the recovery for a stale root
+        // expectation instead of the bare shared message.
+        assertExecutionToken(input.expected, {
+          kind: "root",
+          storeId: tx.storeId,
+          epoch: tx.epoch,
+          key: [],
+        });
+        if (input.expected !== expected) {
+          throw new ExecutionError(
+            "execution.stale-token",
+            "the supplied root expectation is not this store's current execution token. Re-read the current root token " +
+              "with `mstar status validate` (output field data.token) and retry with it; an operation id already committed " +
+              "for this intent replays instead of being refused.",
+          );
+        }
+      }
+      // why: An operation whose catalog effect committed while its finalization was
+      // interrupted is RESOLVED here (the reservation is the durable record), so
+      // the composite adopts the expectation that attempt froze instead of the
+      // retry being judged a new attempt against the moved catalog.
+      const resuming = hasPreparedCompositeIntent(tx, {
+        executionStoreId: tx.storeId,
+        executionEpoch: tx.epoch,
+        operationId: identity.operationId,
+      });
+      return { expected, resuming };
+    },
+  );
+  if ("replayed" in replay) return replay.replayed;
+  // why: The reviewed catalog revision belongs to the repository's ACTIVE
+  // collaboration lane, not to this execution store: a NEW attempt pins the
+  // revision it is reviewed against, and the published delta then joins it. A
+  // resumed operation keeps the expectation its first attempt admitted. A
+  // `remote` checkout's lane is its private cache — `readCollaborationAuthority`
+  // refuses the local lane outright.
+  const authority =
+    resolveCollaborationLocation(context).mode === "remote"
+      ? await readRemoteCacheAuthority(context)
+      : await readCollaborationAuthority(context);
+  if (!replay.resuming && input.expectedCatalogRevision !== undefined && input.expectedCatalogRevision !== authority.catalogRevision) {
+    throw new CatalogError(
+      "catalog.revision-conflict",
+      `the supplied catalog expectation is ${input.expectedCatalogRevision}, but the collaboration catalog is at ` +
+        `${authority.catalogRevision}. Read the current store and catalog revisions (the ACTIVE catalog-revisions read), ` +
+        "or omit the catalog expectation on the shipped registration so it derives the current revision, then retry.",
+    );
+  }
+  return commitExecutionRegistration(context, {
+    ...request,
+    expectedCatalogRevision: replay.resuming
+      ? input.expectedCatalogRevision ?? authority.catalogRevision
+      : authority.catalogRevision,
+    expected: replay.expected,
   });
-  if ("replayed" in resolved) return resolved.replayed;
-  request.expectedCatalogRevision = resolved.catalogRevision;
-  return commitExecutionRegistration(context, { ...request, expected: resolved.expected });
 }

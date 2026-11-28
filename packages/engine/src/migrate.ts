@@ -1,69 +1,4 @@
-/**
- * Engine migrate module — the PURE legacy v1 conversion the direct
- * store-upgrade importer consumes.
- *
- * `convertLegacyV1Tree(root)` reads a v1 root `status.json` tree and returns
- * the in-memory v2 workflow snapshots plus the registration identities they
- * imply. It writes nothing, and it is the only code that still reads the v1
- * root shape (`version: 1`, root `plans[]`, root `metadata`).
- *
- * The former executable v1-to-v2 file-staging writer is retired: the archive
- * copy, the snapshot/notes/register/root-v2 write phases and the root
- * `withStatusWriteLock` they ran under are gone with the pre-activation file
- * route. The supported route for a workspace that still holds legacy files is
- * `mstar store upgrade --operator <name>`, which imports recognizable v1/v2
- * sources straight into the native execution authority and leaves every legacy
- * source byte untouched (retry is the same public operation).
- *
- * Frozen conversion semantics (architect, writing-specialist-corrected,
- * observed live tree 2026-08-19):
- * - **Grouping:** every plan row lifts into exactly one snapshot — the
- * iteration whose `{ITERATION_DIR}` compass frontmatter registers its id
- * (`iterations/<id>/delivery-compass.md` files only; the
- * `delivery-compass.<role>.md` review-chain variants are NOT grouping
- * sources). Row id is read from `id` OR the legacy `plan_id` key. A
- * registered id with NO status row (compacted away — 23 observed at
- * fixture freeze 2026-08-19; the canonical frozen count lives in
- * `test/fixtures/migrate-real/status.json`) is recorded on the owning
- * snapshot's `legacy_metadata.compact_missing[]` — never fabricated as a
- * row.
- * Unregistered rows become standalone plan-type snapshots.
- * - **Snapshot status mapping:** iteration snapshot status = compass
- * frontmatter (`active|locked` -> `running`; `completed` -> `completed`);
- * standalone rows `Done` -> `completed`, `InProgress|InReview` ->
- * `running`, `Blocked` -> `paused`, `Todo` -> `paused`; nothing maps to
- * `failed|stopped` from v1 data (those states are born in the v3 runtime).
- * Row-level plan statuses stay VERBATIM inside `plans[]`.
- * - **Field lift:** root `metadata` execution-policy keys
- * (`plan_parallelism`/`worktree_mode`/`push_policy`) -> snapshot
- * `execution_policy` (first-class); `iteration_base_branch`/
- * `target_branch`/`spec_integration_branch` -> `branch`;
- * `control_worktree_path` -> `integration_worktree_path` (the v1 root
- * metadata key is consumed under its historical name; the canonical
- * snapshot field is the integration checkout);
- * `integration_merge_lease` -> top-level `integration_merge_lease`; all of
- * these land on the ACTIVE iteration snapshot (status `running`; v3.0.0
- * today). `harness_root` is dropped as redundant with a `legacy_metadata`
- * note; `metadata.updated_at` becomes the root `updated_at`; ALL other/
- * unknown root-metadata keys land in the active snapshot
- * `legacy_metadata` — nothing dropped silently.
- * - **Nothing else lifts.** Residual registers, roadmap seeds and note
- * ledgers have their own supported routes (`mstar store migrate` /
- * `mstar roadmap import` / the append log); this conversion only produces
- * execution authority, and the source bytes for every one of them stay on
- * disk untouched.
- *
- * No fs writes happen anywhere in this module: every returned path is
- * harness-relative and derived, and each lifecycle id that becomes a path
- * segment (v1 row `id`/`plan_id`, compass `iteration_id`) must pass
- * `assertSafePathComponent` or the conversion is refused BEFORE any result is
- * produced. Duplicate v1 plan ids never abort the conversion: the first row in
- * the documented stable order (plan id, then owning lifecycle id, then row
- * ordinal) survives and every later duplicate is reported in
- * `duplicatePlanIds`, so the caller can refuse it as its own skippable source
- * instead of one duplicated agent-authored row blocking every healthy sibling.
- * All timestamps derive from legacy data (deterministic, no clock reads).
- */
+/** see packages/engine/src/migrate.ts - Engine migrate module — the PURE legacy v1 conversion the direct store-upgrade importer consumes. `convertLegacyV1Tree(root)` reads a v1 root `status.json` tree and returns the in-memory v2 workflow snapshots plus the registration identities they imply. It writes nothing, and it is the only code that still reads the v1 root shape (`version: 1`, root `plans[]`, root `metadata`). The former executable v1-to-v2 file-staging writer is retired: the archive copy, the snapshot/notes/register/root-v2 write phases and the root `withStatusWriteLock` they ran under are gone with the pre-activation file route. The supported route for a workspace that still holds legacy files is `mstar store upgrade --operator <name>`, which imports recognizable v1/v2 sources straight into the native execution authority and leaves every legacy source byte untouched (retry is the same public operation). Frozen conversion semantics (architect, writing-specialist-corrected, observed live tree 2026-08-19): - **Grouping:** every plan row lifts into exactly one snapshot — the iteration whose `{ITERATION_DIR}` compass frontmatter registers its id (`iterations/<id>/delivery-compass.md` files only; the `delivery-compass.<role>.md` review-chain variants are NOT grouping sources). Row id is read from `id` OR the legacy `plan_id` key. A registered id with NO status row (compacted away — 23 observed at fixture freeze 2026-08-19; the canonical frozen count lives in `test/fixtures/migrate-real/status.json`) is recorded on the owning snapshot's `legacy_metadata.compact_missing[]` — never fabricated as a row. Unregistered rows become standalone plan-type snapshots. - **Snapshot status mapping:** iteration snapshot status = compass frontmatter (`active|locked` -> `running`; `completed` -> `completed`); standalone rows `Done` -> `completed`, `InProgress|InReview` -> `running`, `Blocked` -> `paused`, `Todo` -> `paused`; nothing maps to `failed|stopped` from v1 data (those states are born in the v3 runtime). Row-level plan statuses stay VERBATIM inside `plans[]`. - **Field lift:** root `metadata` execution-policy keys (`plan_parallelism`/`worktree_mode`/`push_policy`) -> snapshot `execution_policy` (first-class); `iteration_base_branch`/ `target_branch`/`spec_integration_branch` -> `branch`; `control_worktree_path` -> `integration_worktree_path` (the v1 root metadata key is consumed under its historical name; the canonical snapshot field is the integration checkout); `integration_merge_lease` -> top-level `integration_merge_lease`; all of these land on the ACTIVE iteration snapshot (status `running`; v3.0.0 today). `harness_root` is dropped as redundant with a `legacy_metadata` note; `metadata.updated_at` becomes the root `updated_at`; ALL other/ unknown root-metadata keys land in the active snapshot `legacy_metadata` — nothing dropped silently. - **Nothing else lifts.** Residual registers, roadmap text and note ledgers have their own supported routes (`mstar store migrate` / the append log; roadmap prose is history after 4.x and its remaining facts are captured as issues, milestones or `STRATEGY.md`); this conversion only produces execution authority, and the source bytes for every one of them stay on disk untouched. No fs writes happen anywhere in this module: every returned path is harness-relative and derived, and each lifecycle id that becomes a path segment (v1 row `id`/`plan_id`, compass `iteration_id`) must pass `assertSafePathComponent` or the conversion is refused BEFORE any result is produced. Duplicate v1 plan ids never abort the conversion: the first row in the documented stable order (plan id, then owning lifecycle id, then row ordinal) survives and every later duplicate is reported in `duplicatePlanIds`, so the caller can refuse it as its own skippable source instead of one duplicated agent-authored row blocking every healthy sibling. All timestamps derive from legacy data (deterministic, no clock reads). */
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -826,7 +761,7 @@ export function convertLegacyV1Tree(root: string, declarations: DeliveryLiftDecl
   }
   if (activeIterations.length === 0 && metadata.program_roadmap !== undefined) {
     dispositions.push(
-      "root metadata program_roadmap was not imported because no active iteration exists to carry it as workflow metadata; status.json is preserved. Recover through the supported project-roadmap authoring path (`mstar roadmap import` preview/review/apply or revision-guarded `mstar roadmap replace`), using `_default` when no project is identified",
+      "root metadata program_roadmap was not imported: the roadmap domain is retired and stores no document. status.json is preserved. Capture what the text still describes with `mstar issue add` (a piece of work) or `mstar milestone add` (a goal), put direction prose in STRATEGY.md, then leave the file as history; the 4.x export window is the only roadmap reader left",
     );
   }
   if (activeIterations.length === 0 && metadata.integration_merge_lease !== undefined) {

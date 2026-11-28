@@ -1,62 +1,4 @@
-/**
- * Engine-status pre-step catalog — the ONE unified `mstar-engine`
- * row appended at `agent/pre-step`. *
- * `preStepCatalogListener` delegates through `next()` and appends the unified
- * catalog message (ONE compact lifecycle delta line) to the composed step
- * messages, change-gated per session+workspace: first emission, then a
- * rendered-text change only. The panel projection is compared separately, so a
- * panel-only change still persists the payload without spending a model row on
- * it. The block is a PROJECTION of the payload — the open-item rollup (counts
- * and detail rows), the branch policy, plan row scopes, the knowledge digest,
- * the compass direction and the agent-flow ledger stay payload-only (the panel
- * renders them from the persisted emission), and each dropped fact is read on
- * demand from its own authority: `mstar status tech-debt` for the open-issue
- * rollup,
- * `mstar roadmap show` / the compass document for direction and branch policy,
- * `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single
- * `status` command that serves them. ONE exception keeps a line: when the
- * issue authority could not be READ at all, the row renders a fixed failure
- * disclosure (`issues: unavailable (…)`), because "no open issues" and "the
- * rollup was never read" are different states and the on-demand command cannot
- * distinguish them for a model that has no reason to run it. Counts never
- * return: a readable authority renders nothing. The version / harness-dir /
- * enforcement watermark stays in the payload and in the always-on system
- * prompt — never in the row text. A workspace with no resolved
- * `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache
- * (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps
- * the hot path a timestamp compare + Map lookup between refreshes.
- *
- * v3 per-lifecycle aggregation :
- * the state + iteration sections aggregate the SELECTED workflow lifecycle
- * (compass v3.0.0 § Catalog selection rule — `resolveReadWorkflow` in
- * `workflow-selection.ts`): the session's scope/cwd/durable pick, else the
- * only active entry, else the latest terminal snapshot by mtime for an EMPTY
- * active registry; N>1 with no binding is the picker error, never first entry.
- * verbatim, `agentFlow` from the selected workflow's native event rows, open
- * issues from the issue authority, and roadmap milestones from the store
- * roadmap authority — never from retired root or workflow files.
- * The direction one-liner and the iteration gate come
- * from the SELECTED snapshot's own `compass_ref` (harness-relative, its
- * frontmatter `iteration_id` matching the snapshot id, `status` active|locked)
- * — never a directory-wide first-active compass scan.
- *
- * Session-scoped catalog identity (D4): the cache key is
- * `harnessDir + session.header.id + cwd + effective hint`, so two sessions in
- * one workspace (even the same cwd) can never share a payload; a session with
- * no stable id is built UNCACHED rather than served another session's
- * selection. The apply-scoped invalidation keeps every current session key per
- * harness dir and evicts them all on a ledger change; a picker commit
- * additionally drops that session's key (and its re-emission digest).
- *
- * Module boundary: no barrel — the entry imports by explicit relative path;
- * the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`,
- * `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`,
- * `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`,
- * `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and
- * the two renderers/projections — plus the `gateSegment` and `plansSegment`
- * they share with the always-on digest — are exported so both modes are
- * unit-testable.
- */
+/** see packages/dsh/src/gates/catalog.ts - Engine-status pre-step catalog — the ONE unified `mstar-engine` row appended at `agent/pre-step`. * `preStepCatalogListener` delegates through `next()` and appends the unified catalog message (ONE compact lifecycle delta line) to the composed step messages, change-gated per session+workspace: first emission, then a rendered-text change only. The panel projection is compared separately, so a panel-only change still persists the payload without spending a model row on it. The block is a PROJECTION of the payload — the open-item rollup (counts and detail rows), the branch policy, plan row scopes, the knowledge digest, the compass direction and the agent-flow ledger stay payload-only (the panel renders them from the persisted emission), and each dropped fact is read on demand from its own authority: `mstar status tech-debt` for the open-issue rollup, the compass document for direction and branch policy, `{KNOWLEDGE_DIR}` for the knowledge documents. There is no single `status` command that serves them. ONE exception keeps a line: when the issue authority could not be READ at all, the row renders a fixed failure disclosure (`issues: unavailable (…)`), because "no open issues" and "the rollup was never read" are different states and the on-demand command cannot distinguish them for a model that has no reason to run it. Counts never return: a readable authority renders nothing. The version / harness-dir / enforcement watermark stays in the payload and in the always-on system prompt — never in the row text. A workspace with no resolved `{HARNESS_DIR}` composes no row at all. The per-workspace TTL cache (`buildCatalogPayload` / `catalogPayloadFor`, Config `catalogTtlMs`) keeps the hot path a timestamp compare + Map lookup between refreshes. v3 per-lifecycle aggregation : the state + iteration sections aggregate the SELECTED workflow lifecycle (compass v3.0.0 § Catalog selection rule — `resolveReadWorkflow` in `workflow-selection.ts`): the session's scope/cwd/durable pick, else the only active entry, else the latest terminal snapshot by mtime for an EMPTY active registry; N>1 with no binding is the picker error, never first entry. verbatim, `agentFlow` from the selected workflow's native event rows, open issues from the issue authority, and milestone names from the store milestone rollup — never from retired root or workflow files. The direction one-liner and the iteration gate come from the SELECTED snapshot's own `compass_ref` (harness-relative, its frontmatter `iteration_id` matching the snapshot id, `status` active|locked) — never a directory-wide first-active compass scan. Session-scoped catalog identity (D4): the cache key is `harnessDir + session.header.id + cwd + effective hint`, so two sessions in one workspace (even the same cwd) can never share a payload; a session with no stable id is built UNCACHED rather than served another session's selection. The apply-scoped invalidation keeps every current session key per harness dir and evicts them all on a ledger change; a picker commit additionally drops that session's key (and its re-emission digest). Module boundary: no barrel — the entry imports by explicit relative path; the wiring exports (`preStepCatalogListener`, `buildCatalogPayload`, `DEFAULT_CATALOG_TTL_MS`, `CatalogCacheEntry` / `EmissionDigest`, `PreStepCatalogOptions`, `panelDigestOf`, `renderEngineStatusCatalog`, `createCatalogInvalidation` / `CatalogInvalidation`) are entry-internal, and the two renderers/projections — plus the `gateSegment` and `plansSegment` they share with the always-on digest — are exported so both modes are unit-testable. */
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { basename, isAbsolute, join, relative, sep } from 'node:path'
 import { type Context } from '@deepseek-ai/cordis'
@@ -64,13 +6,13 @@ import {
   evaluatePhaseGate,
   listCatalog,
   parseCompassFrontmatter,
-  queryDashboard,
+  queryMilestoneNames,
+  queryOpenIssueRollup,
   resolveRepoEnforcement,
   withStoreRead,
-  listRoadmapAuthority,
 } from '@mstar-harness/engine'
 import type { DshSelectedGeneration } from '@mstar-harness/engine'
-import type { IssuePage, ReadProjection, StoreContext } from '@mstar-harness/engine'
+import type { ReadProjection, StoreContext } from '@mstar-harness/engine'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import type { PreStepDecision } from '@deepseek-ai/dsh-agent'
 import type {
@@ -85,7 +27,7 @@ import type {
   MstarHarnessState,
   MstarIterationGateView,
   ResidualFindingView,
-  RoadmapSourceView,
+  MilestoneSourceView,
   StoreFactsView,
   WorkflowSelectionView,
 } from '../types.ts'
@@ -110,13 +52,10 @@ export const DEFAULT_CATALOG_TTL_MS = 60_000
 const ISSUE_SEVERITIES = ['critical', 'high', 'medium', 'low', 'nit'] as const
 
 /**
- * How many open issues one catalog refresh will enumerate before it discloses
- * that the rollup is a partial view (the count then carries the page bound in
- * its text). The issue page API caps one request at 200 rows, so the rollup
- * pages; the usual harness has tens of open issues and never reaches the cap.
+ * One issue page's row cap (issue contract §5: `limit` max 200) — the
+ * knowledge-digest page size. The open-issue rollup itself is ONE scoped SQL
+ * aggregate (`queryOpenIssueRollup`), never a page walk.
  */
-const ISSUE_ROLLUP_MAX_PAGES = 5
-/** One issue page's row cap (issue contract §5: `limit` max 200). */
 const ISSUE_PAGE_LIMIT = 200
 
 /** The plugin's own manifest version (single-version invariant; own manifest first). */
@@ -711,16 +650,19 @@ export function gateSegment(gate: IterationGateView): string {
 
 /**
  * The PANEL-relevant projection of one payload, as the panel side of the
- * emission digest's comparison: the payload JSON with
- * `state.storeFacts.storeRevision` normalized to `null`.
+ * emission digest's comparison: the payload JSON with the collaboration
+ * observation's volatile fields (`state.storeFacts.storeRevision`,
+ * `state.storeFacts.asOf`) normalized away.
  *
- * Why exactly that field: emitting persists the payload (`persistEngineStatusSnapshot`),
- * and that store write advances the shared store revision 1:1 — so comparing
- * raw payloads would read the emission's own side effect as a change and
- * re-persist every step, recreating the per-turn repetition the change-driven
- * cadence removes. Every other payload field is either static or a real fact
- * the panel renders (e.g. `state.residualFindings[].title` changes the panel
- * without changing the row text, so it must still trigger a persist).
+ * Why exactly those fields: emitting persists the payload
+ * (`persistEngineStatusSnapshot`), and that store write advances the shared
+ * store revision 1:1 — so comparing raw payloads would read the emission's own
+ * side effect as a change and re-persist every step, recreating the per-turn
+ * repetition the change-driven cadence removes. `asOf` is when each read
+ * established its own snapshot, so it changes on every build by construction.
+ * Every other payload field is either static or a real fact the panel renders
+ * (e.g. `state.residualFindings[].title` changes the panel without changing the
+ * row text, so it must still trigger a persist).
  *
  * This is deliberately WIDER than the model row: the row renders a compact
  * delta, so a projection change that the row cannot show (`state.residuals`,
@@ -737,7 +679,10 @@ export function panelDigestOf(payload: MstarEngineStatusPayload): string {
   if (state === null || state.storeFacts === undefined) return JSON.stringify(payload)
   return JSON.stringify({
     ...payload,
-    state: { ...state, storeFacts: { ...state.storeFacts, storeRevision: null } },
+    state: {
+      ...state,
+      storeFacts: { ...state.storeFacts, storeRevision: null, asOf: null },
+    },
   })
 }
 
@@ -853,7 +798,7 @@ function harnessStateSource(
       plans,
       residuals,
       residualFindings,
-      project: projectRollupSource(facts.roadmap, facts.residuals),
+      project: projectRollupSource(facts.milestones, facts.residuals),
       iterationBaseBranch: str(branch?.base) ?? str(compassFields?.iteration_base_branch) ?? null,
       targetBranch: str(branch?.target) ?? str(compassFields?.target_branch) ?? null,
       specIntegrationBranch: str(branch?.integration),
@@ -907,7 +852,7 @@ function selectionErrorState(
     // open-item facts.
     residuals: facts.residuals,
     residualFindings: facts.residualFindings,
-    project: projectRollupSource(facts.roadmap, facts.residuals),
+    project: projectRollupSource(facts.milestones, facts.residuals),
     iterationBaseBranch: null,
     targetBranch: null,
     specIntegrationBranch: null,
@@ -922,14 +867,11 @@ function selectionErrorState(
   }
 }
 
-/**
- * The project rollup uses only roadmap records read from the store authority.
- * The issue counts are independent and remain available if that read fails.
- */
-function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
+/** see packages/engine/src/store-read.ts - the rollup uses only store-read milestone records. */
+function projectRollupSource(milestones: ProjectMilestoneFacts, residuals: readonly HarnessResidualView[]): MstarHarnessProject {
   return {
-    milestones: roadmap.milestones,
-    roadmapSource: roadmap.source,
+    milestones: milestones.names,
+    milestoneSource: milestones.source,
     openResiduals: residuals,
   }
 }
@@ -942,14 +884,14 @@ function projectRollupSource(roadmap: ProjectRoadmapFacts, residuals: readonly H
  * path; the synchronous builders fall back to {@link UNREAD_STORE_FACTS},
  * which says so instead of pretending the rollup is empty.
  */
-interface ProjectRoadmapFacts {
-  readonly milestones: readonly string[]
-  readonly source: RoadmapSourceView
+interface ProjectMilestoneFacts {
+  readonly names: readonly string[]
+  readonly source: MilestoneSourceView
 }
 
 interface StoreFacts {
   readonly source: StoreFactsView
-  readonly roadmap: ProjectRoadmapFacts
+  readonly milestones: ProjectMilestoneFacts
   readonly residuals: readonly HarnessResidualView[]
   readonly residualFindings: readonly ResidualFindingView[] | null
   readonly knowledge: { readonly docCount: number; readonly categories: readonly string[] } | null
@@ -963,14 +905,15 @@ const UNREAD_STORE_FACTS: StoreFacts = {
     kind: 'unavailable',
     projection: null,
     storeRevision: null,
+    completeness: 'unavailable',
+    asOf: null,
     diagnostic: 'the issue/catalog store was not read for this build',
   },
-  roadmap: {
-    milestones: [],
+  milestones: {
+    names: [],
     source: {
       kind: 'unavailable',
-      absentProjectIds: [],
-      diagnostic: 'the roadmap authority was not read for this build',
+      diagnostic: 'the milestone rollup was not read for this build',
     },
   },
   residuals: [],
@@ -978,62 +921,57 @@ const UNREAD_STORE_FACTS: StoreFacts = {
   knowledge: null,
 }
 
-/** Read the store-backed roadmap authority once, retaining catalog order. */
-async function readProjectRoadmapFacts(context: StoreContext): Promise<ProjectRoadmapFacts> {
+/**
+ * see packages/engine/src/milestone-store.ts - one read answers every project's milestone names in project-then-ordinal order; the read is execution-free and never paged.
+ */
+async function readProjectMilestoneFacts(context: StoreContext): Promise<ProjectMilestoneFacts> {
   try {
-    const records = await listRoadmapAuthority(context)
-    const milestones: string[] = []
-    const absentProjectIds: string[] = []
-    let hasRoadmap = false
-    for (const record of records) {
-      if (record.roadmap === null) {
-        absentProjectIds.push(record.projectId)
-        continue
-      }
-      hasRoadmap = true
-      milestones.push(...record.content.milestones)
-    }
-    return {
-      milestones,
-      source: { kind: hasRoadmap ? 'present' : 'absent', absentProjectIds, diagnostic: null },
-    }
+    const envelope = await withStoreRead(context, queryMilestoneNames())
+    return { names: envelope.data.milestones.map((milestone) => milestone.name), source: { kind: 'present', diagnostic: null } }
   } catch (error) {
     return {
-      milestones: [],
-      source: { kind: 'unavailable', absentProjectIds: [], diagnostic: storeRefusalText(error) },
+      names: [],
+      source: { kind: 'unavailable', diagnostic: storeRefusalText(error) },
     }
   }
 }
 
-/** One refresh's open-issue rollup, roadmap source, and knowledge digest. */
+/** see packages/dsh/src/gates/catalog.ts - one refresh's rollup and knowledge digest. */
 async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
   const context: StoreContext = { harnessDir }
-  const roadmap = await readProjectRoadmapFacts(context)
+  const milestones = await readProjectMilestoneFacts(context)
   try {
-    const envelope = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT } }))
-    const items: Array<IssuePage['items'][number]> = [...envelope.data.items]
-    // The rollup counts EVERY open issue: page through the authority's own
-    // order until the reported total is covered (bounded — a capped count
-    // then discloses the bound instead of silently undercounting).
-    let pages = 1
-    while (items.length < envelope.data.total && pages < ISSUE_ROLLUP_MAX_PAGES) {
-      const next = await withStoreRead(context, queryDashboard('issues', { issue: { disposition: 'open', limit: ISSUE_PAGE_LIMIT, offset: items.length } }))
-      if (next.data.items.length === 0) break
-      items.push(...next.data.items)
-      pages += 1
+    // why: ONE scoped collaboration snapshot: totals, grouping and the bounded
+    // preview come from the same read, so no offset page from a different
+    // generation can be added to this one.
+    const envelope = await withStoreRead(context, queryOpenIssueRollup())
+    const observation = envelope.collaboration
+    if (observation === null || observation.completeness === 'unavailable') {
+      return {
+        source: {
+          kind: 'unavailable',
+          projection: null,
+          storeRevision: null,
+          completeness: 'unavailable',
+          asOf: null,
+          diagnostic: observation === null ? 'the collaboration authority did not answer this rollup' : `[${observation.code}] the collaboration authority reported no usable rollup`,
+        },
+        milestones,
+        residuals: [],
+        residualFindings: null,
+        knowledge: null,
+      }
     }
-    const counts = new Map<HarnessResidualSeverity, number>()
-    for (const item of items) counts.set(item.severity, (counts.get(item.severity) ?? 0) + 1)
+    const rollup = envelope.data
     const residuals: HarnessResidualView[] = []
     for (const severity of ISSUE_SEVERITIES) {
-      const count = counts.get(severity)
+      const count = rollup.bySeverity[severity]
       if (count !== undefined && count > 0) residuals.push({ severity, count })
     }
-    // The detail rows keep the AUTHORITY's order (severity rank desc → last
-    // real activity desc → id asc) and its own severity string; `planId`
-    // stays empty — an issue is plan-independent, and its plan/iteration
-    // links are provenance, not a column of a summary row.
-    const residualFindings: ResidualFindingView[] = items.slice(0, 10).map((item) => ({
+    // The preview keeps the authority's own order; `planId` stays empty — an
+    // issue is plan-independent, and its plan/iteration links are provenance,
+    // not a column of a summary row.
+    const residualFindings: ResidualFindingView[] = rollup.recent.map((item) => ({
       planId: '',
       id: item.id,
       severity: item.severity,
@@ -1042,12 +980,14 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
     return {
       source: {
         kind: 'store',
-        projection: envelope.projection.freshness,
+        projection: envelope.projection.observed ? envelope.projection.freshness : null,
         storeRevision: envelope.storeRevision,
-        diagnostic: storeProjectionDiagnostic(envelope.projection, items.length, envelope.data.total),
+        completeness: observation.completeness,
+        asOf: observation.asOf,
+        diagnostic: storeProjectionDiagnostic(envelope.projection, observation),
       },
       residuals,
-      roadmap,
+      milestones,
       residualFindings,
       knowledge: await readKnowledgeDigest(context),
     }
@@ -1057,9 +997,11 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
         kind: 'unavailable',
         projection: null,
         storeRevision: null,
+        completeness: 'unavailable',
+        asOf: null,
         diagnostic: storeRefusalText(error),
       },
-      roadmap,
+      milestones,
       residuals: [],
       residualFindings: null,
       knowledge: null,
@@ -1068,18 +1010,24 @@ async function readStoreFacts(harnessDir: string): Promise<StoreFacts> {
 }
 
 /**
- * The disclosure text of ONE store-backed read: `null` while the projection is
- * current and the count whole, otherwise the named reason — a STALE or
- * UNAVAILABLE projection (execution views may lag; the issue rows read here
- * are authoritative either way) and/or the paging bound.
+ * invariant: The disclosure text of ONE store-backed read: `null` while the projection is
+ * current and the collaboration observation is complete, otherwise the named
+ * reason — a STALE or UNAVAILABLE projection (execution views may lag; the
+ * issue rows read here are authoritative either way) and/or a scoped
+ * collaboration gap. Projection health never stands in for authority.
  */
-function storeProjectionDiagnostic(projection: ReadProjection, counted: number, total: number): string | null {
+function storeProjectionDiagnostic(
+  projection: ReadProjection,
+  observation: { completeness: 'complete' | 'partial'; code?: string },
+): string | null {
   const parts: string[] = []
-  if (projection.freshness !== 'current') {
+  if (projection.observed && projection.freshness !== 'current') {
     const sources = projection.diagnostics.map((diagnostic) => diagnostic.sourceKey).join(', ')
     parts.push(`projection ${projection.freshness}${sources === '' ? '' : ` (${sources})`} — issue rows stay authoritative`)
   }
-  if (counted < total) parts.push(`first ${counted} of ${total} open issues counted`)
+  if (observation.completeness === 'partial') {
+    parts.push(`collaboration partial (${observation.code ?? 'scoped gap'}) — this rollup covers its own scope only`)
+  }
   return parts.length === 0 ? null : parts.join('; ')
 }
 

@@ -1,21 +1,39 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import * as nodeOs from "node:os";
 import path from "node:path";
-import { initializeStore, ISSUE_ACTION_NAMES, openStore } from "@mstar-harness/engine";
+import { ensureCollaborationAuthority, initializeStore, ISSUE_ACTION_NAMES, openStore, registerCatalogEntity } from "@mstar-harness/engine";
 import { admitCommandInput, executeCommand, getCommandDefinitions, getCommandSchemas } from "../src/index.js";
 import { failure as milestoneFailure } from "../src/families/milestone.js";
 import type { CommandEffects, InvocationContext } from "../src/types.js";
 import { z } from "zod";
 
+/**
+ * invariant: Every collaboration lane this file creates belongs under a private home: a
+ * test never writes into the operator's `~/.mstar/repos`.
+ */
+const HOME_ROOT = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-home-"));
+let homeSpy: { mockRestore(): void } | undefined;
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME_ROOT);
+});
+afterAll(() => {
+  homeSpy?.mockRestore();
+  rmSync(HOME_ROOT, { recursive: true, force: true });
+});
+
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
 async function testContext(): Promise<InvocationContext> {
-  const root = mkdtempSync(path.join(os.tmpdir(), "commands-issue-"));
+  const root = mkdtempSync(path.join(nodeOs.tmpdir(), "commands-issue-"));
   roots.push(root);
   const harness = path.join(root, ".mstar");
+  execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
+  writeFileSync(path.join(root, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${root.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").slice(-110)}\n`);
   mkdirSync(harness, { recursive: true });
+  await ensureCollaborationAuthority({ harnessDir: harness });
   await (await initializeStore({ harnessDir: harness })).close();
   const effects: CommandEffects = {
     async readInput() { return ""; },
@@ -415,6 +433,35 @@ describe("issue command family", () => {
     if (exported.status === "ok") expect(exported.data).toMatchObject({ id, title: "Finding" });
   });
 
+  test("collaboration command evidence: list and show carry the read's own observation", async () => {
+    const context = await testContext();
+    const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-evidence", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const { issueId } = added.data as { issueId: string };
+
+    const listed = await definition("issue.list").execute({}, context);
+    expect(listed.status).toBe("ok");
+    if (listed.status !== "ok") return;
+    const page = listed.data as {
+      storeRevision: number;
+      collaboration: { scope: { kind: string; key: string }; completeness: string; asOf: string; revision: number };
+    };
+    // note: The observation is the same read's evidence: its revision IS the page's
+    // reported revision, and it names the normalized filter set it answered.
+    expect(page.collaboration.completeness).toBe("complete");
+    expect(page.collaboration.revision).toBe(page.storeRevision);
+    expect(page.collaboration.scope.kind).toBe("query");
+    expect(page.collaboration.scope.key.startsWith("issues:")).toBe(true);
+    expect(Number.isNaN(Date.parse(page.collaboration.asOf))).toBe(false);
+
+    const shown = await definition("issue.show").execute({ id: issueId }, context);
+    expect(shown.status).toBe("ok");
+    if (shown.status !== "ok") return;
+    const detail = shown.data as { collaboration: { scope: { kind: string; key: string }; revision: number } };
+    expect(detail.collaboration).toMatchObject({ scope: { kind: "query", key: `issue:${issueId}` }, revision: page.storeRevision });
+  });
+
   test("actor-only disposition closes an issue without session authority", async () => {
     const context = await testContext();
     const added = await definition("issue.add").execute({ payload: capture(), operationId: "capture-2", actor: "project-manager" }, context);
@@ -708,26 +755,31 @@ describe("issue command family", () => {
     const seed = added.data as { issueId: string; revision: number };
     const harnessDir = context.controlRoot;
     if (harnessDir === null) throw new Error("test context must provide an isolated harness");
-    const store = await openStore({ harnessDir }, "write");
-    try {
-      store.db.prepare(
-        "insert into catalog_entities(kind,id,title,root_kind,relative_path,registered_at,updated_at) values('project','proj-b','Project B','projects','proj-b/roadmap.md','now','now')",
-      ).run();
-    } finally {
-      store.close();
-    }
+    // invariant: The move's target project is a catalog row, and catalog authority is the
+    // collaboration lane — never the execution store's legacy tables.
+    await registerCatalogEntity({ harnessDir }, {
+      kind: "project", id: "proj-b", title: "Project B", rootKind: "projects", relativePath: "proj-b",
+    }, { operationId: "move-project-b", actor: "project-manager" });
 
     const command = definition("issue.move");
-    expect(command.input.safeParse({
+    // invariant: `--expect-store` is a conditional requirement, so admission enforces it where the
+    // schema alone cannot: the shape without it is refused, and the shape with it is admitted.
+    const contract = getCommandSchemas(getCommandDefinitions()).find((entry) => entry.id === command.id);
+    if (contract === undefined) throw new Error("missing issue.move contract");
+    expect(admitCommandInput(command, {
       id: seed.issueId, actor: "project-manager", expect: seed.revision, payload: { projectId: "proj-b", reason: "belongs to b" },
-    }).success).toBe(false);
+    }, contract).success).toBe(false);
     expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expect", route: "cli", required: true }));
-    expect(command.requirements).toContainEqual(expect.objectContaining({ name: "expectStore", route: "cli", required: true }));
+    expect(command.requirements).toContainEqual(expect.objectContaining({
+      name: "expectStore", route: "cli", required: true, condition: { field: "discard", present: false },
+    }));
 
     const beforeMove = await issueState(context);
-    if (beforeMove.storeMetaRevision === null) throw new Error("the seeded store reports no revision");
+    const beforePage = await definition("issue.list").execute({}, context);
+    if (beforePage.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const beforeRevision = (beforePage.data as { storeRevision: number }).storeRevision;
     const stale = await command.execute({
-      id: seed.issueId, expect: seed.revision, expectStore: beforeMove.storeMetaRevision - 1,
+      id: seed.issueId, expect: seed.revision, expectStore: beforeRevision - 1,
       actor: "project-manager", operationId: "move-stale-store",
       payload: { projectId: "proj-b", reason: "stale store view" },
     }, context);
@@ -735,7 +787,7 @@ describe("issue command family", () => {
     expect(await issueState(context)).toEqual(beforeMove);
 
     const moved = await command.execute({
-      id: seed.issueId, expect: seed.revision, expectStore: beforeMove.storeMetaRevision,
+      id: seed.issueId, expect: seed.revision, expectStore: beforeRevision,
       actor: "project-manager", operationId: "move-public",
       payload: { projectId: "proj-b", reason: "belongs to b" },
     }, context);
@@ -748,9 +800,11 @@ describe("issue command family", () => {
     expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-b", milestoneId: null } });
 
     const afterMove = await issueState(context);
-    if (afterMove.storeMetaRevision === null) throw new Error("the moved store reports no revision");
+    const afterPage = await definition("issue.list").execute({}, context);
+    if (afterPage.status !== "ok") throw new Error("the moved store answered no issue page");
+    const afterRevision = (afterPage.data as { storeRevision: number }).storeRevision;
     const refused = await command.execute({
-      id: seed.issueId, expect: seed.revision + 1, expectStore: afterMove.storeMetaRevision,
+      id: seed.issueId, expect: seed.revision + 1, expectStore: afterRevision,
       actor: "project-manager", operationId: "move-absent",
       payload: { projectId: "proj-absent", reason: "typo" },
     }, context);
@@ -760,6 +814,109 @@ describe("issue command family", () => {
       expect(refused.details?.recovery).toEqual(expect.stringContaining("mstar catalog register"));
     }
   });
+
+  test("the move verb publishes --to-authority, --discard and the unsupported combinations", async () => {
+    const command = definition("issue.move");
+    // note: The staged route's two flags are declared on the one verb, so an operator reads them
+    // from `--help` and a schema reader sees the same keys the CLI accepts.
+    expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "toAuthority", flags: "--to-authority <repo-key>" }));
+    expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "discard", flags: "--discard" }));
+    expect(command.input.safeParse({
+      id: "I-000001", actor: "project-manager", expect: 1, expectStore: 0,
+      payload: { projectId: "proj-b", reason: "belongs to b" }, toAuthority: "github.com/acme/elsewhere",
+    }).success).toBe(true);
+    expect(command.input.safeParse({
+      id: "I-000001", actor: "project-manager", expect: 1, expectStore: 0,
+      payload: { projectId: "proj-b", reason: "belongs to b" }, discard: true,
+    }).success).toBe(true);
+
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-staged-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const storeRevision = (page.data as { storeRevision: number }).storeRevision;
+
+    // invariant: A flag neither route admits refuses by code and names the route that does, instead
+    // of silently treating it as the local project move.
+    const discardedLocally = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-local", discard: true,
+      payload: { projectId: "proj-b", reason: "nothing to abandon" },
+    }, context);
+    expect(discardedLocally).toMatchObject({ status: "refused", code: "issue.scope-refused", details: { paths: ["discard"] } });
+    if (discardedLocally.status === "refused") {
+      expect(discardedLocally.details?.recovery).toEqual(expect.stringContaining("--to-authority"));
+      expect(discardedLocally.message).toEqual(expect.stringContaining("--to-authority"));
+    }
+    const blankAuthority = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-blank-authority", toAuthority: "  ",
+      payload: { projectId: "proj-b", reason: "blank authority" },
+    }, context);
+    expect(blankAuthority).toMatchObject({ status: "refused", code: "issue.scope-refused" });
+    // invariant: An unsupported authority is refused before anything is frozen, and the record's own
+    // project is untouched.
+    const unknownAuthority = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-unknown-authority",
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "typo" },
+    }, context);
+    expect(unknownAuthority).toMatchObject({ status: "refused", code: "collaboration.not-initialized" });
+    if (unknownAuthority.status === "refused") {
+      expect(unknownAuthority.details?.recovery).toEqual(expect.stringContaining("mstar store init"));
+    }
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
+
+    // invariant: `--discard` reaches the staged route's own abandon branch, so its refusal is that
+    // route's (an authority it cannot resolve), never the local project move's. It carries the record
+    // CAS alone: the lane revision is not a base this route can compare.
+    const discarded = await command.execute({
+      id: seed.issueId, expect: seed.revision,
+      actor: "project-manager", operationId: "move-discard-authority", discard: true,
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "abandon a staged move" },
+    }, context);
+    expect(discarded).toMatchObject({
+      status: "refused",
+      code: "collaboration.move-phase-invalid",
+      details: { operation_id: "move-discard-authority" },
+    });
+    // invariant: A store base the route cannot honour is refused by code, never accepted and dropped.
+    const storeBase = await command.execute({
+      id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+      actor: "project-manager", operationId: "move-discard-store-base", discard: true,
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "abandon with a lane base" },
+    }, context);
+    expect(storeBase).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expectStore"] } });
+    // invariant: The two-checkout flags belong to the staged route alone. Without `--to-authority`
+    // neither is read, so each refuses by code BEFORE the local project reassignment would run
+    // instead of it — a request is never answered by a different mutation than it names.
+    for (const flag of ["input", "out"] as const) {
+      const handoffOnly = await command.execute({
+        id: seed.issueId, expect: seed.revision, expectStore: storeRevision,
+        actor: "project-manager", operationId: `move-handoff-no-authority-${flag}`,
+        ...(flag === "input" ? { input: "/nonexistent/handoff.json" } : { out: "/nonexistent/handoff.json" }),
+        payload: { projectId: "proj-b", reason: "handoff without an authority" },
+      }, context);
+      expect(handoffOnly).toMatchObject({
+        status: "refused",
+        code: "issue.scope-refused",
+        details: { paths: [flag] },
+      });
+      if (handoffOnly.status === "refused") {
+        expect(handoffOnly.details?.recovery).toEqual(expect.stringContaining("--to-authority"));
+      }
+    }
+    // invariant: Neither refusal wrote anything: the record keeps its project and its revision.
+    const after = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(after).toMatchObject({ status: "ok", data: { projectId: "proj-a", revision: seed.revision } });
+  }, 60_000);
 
   test("milestone project mismatch refusal names the cause and both alignment routes", () => {
     const envelope = milestoneFailure(
@@ -774,6 +931,80 @@ describe("issue command family", () => {
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("--expect-store"));
     expect(envelope.details?.recovery).toEqual(expect.stringContaining("mstar milestone add"));
   });
+
+  test("discard through the public verb requires the issue-write seat and refuses without mutating", async () => {
+    // invariant: Finding 4 at the public boundary — `--discard` unfreezes a record, so a leaf actor is
+    // refused by the same seat rule the move uses, before the store is touched.
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "discard-seat-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const before = await issueState(context);
+    const refused = await definition("issue.move").execute({
+      id: seed.issueId, expect: seed.revision,
+      actor: "leaf-observer", operationId: "discard-without-seat", discard: true,
+      toAuthority: "github.com/acme/discard-seat-destination",
+      payload: { projectId: "proj-a", reason: "not my seat" },
+    }, context);
+    expect(refused).toMatchObject({ status: "refused", code: "issue.scope-refused" });
+    if (refused.status === "refused") expect(refused.message).toEqual(expect.stringContaining("project-manager"));
+    // invariant: Nothing moved: no ledger row, no staging, no revision change.
+    expect(await issueState(context)).toEqual(before);
+    const shown = await executeCommand("issue.show", { id: seed.issueId }, context);
+    expect(shown).toMatchObject({ status: "ok", data: { revision: seed.revision } });
+  }, 60_000);
+
+  test("the move verb refuses a missing --expect at runtime unless a handoff document supplies the peer half", async () => {
+    // invariant: The flag stays schema-optional ONLY because the exchange's destination half addresses a
+    // record another authority holds. Nothing else may reach a route that reads a local record without its
+    // revision CAS, so the missing flag refuses at execute with the recovery an operator can run.
+    const context = await testContext();
+    const added = await executeCommand("issue.add", { payload: capture(), operationId: "move-expect-seed", actor: "project-manager" }, context);
+    expect(added.status).toBe("ok");
+    if (added.status !== "ok") return;
+    const seed = added.data as { issueId: string; revision: number };
+    const page = await definition("issue.list").execute({}, context);
+    if (page.status !== "ok") throw new Error("the seeded store answered no issue page");
+    const expectStore = (page.data as { storeRevision: number }).storeRevision;
+    const before = await issueState(context);
+    const command = definition("issue.move");
+
+    // note: Every other store/issue revision in this test is current, so the ONLY refusal each call can
+    // meet is the missing flag — the assertion cannot pass on an unrelated CAS failure.
+    const noExpect = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-missing",
+      payload: { projectId: "proj-a", reason: "no revision" },
+    }, context);
+    expect(noExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload" });
+    if (noExpect.status === "refused") {
+      expect(noExpect.details?.paths).toEqual(["expect"]);
+      expect(noExpect.details?.recovery).toEqual(expect.stringContaining("--expect"));
+    }
+    // invariant: The refusal happens before anything is frozen or written.
+    expect(await issueState(context)).toEqual(before);
+
+    // note: The staged route without `--input` is the same shape: it reads a local record, so it needs the CAS.
+    const stagedNoExpect = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-staged",
+      toAuthority: "github.com/acme/never-created-authority",
+      payload: { projectId: "proj-b", reason: "staged without a CAS" },
+    }, context);
+    expect(stagedNoExpect).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["expect"] } });
+
+    // invariant: With `--input` the flag check is skipped: the destination half carries the peer's record,
+    // so the refusal that comes back names the document it could not read, never a missing `expect`.
+    const handoff = await command.execute({
+      id: seed.issueId, expectStore,
+      actor: "project-manager", operationId: "move-expect-handoff",
+      toAuthority: "github.com/acme/never-created-authority",
+      input: "/nonexistent/handoff.json",
+      payload: { projectId: "proj-b", reason: "peer half" },
+    }, context);
+    expect(handoff).toMatchObject({ status: "refused", code: "issue.invalid-payload", details: { paths: ["input"] } });
+  }, 60_000);
 
   test("addressed issue mutations publish issue id and revision CAS minima", () => {
     const addressed = ["occurrence", "triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"];
@@ -792,12 +1023,32 @@ describe("issue command family", () => {
       expect(command.cli.options).toContainEqual(expect.objectContaining({ key: "id", required: false }));
     }
     for (const verb of ["triage", "close", "reopen", "move", "waive", "duplicate", "supersede", "link"]) {
+      // invariant: `issue move`'s destination half of the two-checkout exchange addresses a record
+      // another authority holds, so its revision CAS is required only when no handoff is supplied;
+      // every other route reads the record it writes and requires it unconditionally.
+      const conditional = verb === "move"
+        ? { condition: { field: "input", present: false } }
+        : {};
       expect(definition(`issue.${verb}`).requirements).toContainEqual(
-        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show") }),
+        expect.objectContaining({ name: "expect", required: true, constraint: expect.stringContaining("mstar issue show"), ...conditional }),
       );
       const missingCas = definition(`issue.${verb}`).input.safeParse({
         id: "I-000001", actor: "project-manager", payload: {},
       });
+      if (verb === "move") {
+        // note: the move verb's own admission requires the CAS unless a handoff names the record.
+        const conditionalRequired = definition(`issue.${verb}`).requirements.filter(
+          (entry) => entry.required === true && entry.condition !== undefined,
+        );
+        expect(conditionalRequired).toContainEqual(
+          expect.objectContaining({ name: "expect", condition: { field: "input", present: false } }),
+        );
+        // note: `--expect-store` stays required on this verb, so the CAS-free shape is proved with it.
+        expect(definition(`issue.${verb}`).input.safeParse({
+          id: "I-000001", actor: "project-manager", expectStore: 0, payload: {},
+        }).success).toBe(true);
+        continue;
+      }
       expect(missingCas.success).toBe(false);
     }
   });

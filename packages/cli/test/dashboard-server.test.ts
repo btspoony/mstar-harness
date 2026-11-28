@@ -11,19 +11,30 @@
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import * as nodeOs from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { captureIssue, closeIssue, createExecutionWorkflow, importRoadmapAuthority, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, reviewRoadmapImport, type CaptureInput, type StoreContext, type StoreDb } from "@mstar-harness/engine";
+import { DatabaseSync } from "node:sqlite";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { addMilestone, captureIssue, closeIssue, createExecutionWorkflow, initializeCollaborationStore, initializeStore, listIssues, openStore, readExecutionAuthority, refreshProjections, registerCatalogEntity, resolveCollaborationLocation, updateMilestone, withStoreRead, writeCollaborationBinding, type CaptureInput, type StoreContext } from "@mstar-harness/engine";
 import { startDashboard, type RunningDashboard } from "@mstar-harness/commands/dashboard";
 import { dashboardCss, dashboardHtml, dashboardJs } from "../../commands/src/dashboard/assets.generated";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-dashboard-server-"));
+/** invariant: The user-level collaboration root this suite owns: the real `$HOME` is never read or written. */
+const TEST_HOME = join(ROOT, "home");
+mkdirSync(TEST_HOME, { recursive: true });
+let homeSpy: { mockRestore(): void } | undefined;
 const RECORDED_AT = "2026-09-18T02:00:00.000Z";
 const CSP =
   "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'";
 
+beforeAll(() => {
+  homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => TEST_HOME);
+});
+
 afterAll(() => {
+  homeSpy?.mockRestore();
   rmSync(ROOT, { recursive: true, force: true });
 });
 
@@ -33,30 +44,54 @@ async function workspace(name: string): Promise<{ dir: string; context: StoreCon
   // cwd, so the fixture is a genuine checkout rather than a bare directory.
   spawnSync("git", ["init", "-q", "-b", "main"], { cwd: dir });
   spawnSync("git", ["-c", "user.email=f@f", "-c", "user.name=f", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: dir });
+  // invariant: The origin and `.mstarc` select the collaboration lane; a fresh checkout with
+  // neither cannot resolve a repository authority.
+  spawnSync("git", ["remote", "add", "origin", `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`], { cwd: dir });
+  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
+  // own repository, which never publishes the selector ref.
+  spawnSync(
+    "git",
+    ["config", `url.${dir}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
+    { cwd: dir },
+  );
+  writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   mkdirSync(join(dir, ".mstar"), { recursive: true });
   const context: StoreContext = { harnessDir: join(dir, ".mstar") };
   const handle = await initializeStore(context);
   handle.close();
-  // Normalize the WAL side files (same reason as `withWrite`): a read-only open
-  // right after the initializing writer closed can refuse while the -wal/-shm
-  // pair is still on disk, and every server read opens the store read-only.
+  await initializeCollaborationStore(resolveCollaborationLocation(context));
+  activateCollaboration(context);
+  // invariant: Normalize the WAL side files: a read-only open right after the initializing
+  // writer closed can refuse while the -wal/-shm pair is still on disk, and every
+  // server read opens the store read-only.
   const probe = await openStore(context, "read");
   probe.close();
   return { dir, context };
 }
 
-async function withWrite(context: StoreContext, fn: (db: StoreDb) => void): Promise<void> {
-  const handle = await openStore(context, "write");
+/**
+ * invariant: Publish the staged collaboration lane AND this checkout's binding -- the two
+ * records the real activation writes. An ACTIVE authority is never usable from
+ * an unbound checkout, so a fixture that flips only the lane is refused.
+ */
+function activateCollaboration(context: StoreContext): void {
+  const location = resolveCollaborationLocation(context);
+  const lane = new DatabaseSync(location.dbPath);
+  let storeId = "";
+  let epoch = 0;
   try {
-    fn(handle.db);
+    lane
+      .prepare("update collaboration_meta set authority_state = 'active', activated_at = ? where id = 1")
+      .run(new Date().toISOString());
+    const row = lane.prepare("select store_id, authority_epoch from collaboration_meta where id = 1").get() as
+      | { store_id?: unknown; authority_epoch?: unknown }
+      | undefined;
+    if (typeof row?.store_id === "string") storeId = row.store_id;
+    if (typeof row?.authority_epoch === "number") epoch = row.authority_epoch;
   } finally {
-    handle.close();
+    lane.close();
   }
-  // Normalize the WAL side files: a read-only open right after a writer close
-  // can refuse while the -wal/-shm pair is still on disk, so drain it with one
-  // read open before any server serves this store.
-  const probe = await openStore(context, "read");
-  probe.close();
+  writeCollaborationBinding(context, { repoKey: location.repoKey, mode: location.mode, storeId, epoch, binding: "active" });
 }
 
 async function seedIssue(context: StoreContext, title: string, severity: CaptureInput["severity"], resolved = false): Promise<void> {
@@ -105,7 +140,7 @@ function withoutHarnessDirectory(body: string): string {
 function raw(
 
   input: string,
-  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean } = {},
+  options: { method?: string; headers?: Record<string, string>; authenticated?: boolean; body?: string } = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   const url = new URL(input);
   const suppliedToken = url.searchParams.get("token");
@@ -123,7 +158,7 @@ function raw(
       );
     });
     req.once("error", reject);
-    req.end();
+    req.end(options.body);
   });
 }
 
@@ -282,9 +317,16 @@ describe("API over a real store", () => {
     expect(envelope.data.items.map((row) => row.id)).toEqual(before.items.map((row) => row.id));
     expect(envelope.storeRevision).toBe(before.storeRevision);
 
-    // Read-only: the authoritative rows and revisions are unchanged after the GET.
+    // invariant: Read-only: the authoritative rows and revisions are unchanged after the
+    // GET. `asOf` is each read's own observation instant, so it is the one
+    // field a before/after comparison must normalize away.
     const after = await listIssues(context, {});
-    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+    const evidence = (page: Awaited<ReturnType<typeof listIssues>>): string => {
+      const copy = JSON.parse(JSON.stringify(page)) as { collaboration?: { asOf?: unknown } };
+      if (copy.collaboration !== undefined) delete copy.collaboration.asOf;
+      return JSON.stringify(copy);
+    };
+    expect(evidence(after)).toBe(evidence(before));
   });
 
   test("GET /api/issues/:id answers the detail DTO; unknown id is a structured 404", async () => {
@@ -332,13 +374,13 @@ describe("API over a real store", () => {
     }
   });
 
-  test("POST to the API is refused: the dashboard is read-only", async () => {
+  test("POST to a read route is refused: writes belong to the one milestone route", async () => {
     for (const pathname of ["/api/issues", "/api/workflows"]) {
       const res = await raw(new URL(pathname, server.url).href, { method: "POST", headers: { "content-type": "application/json" } });
       expect(res.status).toBe(405);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };
       expect(body.error.code).toBe("method-not-allowed");
-      expect(body.error.message).toMatch(/read-only/);
+      expect(body.error.message).toMatch(/POST \/api\/milestones/);
     }
   });
 
@@ -358,7 +400,7 @@ describe("API over a real store", () => {
   });
 
   test("traversal and unknown paths are refused without touching the filesystem", async () => {
-    for (const pathname of ["/api/issues/../../etc/passwd", "/api/project", "/api/issues/%2e%2e", "/api/issues/a%2Fb", "/api/roadmap/deep/path"]) {
+    for (const pathname of ["/api/issues/../../etc/passwd", "/api/project", "/api/issues/%2e%2e", "/api/issues/a%2Fb", "/api/roadmap/deep/path", "/api/roadmap"]) {
       const res = await raw(new URL(`http://127.0.0.1:${new URL(server.url).port}${pathname}`));
       expect([400, 404]).toContain(res.status);
       const body = JSON.parse(res.body) as { error: { code: string } };
@@ -377,7 +419,6 @@ describe("API over a real store", () => {
       [`/api/issues?q=${"x".repeat(201)}`, 400, "at most 200 characters"],
       ["/api/issues?limit=201", 400, "limit must be an integer between 1 and 200"],
       ["/api/issues?bogus=1", 400, "not a supported issues query parameter"],
-      ["/api/roadmap", 400, "requires a project query parameter"],
     ];
     for (const [pathname, status, message] of cases) {
       const res = await raw(`http://127.0.0.1:${new URL(server.url).port}${pathname}`);
@@ -386,44 +427,591 @@ describe("API over a real store", () => {
     }
   });
 
+  test("a refusal never echoes an authorization credential from the request path", async () => {
+    // invariant: The detail id reaches a lower-level issue refusal, which the HTTP error body
+    // publishes. A conventional authorization value must be redacted with its scheme.
+    for (const [scheme, secret] of [
+      ["Bearer", "sk-live-bearer"],
+      ["Basic", "dXNlcjpwYXNz"],
+      ["Token", "tok-live-123"],
+      ["bearer", "sk-live-mixed-case"],
+      ["bAsIc", "dXNlcjpwYXNzMixlZA=="],
+      ["toKeN", "tok-live-mixed"],
+    ] as const) {
+      const id = `x%20Authorization:%20${scheme}%20${secret}`;
+      const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("issue.not-found");
+      expect(body.error.message).not.toContain(secret);
+      expect(body.error.message).toContain("{REDACTED}");
+    }
+    // note: An UNLABELLED, mixed-case scheme carries a credential too.
+    for (const [scheme, secret] of [
+      ["bearer", "sk-live-bare"],
+      ["toKeN", "tok-live-bare"],
+    ] as const) {
+      const id = `x%20refused%20${scheme}%20${secret}`;
+      const res = await raw(new URL(`/api/issues/${id}`, server.url).href);
+      expect(res.status).toBe(404);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("issue.not-found");
+      expect(body.error.message).not.toContain(secret);
+      expect(body.error.message).toContain("{REDACTED}");
+    }
+  });
+
+  test("a Digest authorization value is redacted with all its parameters over HTTP", async () => {
+    const header = 'x Authorization: Digest username="Mufasa", realm="test", nonce="abc", response="deadbeef"';
+    const res = await raw(new URL(`/api/issues/${encodeURIComponent(header)}`, server.url).href);
+    expect(res.status).toBe(404);
+    const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("issue.not-found");
+    for (const leaked of ["Mufasa", "test", "abc", "deadbeef"]) expect(body.error.message).not.toContain(leaked);
+    expect(body.error.message).toContain("{REDACTED}");
+  });
+
   test("stale projection is disclosed in the envelope, never hidden", async () => {
-    await withWrite(context, (db) => {
-      db.prepare(
-        "update projection_meta set freshness = 'stale', last_error_json = ? where id = 1",
-      ).run(
-        JSON.stringify({ sources: [{ sourceKey: "workflows", reason: "source-unreadable", message: "snapshot.json is unreadable" }] }),
-      );
-    });
-    const res = await raw(new URL("/api/issues", server.url).href);
-    expect(res.status).toBe(200);
-    const envelope = JSON.parse(res.body) as { projection: { freshness: string; diagnostics: Array<{ sourceKey: string; reason: string }> } };
-    expect(envelope.projection.freshness).toBe("stale");
-    expect(envelope.projection.diagnostics[0]?.sourceKey).toBe("workflows");
+    const { dir, context } = await workspace("stale-projection-");
+    await declareWorkflow(context, "wf-stale-projection");
+    const staleServer = await start(dir);
+    try {
+      // invariant: Publish a generation first, then block the optional catalog input: the
+      // last good generation is retained and must be disclosed as stale, with
+      // its rows, on the execution-backed read.
+      const published = await raw(new URL("/api/workflows", staleServer.url).href);
+      expect(published.status).toBe(200);
+      unlinkSync(resolveCollaborationLocation(context).dbPath);
+      const res = await raw(new URL("/api/workflows", staleServer.url).href);
+      expect(res.status).toBe(200);
+      const envelope = JSON.parse(res.body) as {
+        projection: { freshness: string; diagnostics: Array<{ sourceKey: string }> };
+        data: { items: Array<{ id: string }> };
+      };
+      expect(envelope.projection.freshness).toBe("stale");
+      expect(envelope.projection.diagnostics.map((diagnostic) => diagnostic.sourceKey)).toContain("catalog");
+      expect(envelope.data.items.map((item) => item.id)).toContain("wf-stale-projection");
+    } finally {
+      await staleServer.close();
+    }
   });
 });
 
-describe("roadmap authority API", () => {
-  test("serves imported content without a projection or source file", async () => {
-    const { dir, context } = await workspace("roadmap-authority-");
-    await registerCatalogEntity(context, {
-      kind: "project", id: "proj-roadmap", title: "Roadmap", rootKind: "projects", relativePath: "proj-roadmap",
-    }, { operationId: "register-roadmap-api", actor: "dashboard-test" });
-    const source = join(dir, "roadmap.md");
-    writeFileSync(source, "---\nproject_id: proj-roadmap\ntitle: Roadmap\nstatus: active\ncreated_at: 2026-09-25\n---\n\n## Direction\n\nAuthority survives source removal.\n\n## Notes\n\nVisible explanatory content.\n");
-    const review = await reviewRoadmapImport(context, "proj-roadmap", source);
-    await importRoadmapAuthority(context, review, { operationId: "import-roadmap-api" });
-    unlinkSync(source);
-
-    const server = await start(dir, { project: "proj-roadmap" });
+describe("dashboard collaboration disclosure", () => {
+  test("a missing collaboration authority is a 503, never a 404 or an empty list", async () => {
+    const { dir, context } = await workspace("collaboration-missing-");
+    unlinkSync(resolveCollaborationLocation(context).dbPath);
+    const server = await start(dir);
     try {
-      const response = await raw(new URL("/api/roadmap?project=proj-roadmap", server.url).href);
-      expect(response.status).toBe(200);
-      const envelope = JSON.parse(response.body) as {
-        data: { authority: { state: string }; content: { contentMarkdown: string; sections: Array<{ heading: string }> } };
+      const res = await raw(new URL("/api/issues", server.url).href);
+      expect(res.status).toBe(503);
+      const body = JSON.parse(res.body) as { error: { code: string; message: string } };
+      expect(body.error.code).toBe("collaboration.not-initialized");
+      // why: The refusal keeps its recovery and publishes neither HOME nor the store file.
+      expect(body.error.message).toContain("mstar store init");
+      expect(body.error.message).not.toContain(dir);
+      expect(body.error.message).not.toContain(TEST_HOME);
+      expect(body.error.message).not.toMatch(/\.db\b/);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("an execution-only list serves its rows and discloses the optional gap", async () => {
+    const { dir, context } = await workspace("collaboration-optional-");
+    unlinkSync(resolveCollaborationLocation(context).dbPath);
+    const server = await start(dir);
+    try {
+      const res = await raw(new URL("/api/workflows", server.url).href);
+      expect(res.status).toBe(200);
+      const envelope = JSON.parse(res.body) as {
+        data: { items: unknown[]; total: number };
+        storeRevision: number | null;
+        collaboration: { completeness: string; code: string } | null;
+        execution: unknown;
       };
-      expect(envelope.data.authority.state).toBe("present");
-      expect(envelope.data.content.contentMarkdown).toContain("Authority survives source removal.");
-      expect(envelope.data.content.sections.map((section) => section.heading)).toContain("Notes");
+      // note: Execution data is preserved; the unavailable catalog association is
+      // disclosed and no collaboration counter is claimed.
+      expect(Array.isArray(envelope.data.items)).toBe(true);
+      expect(envelope.data.total).toBe(envelope.data.items.length);
+      expect(envelope.collaboration).toEqual(
+        expect.objectContaining({ completeness: "unavailable", code: "collaboration.not-initialized" }),
+      );
+      expect(envelope.storeRevision).toBeNull();
+      expect(envelope.execution).not.toBeNull();
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("dashboard --project selector", () => {
+  test("refuses an id that only an issue names, and accepts a catalog-backed project", async () => {
+    const { dir, context } = await workspace("project-selector-catalog-");
+    // see packages/cli/test/dashboard-server.test.ts - // note: An issue-only project id is listed by the `projects` view with a synthesized item, but no
+    // catalog row backs it.
+    await captureIssue(context, {
+      projectId: "issue-only-project",
+      title: "captured against an unregistered project",
+      severity: "low",
+      kind: "bug",
+      impact: "i",
+      acceptance: "a",
+      sourceIdentity: "dashboard/selector",
+      rootCauseKey: "dashboard.selector",
+      acceptanceKey: "dashboard.selector.accepted",
+      occurrenceKey: "dashboard-selector-occurrence",
+      sourceKind: "review",
+      location: "packages/cli/test/dashboard-server.test.ts",
+      observedBehavior: "the selector accepted an issue-only id",
+      evidence: ["fixture"],
+      discoveredAt: RECORDED_AT,
+    }, { actor: "project-manager", operationId: "capture-issue-only-project" });
+    await expect(start(dir, { project: "issue-only-project" })).rejects.toThrow(/no catalog project row exists/);
+
+    // see packages/cli/test/dashboard-server.test.ts - // invariant: A registered catalog project is the accepted selector.
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "registered-project", title: "Registered", rootKind: "projects", relativePath: "registered-project" },
+      { operationId: "dashboard-selector-project", actor: "dashboard-test" },
+    );
+    const server = await start(dir, { project: "registered-project" });
+    await server.close();
+  });
+});
+
+describe("the milestone write route", () => {
+  /** see packages/cli/test/dashboard-server.test.ts - The store revision the page would have observed from its overview read. */
+  async function observedRevision(context: StoreContext, projectId: string): Promise<number> {
+    const envelope = await withStoreRead(context, {
+      view: "milestones",
+      needsProjection: false,
+      collaboration: { scope: { kind: "milestone", key: projectId }, required: true, projectIds: [projectId] },
+      execution: "not-requested",
+      run: (sources) => ({ data: null }),
+    } as never);
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      return (lane.prepare("select revision from collaboration_meta where id = 1").get() as { revision: number }).revision;
+    } finally {
+      lane.close();
+      void envelope;
+    }
+  }
+
+  async function post(dir: string, body: Record<string, unknown>) {
+    const server = await start(dir);
+    try {
+      return await raw(new URL("/api/milestones", server.url).href, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    } finally {
+      await server.close();
+    }
+  }
+
+  test("creates and updates a milestone under the observed revision, refusing a stale one", async () => {
+    const { dir, context } = await workspace("milestone-write-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-write-project", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-a");
+
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "First", effortSessions: 3, ordinal: 0 },
+      operationId: "op-create",
+      expectedStoreRevision: revision,
+    });
+    expect(created.status).toBe(200);
+    const receipt = JSON.parse(created.body) as { data: { milestoneId: string; revision: number; storeRevision: number } };
+    expect(receipt.data.revision).toBe(1);
+    expect(receipt.data.storeRevision).toBe(revision + 1);
+
+    // see packages/cli/test/dashboard-server.test.ts - // A write that observed the PRE-write revision is refused with the engine's
+    // own conflict code — never applied, never silently retried.
+    const stale = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: receipt.data.milestoneId,
+      patch: { name: "Renamed" },
+      operationId: "op-stale",
+      expectedStoreRevision: revision,
+    });
+    // see packages/commands/src/dashboard/server.ts - a CAS conflict is 409, so the caller re-reads and retries.
+    expect(stale.status).toBe(409);
+    const refusal = JSON.parse(stale.body) as { error: { code: string; message: string } };
+    expect(refusal.error.code).toBe("milestone.revision-conflict");
+
+    const updated = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: receipt.data.milestoneId,
+      patch: { name: "Renamed" },
+      operationId: "op-update",
+      expectedStoreRevision: receipt.data.storeRevision,
+    });
+    expect(updated.status).toBe(200);
+    expect((JSON.parse(updated.body) as { data: { revision: number } }).data.revision).toBe(2);
+  });
+
+  test("assigns an issue to a milestone and retires it under the observed revision", async () => {
+    const { dir, context } = await workspace("milestone-assign-retire-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-assign-project", actor: "dashboard-test" },
+    );
+    await seedIssue(context, "Assignable offer", "low");
+    const projectRevision = await observedRevision(context, "proj-a");
+
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Sprint", effortSessions: null, ordinal: 0 },
+      operationId: "op-assign-create",
+      expectedStoreRevision: projectRevision,
+    });
+    expect(created.status).toBe(200);
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+
+    // see packages/cli/test/dashboard-server.test.ts - // The offer the picker renders is the project's OPEN issue page: the issue and
+    // the revision the assignment must hash come from the SAME read the page makes.
+    const issues = await listIssues(context, { disposition: "open", projectId: "proj-a", limit: 50, offset: 0 });
+    const offered = issues.items.find((item) => item.title === "Assignable offer");
+    if (offered === undefined) throw new Error("the seeded issue must be offered");
+
+    const assigned = await post(dir, {
+      verb: "assign",
+      projectId: "proj-a",
+      issueId: offered.id,
+      milestoneId: milestone.milestoneId,
+      issueRevision: offered.revision,
+      operationId: "op-assign",
+      expectedStoreRevision: milestone.storeRevision,
+    });
+    expect(assigned.status).toBe(200);
+    const afterAssign = (JSON.parse(assigned.body) as { data: { storeRevision: number } }).data;
+    const after = await listIssues(context, { disposition: "open", projectId: "proj-a", limit: 50, offset: 0 });
+    const assignedRow = after.items.find((item) => item.id === offered.id);
+    expect(assignedRow?.milestoneId).toBe(milestone.milestoneId);
+    // see packages/cli/test/dashboard-server.test.ts - // The assignment moved the issue's own revision, so the picker's next observation differs.
+    expect(assignedRow?.revision).not.toBe(offered.revision);
+
+    // see packages/cli/test/dashboard-server.test.ts - // Retire (remove) the now non-empty milestone: the engine refuses in place, the
+    // route passes the refusal through, and the message names the real cause.
+    const retire = await post(dir, {
+      verb: "remove",
+      projectId: "proj-a",
+      milestoneId: milestone.milestoneId,
+      operationId: "op-retire",
+      expectedStoreRevision: afterAssign.storeRevision,
+    });
+    expect(retire.status).toBe(500);
+    expect((JSON.parse(retire.body) as { error: { code: string } }).error.code).toMatch(/milestone\./);
+  });
+
+  test("retires an EMPTY milestone successfully, and the overview read no longer carries it", async () => {
+    const { dir, context } = await workspace("milestone-retire-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-retire-project", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-a");
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Empty sprint", effortSessions: null, ordinal: 0 },
+      operationId: "op-retire-create",
+      expectedStoreRevision: revision,
+    });
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+    const server = await start(dir);
+    try {
+      const before = await raw(new URL("/api/overview?project=proj-a", server.url).href);
+      expect(before.status).toBe(200);
+      const beforeMilestones = (JSON.parse(before.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
+        .data.milestones.data.milestones;
+      expect(beforeMilestones.map((row) => row.milestoneId)).toContain(milestone.milestoneId);
+
+      const retired = await post(dir, {
+        verb: "remove",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        operationId: "op-retire",
+        expectedStoreRevision: milestone.storeRevision,
+      });
+      expect(retired.status).toBe(200);
+      expect((JSON.parse(retired.body) as { data: { changed: boolean } }).data.changed).toBe(true);
+
+      // see packages/cli/test/dashboard-server.test.ts - // The re-read the page performs no longer carries it.
+      const after = await raw(new URL("/api/overview?project=proj-a", server.url).href);
+      const afterMilestones = (JSON.parse(after.body) as { data: { milestones: { data: { milestones: Array<{ milestoneId: string }> } } } })
+        .data.milestones.data.milestones;
+      expect(afterMilestones).toHaveLength(0);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("the dashboard host's own read/write loop re-reads after a conflict and keeps the typed draft", async () => {
+    // see packages/cli/test/dashboard-server.test.ts - // Drives the SHIPPED host pair — `readProjectMilestones` + `writeMilestone` —
+    // exactly as `ProjectDetailDestination` does, over the real loopback server:
+    // the read that renders the forms supplies the revision, the write carries it,
+    // a conflict triggers the host's re-read, and the draft kept outside the read's
+    // subtree survives that re-read and lands on the retry.
+    const { createMilestoneDraftStore, milestoneDraftTargetKey, readProjectMilestones, writeMilestone } = await import(
+      "../web/projects-data.ts"
+    );
+    const { dir, context } = await workspace("milestone-host-loop-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-host-project", actor: "dashboard-test" },
+    );
+    const server = await start(dir);
+    try {
+      // see packages/cli/test/dashboard-server.test.ts - // The page's first action is a create; the milestone must exist for the forms.
+      const projectRevision = await observedRevision(context, "proj-a");
+      const created = await post(dir, {
+        verb: "create",
+        projectId: "proj-a",
+        input: { name: "Original", effortSessions: null, ordinal: 0 },
+        operationId: "op-host-create",
+        expectedStoreRevision: projectRevision,
+      });
+      const milestone = (JSON.parse(created.body) as { data: { milestoneId: string } }).data;
+
+      // see packages/cli/test/dashboard-server.test.ts - // The browser's `fetch`, against the real server and its token boundary.
+      const token = new URL(server.url).searchParams.get("token")!;
+      const origin = `http://127.0.0.1:${new URL(server.url).port}`;
+      const fetchImpl = ((input: string | URL | Request, init?: RequestInit) => {
+        const raw = String(input);
+        const url = raw.startsWith("/") ? `${origin}${raw}${raw.includes("?") ? "&" : "?"}token=${token}` : raw;
+        return fetch(url, init);
+      }) as unknown as typeof fetch;
+
+      // see packages/cli/test/dashboard-server.test.ts - // The read that renders the forms: the observed revision rides its envelope.
+      const first = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(first.status).toBe("ready");
+      if (first.status !== "ready") return;
+
+      // see packages/cli/test/dashboard-server.test.ts - // Another writer moves the store between the read and the write.
+      await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved elsewhere" }, {
+        operationId: "op-host-other",
+        expectedStoreRevision: first.storeRevision as number,
+      });
+
+      // see packages/cli/test/dashboard-server.test.ts - // The operator's draft lives OUTSIDE the read's subtree — the host's store.
+      const drafts = createMilestoneDraftStore();
+      const target = milestoneDraftTargetKey("proj-a", milestone.milestoneId);
+      drafts.write(target, { name: "Typed in the editor", effort: "4" });
+
+      const stale = await writeMilestone(fetchImpl, {
+        verb: "update",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        patch: { name: "Typed in the editor" },
+        operationId: "op-host-stale",
+        expectedStoreRevision: first.storeRevision as number,
+      });
+      expect(stale).toMatchObject({ status: "refused", code: "milestone.revision-conflict" });
+
+      // see packages/cli/test/dashboard-server.test.ts - // The host's re-read (the conflict's own follow-up) answers the FRESH revision.
+      const second = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(second.status).toBe("ready");
+      if (second.status !== "ready") return;
+      expect(second.storeRevision).not.toBe(first.storeRevision);
+      // see packages/cli/test/dashboard-server.test.ts - // ...and the draft the operator typed survived that re-read untouched.
+      expect(drafts.read(target)).toMatchObject({ name: "Typed in the editor", effort: "4" });
+
+      // see packages/cli/test/dashboard-server.test.ts - // The retry at the fresh revision carries the draft's text and lands.
+      const retried = await writeMilestone(fetchImpl, {
+        verb: "update",
+        projectId: "proj-a",
+        milestoneId: milestone.milestoneId,
+        patch: { name: drafts.read(target)!.name },
+        operationId: "op-host-retry",
+        expectedStoreRevision: second.storeRevision as number,
+      });
+      expect(retried.status).toBe("ok");
+      const settled = await readProjectMilestones(fetchImpl, "proj-a");
+      expect(settled.status).toBe("ready");
+      if (settled.status !== "ready") return;
+      expect(settled.milestones.kind).toBe("populated");
+      if (settled.milestones.kind !== "populated") return;
+      expect(settled.milestones.value.milestones.map((row) => row.name)).toEqual(["Typed in the editor"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a conflict re-read re-arms the write and the operator's draft survives it", async () => {
+    const { dir, context } = await workspace("milestone-conflict-draft-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-a", title: "Project A", rootKind: "projects", relativePath: "proj-a" },
+      { operationId: "milestone-conflict-project", actor: "dashboard-test" },
+    );
+    const staleRevision = await observedRevision(context, "proj-a");
+    const created = await post(dir, {
+      verb: "create",
+      projectId: "proj-a",
+      input: { name: "Original", effortSessions: null, ordinal: 0 },
+      operationId: "op-conflict-create",
+      expectedStoreRevision: staleRevision,
+    });
+    const milestone = (JSON.parse(created.body) as { data: { milestoneId: string; storeRevision: number } }).data;
+
+    // see packages/cli/test/dashboard-server.test.ts - // Another writer moves the store between the page's read and its write.
+    await updateMilestone(context, "proj-a", milestone.milestoneId, { name: "Moved by another writer" }, {
+      operationId: "op-other-writer",
+      expectedStoreRevision: milestone.storeRevision,
+    });
+
+    const stale = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: milestone.milestoneId,
+      patch: { name: "Typed before the conflict" },
+      operationId: "op-conflict",
+      expectedStoreRevision: milestone.storeRevision,
+    });
+    expect(stale.status).toBe(409);
+    expect((JSON.parse(stale.body) as { error: { code: string } }).error.code).toBe("milestone.revision-conflict");
+
+    // see packages/cli/test/dashboard-server.test.ts - // The re-read the page performs answers the FRESH revision; the retained draft
+    // (what the operator typed) is a pure value the host keeps, so the retry sends
+    // exactly it at the new revision and lands.
+    const fresh = await observedRevision(context, "proj-a");
+    expect(fresh).not.toBe(milestone.storeRevision);
+    const retry = await post(dir, {
+      verb: "update",
+      projectId: "proj-a",
+      milestoneId: milestone.milestoneId,
+      patch: { name: "Typed before the conflict" },
+      operationId: "op-conflict-retry",
+      expectedStoreRevision: fresh,
+    });
+    expect(retry.status).toBe(200);
+    const reread = await observedRevision(context, "proj-a");
+    expect(reread).toBeGreaterThan(fresh);
+  });
+
+  test("the milestone read answers without an execution store", async () => {
+    // see packages/engine/src/store-read.ts - the milestone body renders with no execution store.
+    const { dir, context } = await workspace("milestone-read-no-execution-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-solo", title: "Solo", rootKind: "projects", relativePath: "proj-solo" },
+      { operationId: "milestone-read-solo", actor: "dashboard-test" },
+    );
+    const revision = await observedRevision(context, "proj-solo");
+    await addMilestone(
+      context,
+      { projectId: "proj-solo", name: "Ships alone", effortSessions: null, ordinal: 0 },
+      { operationId: "solo-milestone", expectedStoreRevision: revision },
+    );
+    // see packages/engine/src/store-read.ts - nothing about the milestone body may depend on the execution authority.
+    rmSync(join(dir, ".mstar", "store.db"), { force: true });
+    const server = await start(dir);
+    try {
+      const read = await raw(new URL("/api/milestones?project=proj-solo", server.url).href);
+      expect(read.status).toBe(200);
+      const body = JSON.parse(read.body) as { data: { milestones: Array<{ name: string }> } };
+      expect(body.data.milestones.map((row) => row.name)).toEqual(["Ships alone"]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  test("a project selector is checked against its own row, not the whole list", async () => {
+    const { dir, context } = await workspace("milestone-selector-scope-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj-wanted", title: "Wanted", rootKind: "projects", relativePath: "proj-wanted" },
+      { operationId: "selector-scope-wanted", actor: "dashboard-test" },
+    );
+    // see packages/commands/src/dashboard/server.ts - the selector check reads only the requested project's own row.
+    const server = await start(dir, { project: "proj-wanted" });
+    await server.close();
+    // see packages/commands/src/dashboard/server.ts - an id with no catalog row is still refused.
+    await expect(start(dir, { project: "proj-never-registered" })).rejects.toThrow(/no catalog project row exists/);
+  });
+
+  test("a slow upload does not hold the queue unrelated reads share", async () => {
+    const { dir } = await workspace("milestone-body-deadline-");
+    const server = await start(dir);
+    const base = new URL(server.url);
+    // see packages/commands/src/dashboard/server.ts - the body is read outside the queue, under its own deadline.
+    const pending = http.request({
+      host: "127.0.0.1",
+      port: Number(base.port),
+      path: `/api/milestones?token=${base.searchParams.get("token")}`,
+      method: "POST",
+      headers: { "content-type": "application/json", host: `127.0.0.1:${base.port}` },
+    });
+    pending.on("error", () => {
+      /* see packages/commands/src/dashboard/server.ts - the deadline or the teardown below closes it. */
+    });
+    pending.write("{");
+    try {
+      // see packages/commands/src/dashboard/server.ts - an unrelated read answers while that upload is unfinished.
+      const read = await Promise.race([
+        raw(new URL("/api/projects", server.url).href),
+        new Promise<{ status: number }>((resolve) => setTimeout(() => resolve({ status: 0 }), 4_000)),
+      ]);
+      expect(read.status).toBe(200);
+    } finally {
+      pending.destroy();
+      await server.close();
+    }
+  });
+
+  test("refuses a body that is not one JSON milestone request", async () => {
+    const { dir } = await workspace("milestone-write-bad-body-");
+    const notJson = await post(dir, { verb: "nonsense" });
+    expect(notJson.status).toBe(400);
+    expect((JSON.parse(notJson.body) as { error: { code: string } }).error.code).toBe("usage");
+  });
+
+  test("milestone reads answer GET while every API write is refused", async () => {
+    const { dir, context } = await workspace("milestone-write-get-");
+    await registerCatalogEntity(
+      context,
+      { kind: "project", id: "proj", title: "Project", rootKind: "projects", relativePath: "proj" },
+      { operationId: "milestone-get-project", actor: "dashboard-test" },
+    );
+    const server = await start(dir);
+    try {
+      // see packages/engine/src/store-read.ts - GET on the milestone path is the read half and needs no execution store.
+      const read = await raw(new URL("/api/milestones?project=proj", server.url).href);
+      const body = JSON.parse(read.body) as { data?: { projectId?: string } };
+      expect([read.status, body.data?.projectId]).toEqual([200, "proj"]);
+      for (const path of ["/api/issues", "/api/projects", "/api/overview"]) {
+        const res = await raw(new URL(path, server.url).href, { method: "POST" });
+        expect([path, res.status]).toEqual([path, 405]);
+      }
+    } finally {
+      await server.close();
+    }
+  });
+});
+
+describe("the retired roadmap route", () => {
+  test("answers an unrouted /api/roadmap with the not-found envelope", async () => {
+    const { dir } = await workspace("roadmap-route-retired-");
+    const server = await start(dir);
+    try {
+      const response = await raw(new URL("/api/roadmap?project=any", server.url).href);
+      expect(response.status).toBe(404);
+      expect((JSON.parse(response.body) as { error: { code: string } }).error.code).toBe("not-found");
     } finally {
       await server.close();
     }
@@ -473,32 +1061,40 @@ describe("workflow detail and the projection generation", () => {
 
 describe("boundary and lifecycle", () => {
 
-  test("a staged store refuses reads with store.not-active (never an empty page)", async () => {
+  test("a staged collaboration authority refuses reads with collaboration.not-active (never an empty page)", async () => {
     const { dir, context } = await workspace("staged-");
-    await withWrite(context, (db) => {
-      db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
-    });
+    const lane = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
+    try {
+      lane.prepare("update collaboration_meta set authority_state = 'staged' where id = 1").run();
+    } finally {
+      lane.close();
+    }
     const server = await start(dir);
     try {
       const res = await raw(new URL("/api/issues", server.url).href);
       expect(res.status).toBe(503);
       const body = JSON.parse(res.body) as { error: { code: string; message: string } };
-      expect(body.error.code).toBe("store.not-active");
-      // No local filesystem path leaks in the refusal.
+      expect(body.error.code).toBe("collaboration.not-active");
+      // note: No local filesystem path or store file leaks in the refusal.
       expect(body.error.message).not.toContain(dir);
+      expect(body.error.message).not.toContain(TEST_HOME);
+      expect(body.error.message).not.toMatch(/\.db\b/);
     } finally {
       await server.close();
     }
   });
 
-  test("a missing store refuses reads with store.not-initialized", async () => {
-    const dir = mkdtempSync(join(ROOT, "missing-"));
-    mkdirSync(join(dir, ".mstar"), { recursive: true });
-    const server = remember(await startDashboard({ harnessDir: join(dir, ".mstar") }));
+  test("a missing execution store refuses workflow reads with store.not-initialized", async () => {
+    const { dir } = await workspace("missing-");
+    for (const name of ["store.db", "store.db-wal", "store.db-shm"]) {
+      rmSync(join(dir, ".mstar", name), { force: true });
+    }
+    const server = await start(dir);
     try {
-      const res = await raw(new URL("/api/issues", server.url).href);
+      const res = await raw(new URL("/api/workflows", server.url).href);
       expect(res.status).toBe(503);
-      expect((JSON.parse(res.body) as { error: { code: string } }).error.code).toBe("store.not-initialized");
+      const body = JSON.parse(res.body) as { error: { code: string } };
+      expect(body.error.code).toBe("store.not-initialized");
     } finally {
       await server.close();
     }
@@ -595,6 +1191,9 @@ describe("inlined-artifact serving (built CLI, no source asset directory)", () =
 
       const child = spawn("bun", [packaged, "dashboard", "--port", "0"], {
         cwd: dir,
+        // invariant: The child resolves the collaboration lane from HOME; this suite owns a
+        // temporary one, so it must not read the developer's real store.
+        env: { ...process.env, HOME: TEST_HOME },
         stdio: ["ignore", "pipe", "pipe"],
       });
       const url = await new Promise<string>((resolve, reject) => {
@@ -718,7 +1317,7 @@ describe("hostile invocation-cwd dotenv", () => {
       `MSTAR_HARNESS_DIR=${join(decoy, ".mstar")}`,
       "",
     ].join("\n"));
-    const env = { ...process.env };
+    const env = { ...process.env, HOME: TEST_HOME };
     for (const key of ["MSTAR_STORE_TEST_RUNNER", "MSTAR_PROJECTION_DB_CHURN", "MSTAR_PROJECTION_TEST_AUTHORITY_READ_ERROR", "MSTAR_HARNESS_DIR"]) delete env[key];
 
     const cliDir = join(import.meta.dir, "..");

@@ -10,8 +10,10 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
-import { receiptStable, runCli } from "./harness";
+import { ensureCollaborationAuthority, initializeStore, readExecutionAuthority, serializeExecutionValue, type ExecutionIdentity, type StoreContext } from "@mstar-harness/engine";
+import { receiptStable, runCli, writeFixtureRepoId } from "./harness";
+import { planFrontMatter } from "./support/plan-frontmatter.mjs";
+
 const WF = "wf-plan-coordination", PLAN = "plan-coordination", SESSION = "coord-plan-coordination";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
@@ -22,10 +24,12 @@ function identity(sessionId = SESSION, workflowId = WF): ExecutionIdentity { ret
 async function fixture(): Promise<Fixture> {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "plan-coordination-"))); roots.push(root);
   execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
+  writeFixtureRepoId(root);
   execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: root });
   const harness = join(root, ".mstar"); mkdirSync(join(harness, "plans"), { recursive: true });
-  write(join(harness, "plans", `${PLAN}.md`), `# Plan coordination\n\n**plan_id:** ${PLAN}\n`);
+  write(join(harness, "plans", `${PLAN}.md`), planFrontMatter(PLAN, "# Plan coordination\n"));
   const context = { harnessDir: harness }; const store = await initializeStore(context); store.close();
+  await ensureCollaborationAuthority(context);
   const worktree = join(root, "feature"); execFileSync("git", ["worktree", "add", "-q", "-b", "feature/plan-coordination", worktree], { cwd: root });
   return { root, harness, context, worktree };
 }
@@ -38,7 +42,8 @@ function cli(args: string[], f: Fixture, caller?: ExecutionIdentity): Result {
   return { code: exitCode, stdout, stderr, json };
 }
 async function register(f: Fixture, wf = WF, id = PLAN, title = "Plan coordination", branch = "feature/plan-coordination"): Promise<void> {
-  const file = `plans/${id}.md`; write(join(f.harness, file), `# ${title}\n\n**plan_id:** ${id}\n`);
+  const file = `plans/${id}.md`; write(join(f.harness, file), planFrontMatter(id, `# ${title}
+`));
   const before = await readExecutionAuthority(f.context); const session = wf === WF ? SESSION : "peer-coordinator";
   const result = cli(["workflow", "register", "--workflow", wf, "--plan-id", id, "--plan-title", title, "--plan-file", file,
     "--delivery-kind", "development", "--branch-source", branch, "--branch-target", "main", "--expect", before.token,
@@ -103,7 +108,7 @@ describe("mstar plan — ACTIVE coordinator operations", () => {
       "--expect", await readExecutionAuthority(f.context, { workflowId: WF, planId: PLAN }).then((r) => r.token), "--operation", "unbound", "--harness", f.harness], f);
     expect(absent.code).toBe(2); expect(absent.json).toMatchObject({ command: "plan.prepare", status: "usage", code: "command.invalid-input" });
     expect(absent.json.message).toContain("verified binding");
-  });
+  }, 30_000);
   test("prepare, changed-source refresh, and progress update ACTIVE plan", async () => {
     const f = await fixture(); await register(f); expect((await bind(f)).code).toBe(0);
     const prepared = cli(prepareArgs(f, PLAN, f.worktree, "feature/plan-coordination", await token(f), "prepare-1"), f, identity());

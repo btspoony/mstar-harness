@@ -68,13 +68,13 @@ function withAssignment(assignmentText: string, fn: (file: string) => void): voi
 }
 
 /** Legal writable assignment using the UTF-8 em-dash separator (U+2014, bytes e2 80 94). */
-const EM_DASH_ASSIGNMENT = `## Assignment
-
-**Execute as**: architect
-**Delegation**: forbidden
-**Task category**: docs
-**Branch policy**: direct on main — hotfix: fix now
-**Task budget (implement / ops rounds)**: S — one focused implementer round
+const EM_DASH_ASSIGNMENT = `---
+execute_as: architect
+delegation: forbidden
+task_category: docs
+branch_policy: direct on main — hotfix: fix now
+task_budget: S — one focused implementer round
+---
 
 task body
 `;
@@ -116,7 +116,7 @@ describe("mstar dispatch validate — fix-hint UTF-8 rendering in the built bund
   // by source-level \uXXXX escapes alone, so this assertion is the one that
   // goes red if `escape-dist-literals.ts` is removed from the CLI build.
   test("missing-reason violation keeps the em-dash fix hint in the JSON response", () => {
-    const missingReason = EM_DASH_ASSIGNMENT.replace("**Branch policy**: direct on main — hotfix: fix now", "**Branch policy**: direct on main");
+    const missingReason = EM_DASH_ASSIGNMENT.replace("branch_policy: direct on main — hotfix: fix now", "branch_policy: direct on main");
     withAssignment(missingReason, (file) => {
       const result = runBundle(["dispatch", "validate", file]);
       expect(result.exitCode).toBe(1);

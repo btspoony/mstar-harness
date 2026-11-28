@@ -102,7 +102,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-branch-worktree` | Feature branches, worktrees, QC / PM Acceptance checkout alignment |
 | `mstar-conventions` | `{HARNESS_DIR}` 发现、初始化、Spec 分支模型摘要、产物路径 SSOT |
 | `mstar-artifacts` | 主 plan、review bundle / durable summaries、store.db root register/plan 行与 issue severity/lifecycle、notes.jsonl ledger、knowledge；root/snapshot 文件仅迁移源/历史，project register 仅迁移历史 |
-| `mstar-project-governance` | 项目 roadmap 的 store 内容权威（Direction 正文 + 结构化 milestone）与读写/导入/导出规则（legacy `roadmap.md` 仅 transport/history）；issue capture、迁移 register、`_default` 项目归属 |
+| `mstar-project-governance` | milestone 结构化目标与 issue 关联的唯一读写/校验规则；issue capture、迁移 register、`_default` 项目归属 |
 | `mstar-design-md` | DESIGN.md 设计系统规范 —— 创建/审计/维护 design tokens，三级检查清单，light/dark 双主题 |
 | `mstar-design-system` | 收敛既有 baseline 的方法 —— baseline 定位与机器化、结构/外观/行为三层 parity、defect/decision/phantom 分诊、coverage 证据（契约本体仍属 `mstar-design-md`） |
 | `mstar-review-qc` | PM：QC tri 编排、residual 留档、四层边界；leaf 执行 → `mstar-roles/references/qc-specialist/` |
@@ -115,6 +115,7 @@ PM 在 Assignment 写 **`Task category`**（主类 + 可选 `secondary`）：
 | `mstar-pr-loop` | Opt-in PR review → fix loop until the review verdict is `ship it`; also selectable at iteration Phase 1 as the local `reviewed-auto` review path, whose `ship it` row the iteration merge authorization reads. Never selected under `reviewed-bot` |
 | `mstar-e2e` | Explicit independent real-browser/device/E2E workflow; PM orchestrates and ops executes, outside development acceptance gates |
 | `mstar-issue-mirror` | Host-owned Linear issue mirror：agent 用宿主 Linear MCP 工具执行全部 Linear 调用，mstar 只跑 issue-sync pending/apply/ingest 本地半程 |
+| `mstar-remote-collaboration` | `remote`（provider-authoritative）模式的 host 通道：status/bind → observe → adopt-issue → 一次 outbox-dispatch 许可 → receipt/reconcile/re-observe；provider 调用由宿主 Linear MCP 承担，mstar 只运行 provider-free 的 CLI 半程 |
 | `mstar-roles` | 角色正文 hub |
 | `mstar-host` | 宿主适配（自动识别；`mstar-host/references/opencode.md` / `cursor.md` / `codex.md` / `kimi.md` / `parallel-dispatch.md`） |
 
@@ -135,7 +136,7 @@ Read **`mstar-host`** after this skill; it detects the active host and routes to
 
 - **本地全量测试默认禁止，完整套件交 CI。** 只有用户明确许可才能例外；Assignment 的 `Constraints` 引用许可，`Evidence Required` 写明命令、范围、环境与次数。PM 字段、风险等级、缺证据、fix wave 和早期探索都不产生许可；不得拆成多个无关“小测试”绕过全量边界。
 - **Scoped investigation:** implementation, fixes, QC and acceptance inspect only the change, directly affected interfaces and relevant knowledge. Do not restart repository-wide scans, tests or review; report exact missing scope instead of expanding it.
-- **只读审查席位有界。** review / QC / L2 task review 的范围是 Assignment 的 diff pack 加直接影响接口；只在 must-fix 线索上跟进出界。默认 **≤ 12 次文件打开或 ≤ 10 分钟**（PM 按 Assignment `Budget` 收紧，不得放宽）；席位还必须写明 `Return shape`（返回什么、如何在预算内停下），干净轮次显式返回 `findings: []` 而非散文。`Task category: audit` 的轮次同受这两项约束，即使 `Execute as` 不在 QC 席位集内（`audit` 类请求可落在 `@code-reviewer` 之外的执行者上）。触达即停止扩展：返回当前 verdict 与已得 findings，并在报告 `## Scope` 声明 `Truncated coverage:`。**截断 ≠ `Unconfirmed`**——后者仍是证据通道失败态并阻断 `Approve`；未覆盖范围按既有「未提及 = 未审查」由 PM 汇总，且部分覆盖的运行不可作为批准——门禁语义 → `mstar-review-qc`。
+- **只读审查席位有界。** review / QC / L2 task review 的范围是 Assignment 的 diff pack 加直接影响接口；只在 must-fix 线索上跟进出界。默认 **≤ 12 次文件打开或 ≤ 10 分钟**（PM 按 Assignment `budget` 收紧，不得放宽）；席位还必须写明 `return_shape`（返回什么、如何在预算内停下），干净轮次显式返回 `findings: []` 而非散文。`task_category: audit` 的轮次同受这两项约束，即使 `execute_as` 不在 QC 席位集内（`audit` 类请求可落在 `@code-reviewer` 之外的执行者上）。触达即停止扩展：返回当前 verdict 与已得 findings，并在报告 `## Scope` 声明 `Truncated coverage:`。**截断 ≠ `Unconfirmed`**——后者仍是证据通道失败态并阻断 `Approve`；未覆盖范围按既有「未提及 = 未审查」由 PM 汇总，且部分覆盖的运行不可作为批准——门禁语义 → `mstar-review-qc`。
 - **验证按变更映射。** 可执行逻辑使用对应单测；非可执行文档与 prompt/skill 策略使用真实定向静态或 before/after 证据，不制造测试文件。SDD 的 `Verification mode: scoped-check` 格式与适用性 → `mstar-sdd/references/file-handoffs.md`。报告结构校验不证明命令执行或 diff 适用性，也不是任意 shell 拦截器。
 - **Invalidate only affected evidence.** A later HEAD or review range does not require a full rerun. Reuse applicable L1/CI/prior acceptance evidence with original scope and an applicability reason. Fixes verify only their regression; QC re-review covers owned findings, fix delta and direct interfaces. `full tri-review` counts seats, not repository scope; QC runs no test/build/install.
 - **PM Acceptance owns L4.** The primary PM maps every required AC to reproducible evidence and an honest result; independent QC approval is not runtime proof. PM may directly execute only a named short, bounded acceptance check to fill a concrete gap, never product coding, test authoring, long suites, unrestricted verification or ops. Specialist dev/ops supply such evidence under separate assignments; PM retains sole sign-off. Procedure/report/recovery → **`mstar-roles/references/project-manager/acceptance.md`**.
@@ -160,7 +161,7 @@ Global engineering invariants apply to all harness roles; implementation and rev
 
 - 未经用户同意不改宿主配置文件与用户凭据。
 - 行为变更须有验证证据。
-- 业务仓默认功能分支（Assignment `Branch policy` 例外）→ **`mstar-branch-worktree`**。
+- 业务仓默认功能分支（Assignment `branch_policy` 例外）→ **`mstar-branch-worktree`**。
 - **Dev 三角**：`@fullstack-dev` 后端主导；UI → `@frontend-dev`；第二轨 → `@fullstack-dev-2`（`mstar-roles` PM 节）。
 - 工期仅 agent-oriented → **`mstar-conventions`** · effort-estimation。
 - plan-writing artifacts land in `{PLAN_DIR}`, not external default plan directories.
