@@ -8,7 +8,7 @@ Assume the product launched on its first day today, with today's real requiremen
 
 ## Recon
 
-No batch is selected before this recon exists; an incomplete recon blocks selection, and the round names the missing evidence and the read that would close it. The recon is six inventories, one row each, answered with `file:line` evidence — or `spec:line ↔ code:line` for a deviation — performed in the session before ranking over the whole codebase, or over the `path|subsystem` scope the invocation names. A normal round records it in that round's governance plan, created through the normal plan gates so a no-batch outcome still has a carrier, or in the audit report the round reuses; `dry-run` returns it and writes nothing. Either way it adds no file type and no directory:
+No batch is selected before this recon exists; an incomplete recon blocks selection, and the round names the missing evidence and the read that would close it. The recon is six inventories, one row each, answered with `file:line` evidence — or `spec:line ↔ code:line` for a deviation — performed in the session before ranking over the whole codebase, or over the `path|subsystem` scope the invocation names. A normal round records it in the carrier the round already has — its plan or a reused audit report; with neither, the response is the record and an empty round creates no plan. `dry-run` returns it and writes nothing. Either way it adds no file type and no directory:
 
 | Inventory | The question it answers | Evidence |
 |---|---|---|
