@@ -1,9 +1,3 @@
-/**
- * note: issue-sync.test.ts — the three local verbs of the Linear mirror: pending, apply,
- * ingest. mstar makes no Linear call, so nothing here is faked except the
- * filesystem and stdin: the fixture plays the agent that holds the host's tools,
- * and every assertion reads the store's real ledger.
- */
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -39,7 +33,6 @@ beforeAll(() => {
   // why: The fixture's own git config decides; a developer's global identity must not.
   process.env.GIT_CONFIG_GLOBAL = "/dev/null";
   process.env.GIT_CONFIG_NOSYSTEM = "1";
-  // why: The collaboration store is user-level, so the resolver's home is the fixture's.
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
 });
 
@@ -53,7 +46,6 @@ afterAll(() => {
 });
 
 const PROJECT = "p-mirror";
-/** why: Each fixture's origin appends its own directory name, so no two share a collaboration store. */
 const REPO_PREFIX = "acme/widgets";
 const AUTHOR = "Ada Lovelace <ada@example.com>";
 const BINDING = "linear:" + PROJECT;
@@ -84,11 +76,6 @@ type Fixture = {
   read<T>(fn: (db: StoreDb) => T): Promise<T>;
 };
 
-/**
- * note: A repository with a .mstarc mirror block, a git identity and an initialized
- * store that binds one Linear project and holds three local issues — the state
- * an operator reaches after project bind and three captures.
- */
 async function fixture(
   name: string,
   options: {
@@ -96,7 +83,6 @@ async function fixture(
     bind?: boolean;
     email?: string;
     collaborationMode?: "local" | "mirror";
-    /** note: The local issues this project holds; an empty list is a project with no work. */
     localIds?: readonly string[];
   } = {},
 ): Promise<Fixture> {
@@ -106,11 +92,7 @@ async function fixture(
   git(repoRoot, ["init", "-q"]);
   const canonical = "git@github.com:" + REPO_PREFIX + "-" + basename(dir) + ".git";
   git(repoRoot, ["remote", "add", "origin", canonical]);
-  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
-  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
   git(repoRoot, ["config", `url.${repoRoot}.insteadOf`, canonical]);
-  // note: The mirror derives its repository identity from `get-url`, which applies that rewrite;
-  // the fixture's markers and ledger rows must carry the same value the command stamps.
   const repo = normalizeRepoRemote(execFileSync("git", ["-C", repoRoot, "remote", "get-url", "origin"], {
     encoding: "utf8",
   }).trim());
@@ -120,14 +102,10 @@ async function fixture(
   writeFileSync(
     join(repoRoot, ".mstarc"),
     "[linear]\nenabled=" + (options.enabled === false ? "false" : "true") + "\nmode=mirror\nworkspace=acme\nteam=ENG\n" +
-      // note: The repository delivers to Linear, so its collaboration authority is the
-      // mirror mode; the ledger and the issues live in that lane.
       "[collaboration]\nmode=" + (options.collaborationMode ?? "mirror") + "\n",
   );
   const harnessDir = join(repoRoot, ".mstar");
   mkdirSync(harnessDir, { recursive: true });
-  // invariant: No execution store is created: the mirror's binding and ledger live in the
-  // collaboration lane, so a checkout without one must plan and record.
   const collaboration = resolveCollaborationLocation({ harnessDir });
   await initializeCollaborationStore(collaboration);
   const staged = new DatabaseSync(collaboration.dbPath);
@@ -148,7 +126,6 @@ async function fixture(
         " values (?, 'linear', 'acme', 'ENG', 'Remote', 1, ?)",
     ).run(PROJECT, new Date().toISOString());
     for (const [index, localId] of (options.localIds ?? LOCAL_IDS).entries()) {
-      // invariant: v2 made the stable reference NOT NULL and unique; the mirror fixture seeds real ones.
       db.prepare(
         "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key, issue_ref)" +
           " values (?, ?, ?, ?, 'high', 'open', 'impact body', 'acceptance body', 'now', 'now', ?, ?)",
@@ -156,7 +133,6 @@ async function fixture(
     }
   });
   if (options.bind === false) {
-    // note: A checkout whose project mirrors nothing: the binding row is the only source.
     await withCollaborationWrite({ harnessDir }, ({ db }) => {
       db.prepare("delete from project_bindings where project_id = ?").run(PROJECT);
     });
@@ -176,8 +152,6 @@ async function fixture(
       return { ...base, effects: { ...UNUSED_EFFECTS, readInput: async () => payload } };
     },
     async read<T>(fn: (db: StoreDb) => T): Promise<T> {
-      // note: The ledger and the issues are the collaboration authority's; the project
-      // binding still lives in the execution store until project governance moves.
       const opened = await openCollaborationStore({ harnessDir }, "read");
       try {
         return fn(opened.db);
@@ -361,9 +335,6 @@ describe("apply", () => {
   });
 
   test("results that name no run are refused as unattributed, with the reconciliation recovery", async () => {
-    // why: A result only means something as the answer to a plan this repository
-    // recorded. Without `--run` it belongs to no run, so recording it would adopt
-    // whatever the caller cached - the one thing a one-way mirror must not guess.
     const f = await fixture("apply-unattributed");
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
     const result = await run(
@@ -375,7 +346,6 @@ describe("apply", () => {
     expect(result.code).toBe("sync.run-held");
     expect(result.message).toContain("unattributed");
     expect(result.message).toContain("--run <runId>");
-    // why: A legacy result has exactly two supported paths, and the refusal names both.
     expect(result.message).toContain("issue-sync ingest");
     expect(result.message).toContain("--adopt");
     expect(await rowOf(f, "I-000101")).toBeNull();
@@ -396,7 +366,6 @@ describe("apply", () => {
     expect(takeover.status).toBe("refused");
     expect(takeover.code).toBe("sync.run-held");
     expect(takeover.message).toContain("takeover records no results");
-    // note: Nothing moved: the pending run still owns the direction and its item is untouched.
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
     const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
     expect(held?.runId).toBe(pending.data.runId);
@@ -474,9 +443,6 @@ describe("apply", () => {
     expect(result.data.adopted).toEqual([{ localId: "I-000101", externalId: "LIN-9" }]);
     expect(result.data.counts).toEqual({ applied: 1, unconfirmed: 0, refused: 0 });
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-9" });
-    // why: the invocation named this run, so it holds its token and the run ends in
-    // the commit that recorded the results; an unnamed operator-only batch is what
-    // leaves a borrowed lease intact.
     expect(result.data.lease).toBe("released");
     expect(result.data.runId).toBe(later.data.runId);
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
@@ -595,7 +561,6 @@ describe("mirror stale run", () => {
     expect(accepted.data.runId).toBe(pending.data.runId);
     expect(accepted.data.counts.applied).toBe(1);
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "applied", externalId: "LIN-51" });
-    // note: The run ended with the apply that named it.
     expect(await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }))).toBeNull();
   });
 
@@ -612,10 +577,8 @@ describe("mirror stale run", () => {
     );
     expect(stale.status).toBe("refused");
     expect(stale.code).toBe("sync.run-held");
-    // why: The refusal names the run that WOULD accept these results.
     expect(stale.message).toContain(pending.data.runId);
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
-    // invariant: The pending run still holds the direction: a refused apply never ends it.
     const held = await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION }));
     expect(held?.runId).toBe(pending.data.runId);
   });
@@ -623,7 +586,6 @@ describe("mirror stale run", () => {
   test("a rebind between pending and apply refuses, and the superseded run is retired before re-planning", async () => {
     const f = await fixture("run-rebind");
     const pending = await run("pending", {}, f.context);
-    // note: The operator rebinds the project to another team between planning and recording.
     await withCollaborationWrite({ harnessDir: f.harnessDir }, ({ db }) => {
       db.prepare(
         "update project_bindings set team = ?, revision = revision + 1, updated_at = ? where project_id = ?",
@@ -640,17 +602,12 @@ describe("mirror stale run", () => {
     expect(stale.status).toBe("refused");
     expect(stale.code).toBe("collaboration.stale-binding");
     expect(stale.message).toContain("different destination or collaboration generation");
-    // note: Nothing was recorded under the old destination.
     expect(await rowOf(f, "I-000101")).toMatchObject({ itemState: "pending", externalId: null });
 
-    // note: The documented recovery: retire the superseded run (a takeover records
-    // nothing), re-plan under the binding in force, then record these results.
     const retired = await run("apply", { results: "-", takeRun: true }, f.withStdin("[]"));
     expect(retired.status).toBe("ok");
     const replanned = await run("pending", {}, f.context);
     expect(replanned.status).toBe("ok");
-    // note: The create cycle the retired run opened is still its residue, so recording
-    // it needs the explicit identity the operator confirmed.
     const unadopted = await run(
       "apply",
       {
@@ -691,7 +648,6 @@ describe("mirror stale run", () => {
     expect(confirmed.data.counts.applied).toBe(1);
     const provenHash = (await rowOf(f, "I-000101"))!.lastRequestHash;
 
-    // why: The local content moved on, so the next run plans an UPDATE of the same issue.
     await withCollaborationWrite({ harnessDir: f.harnessDir }, ({ db }) => {
       db.prepare("update issues set title = ?, updated_at = ? where id = ?").run(
         "Issue I-000101 (edited)",
@@ -704,7 +660,6 @@ describe("mirror stale run", () => {
       expect.objectContaining({ localId: "I-000101", operation: "update", externalId: "LIN-61" }),
     ]);
 
-    // invariant: The cached result of the FIRST run cannot prove this run's write.
     const stale = await run(
       "apply",
       {
@@ -717,7 +672,6 @@ describe("mirror stale run", () => {
     );
     expect(stale.status).toBe("refused");
     expect(stale.code).toBe("sync.run-held");
-    // note: The payload proof still belongs to the confirmed write, not to this attempt.
     expect((await rowOf(f, "I-000101"))!.lastRequestHash).toBe(provenHash);
     expect((await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION })))?.runId).toBe(
       second.data.runId,
@@ -733,7 +687,6 @@ describe("mirror stale run", () => {
       );
     expect(await revision()).toBe(0);
     const planned = await run("pending", {}, f.context);
-    // note: Three items, one transaction: one advance, not one per item.
     expect(planned.data.items).toHaveLength(3);
     expect(await revision()).toBe(1);
   });
@@ -764,8 +717,6 @@ describe("mirror stale run", () => {
   test("a changed git author between pending and apply refuses", async () => {
     const f = await fixture("run-author-change");
     const pending = await run("pending", {}, f.context);
-    // invariant: The marker's author is stamped into every payload this run planned; a
-    // different git author would confirm a write that marker never named.
     git(f.repoRoot, ["config", "user.email", "someone-else@example.com"]);
     const stale = await run(
       "apply",
@@ -786,8 +737,6 @@ describe("mirror stale run", () => {
     const pending = await run("pending", {}, f.context);
     expect(pending.status).toBe("ok");
     expect(pending.data.items).toEqual([]);
-    // why: No work was planned, so its own run is the completion: naming it (and only it)
-    // ends the cycle instead of leaving the direction held.
     const completed = await run(
       "apply",
       { results: bodyFile(f, "no-work.json", []), run: pending.data.runId },
@@ -811,7 +760,6 @@ describe("mirror stale run", () => {
       },
       f.context,
     );
-    // invariant: The remote already says exactly this, so the next cycle is skipped, not planned.
     const second = await run("pending", {}, f.context);
     expect(second.data.items).toEqual([]);
     expect(second.data.skipped).toHaveLength(1);
@@ -828,7 +776,6 @@ describe("mirror stale run", () => {
   test("a changed [linear] connection between pending and apply refuses", async () => {
     const f = await fixture("run-changed-connection");
     const pending = await run("pending", {}, f.context);
-    // note: Same project binding row, different connection: the run's proof no longer holds.
     writeFileSync(
       join(f.repoRoot, ".mstarc"),
       "[linear]\nenabled=true\nmode=mirror\nworkspace=other\nteam=ENG\n[collaboration]\nmode=mirror\n",
@@ -849,14 +796,10 @@ describe("mirror stale run", () => {
   test("a restored collaboration generation retires the pending run", async () => {
     const f = await fixture("run-epoch");
     const pending = await run("pending", {}, f.context);
-    // note: A verified restore publishes a new epoch; a run from the previous generation
-    // names an authority that no longer exists.
     const live = await readCollaborationAuthority({ harnessDir: f.harnessDir });
     await withCollaborationWrite({ harnessDir: f.harnessDir }, ({ db }) => {
       db.prepare("update collaboration_meta set authority_epoch = authority_epoch + 1 where id = 1").run();
     });
-    // invariant: The restore also re-binds the checkout it published for, so the lane stays
-    // readable and the RUN's own generation proof is what refuses it.
     writeCollaborationBinding({ harnessDir: f.harnessDir }, {
       repoKey: live.repoKey,
       mode: live.mode,
@@ -883,7 +826,6 @@ describe("mirror stale run", () => {
     const empty = await run("apply", { results: "-" }, f.withStdin("[]"));
     expect(empty.status).toBe("usage");
     expect(empty.message).toContain("nothing to record");
-    // invariant: One entry that parses but attributes to no run: refused, never borrowed.
     const invalid = await run(
       "apply",
       { results: bodyFile(f, "invalid.json", [{ localId: "I-999999", outcome: "confirmed", externalId: "LIN-95" }]) },
@@ -902,7 +844,6 @@ describe("mirror stale run", () => {
     const adopted = await run("apply", { results: "-", adopt: ["I-000102=LIN-77"] }, f.withStdin("[]"));
     expect(adopted.status).toBe("ok");
     expect(adopted.data.lease).toBe("left-to-the-holder");
-    // note: The holder's run survives: its own exact-token results are still recordable.
     expect((await f.read((db) => readRun(db, { bindingId: BINDING, direction: PUSH_DIRECTION })))?.runId).toBe(
       pending.data.runId,
     );
@@ -932,7 +873,6 @@ describe("mirror stale run", () => {
     expect(result.status).toBe("refused");
     expect(result.code).toBe("collaboration.mode-unavailable");
     expect(result.message).toContain("local");
-    // invariant: Nothing was planned: the local authority never pushes.
     expect(await rowOf(f, "I-000101")).toBeNull();
   });
 });

@@ -108,8 +108,6 @@ describe("the list read", () => {
     const result = await readWorkflows(gapped);
     expect(result.status).toBe("ready");
     if (result.status !== "ready") return;
-    // note: The rows are execution data; the optional catalog association is disclosed,
-    // not fatal, and no collaboration counter is claimed.
     expect(result.envelope.data.items.map((item) => item.id)).toContain("issue-project-move");
     expect(result.envelope.collaboration?.completeness).toBe("unavailable");
     const outcome = workflowsOutcome(result);
@@ -141,7 +139,6 @@ describe("the list read", () => {
     expect(notice).not.toBeNull();
     if (notice === null) return;
     expect(notice.reason).toContain("collaboration.not-initialized");
-    // note: The host's composition: a warning notice above the same screen's rows.
     const html = renderToStaticMarkup(
       createElement(
         "div",
@@ -283,7 +280,6 @@ describe("the detail read", () => {
         createElement(WorkflowDetail, { model: outcome.model, copy: workflowDetailCopy(copyFor("en")) }),
       ),
     );
-    // note: The gap is stated and the execution record is preserved.
     expect(html).toContain('data-ms-notice-tone="warning"');
     expect(html).toContain("collaboration.not-initialized");
     expect(html).toContain("issue-project-move");

@@ -1,8 +1,3 @@
-/**
- * note: ingest.test.ts — the association rule over a listing the caller fetched with
- * its own tools: repo + local + git author decide, and the ledger is the only
- * thing that is written.
- */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,7 +18,6 @@ const ROOT = mkdtempSync(join(tmpdir(), "mstar-ingest-test-"));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
-/** why: The collaboration store is user-level, so the resolver's home is the fixture's. */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -40,11 +34,6 @@ const REPO = "acme/widgets";
 const AUTHOR = "Ada Lovelace <ada@example.com>";
 const UPDATED = "2026-11-19T12:00:00.000Z";
 
-/**
- * note: The ingest fixture: one ACTIVE collaboration authority, and ONE caller-owned
- * transaction for the whole case — the ownership the command's `withSyncWrite`
- * holds around an `ingest`. Rows and their receipts commit together at `close()`.
- */
 async function openedStore(name: string): Promise<{ db: StoreDb; close: () => void }> {
   const harnessDir = mkdtempSync(join(ROOT, name));
   const checkoutRoot = join(harnessDir, "checkout");
@@ -55,8 +44,6 @@ async function openedStore(name: string): Promise<{ db: StoreDb; close: () => vo
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(harnessDir)}.git`], {
     cwd: checkoutRoot,
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(harnessDir)}.git`],
@@ -90,7 +77,6 @@ async function openedStore(name: string): Promise<{ db: StoreDb; close: () => vo
   };
 }
 
-/** note: v2 made the stable reference NOT NULL and unique; the fixture derives one from its display id. */
 function fixtureIssueRef(id: string): string {
   return `mstar:issue:00000000-0000-4000-8000-${id.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
 }
@@ -132,10 +118,6 @@ function pushRow(db: StoreDb, localId: string) {
   return readItem(db, { bindingId: BINDING, direction: "push", localId });
 }
 
-/**
- * note: Push one local issue through the real planner and recorder, then hand back the
- * remote record a Linear tool would report for it: the payload mstar sent.
- */
 function pushAndRecord(db: StoreDb, localId: string, externalId: string): ProviderItem {
   const push = pushContext();
   const candidate = selectPushCandidates(db, BINDING).find((entry) => entry.localId === localId)!;

@@ -64,9 +64,7 @@ const inputSchema = z.object({
   expectStore: z.number().int().nonnegative().optional(),
   toAuthority: z.string().optional(),
   discard: z.boolean().optional(),
-  /** note: The peer checkout's move document, or `-` for stdin: the two-checkout exchange's handoff. */
   input: z.string().optional(),
-  /** note: Where this side writes the document the other checkout needs next. */
   out: z.string().optional(),
   payload: z.unknown().optional(),
 });
@@ -191,11 +189,6 @@ function issueFilter(input: IssueInput): IssueFilter {
     ...(input.offset !== undefined ? { offset: input.offset } : {}),
   };
 }
-/**
- * note: One exchange document for the two-checkout move: an absolute path, or `-` for stdin. An
- * unreadable path or a body that is not a JSON object refuses before any store work, exactly as the
- * outbox lane's own document reader does.
- */
 async function readMoveDocument(invocation: InvocationContext, value: string, flag: string): Promise<unknown> {
   let raw: string;
   if (value === "-") raw = await invocation.effects.readInput();
@@ -230,11 +223,6 @@ async function readMoveDocument(invocation: InvocationContext, value: string, fl
   }
 }
 
-/**
- * invariant: The handoff is written create-only, and a failure to write it never rewrites the
- * operation's outcome: the move already committed, so the receipt discloses the reporting failure
- * instead of reporting the move as failed.
- */
 function publishMoveDocument(
   out: string,
   document: unknown,
@@ -258,10 +246,6 @@ function publishMoveDocument(
   }
 }
 
-/**
- * note: A move combination neither route admits, refused by code with the route that does. It names the
- * flags rather than the engine's internals, so an operator corrects the request instead of the store.
- */
 function unsupportedMove(flag: string, route: string): Error & { code: string; paths: string[]; details: Record<string, unknown> } {
   const recovery =
     `${flag} needs the staged cross-authority route: ${route}. A project reassignment inside one authority takes ` +
@@ -269,8 +253,6 @@ function unsupportedMove(flag: string, route: string): Error & { code: string; p
   const error = new Error(recovery) as Error & { code: string; paths: string[]; details: Record<string, unknown> };
   error.code = "issue.scope-refused";
   error.paths = [flag.replace(/^--/, "")];
-  // note: The family's default recovery for a scope refusal is the seat's, which is not this cause;
-  // the flag's own route is the repair, so it travels as the refusal's recovery.
   error.details = { flag: flag.replace(/^--/, ""), supported_route: route, recovery };
   return error;
 }
@@ -312,8 +294,6 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
     }
     if (id === "issue.move") {
       const expectStore = input.expectStore;
-      // invariant: `--expect` is the record's revision CAS on every route that reads a local record; only
-      // the exchange's handoff half addresses a record another authority holds and carries no revision.
       if (input.expect === undefined && input.input === undefined) {
         const error = new Error(
           "expect is required for a move unless --input supplies the peer's handoff document",
@@ -331,16 +311,10 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
       const payload = validatePayload(input, "IssueMove", "move") as IssueMove;
       const toAuthority = input.toAuthority?.trim();
       if (toAuthority === "") throw unsupportedMove("--to-authority", `mstar issue move --id ${addressed} --to-authority <repo-key>`);
-      // invariant: `--discard` is decided before the store base: it restores the source record and never
-      // compares the lane revision a move's own phase commits have already advanced, so `--expect-store`
-      // is not one of its inputs and supplying one refuses instead of being accepted and dropped.
       if (input.discard === true) {
         if (toAuthority === undefined) {
           throw unsupportedMove("--discard", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
         }
-        // invariant: The handoff flags belong to the staged exchange, which a discard never runs:
-        // `--discard` releases the row this checkout holds and neither reads nor emits a document,
-        // so admitting either flag here would drop it silently beside a completed discard.
         if (input.input !== undefined) {
           throw unsupportedMove("--input", `mstar issue move --id ${addressed} --to-authority <repo-key> --discard`);
         }
@@ -361,12 +335,8 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
           };
           throw error;
         }
-        // invariant: Discard unfreezes a record, so it is an issue write: the same capture seat that
-        // authorizes the move authorizes abandoning it, checked before the store is touched.
         const write = mutation(input);
         assertIssueWriteSeat(write.actor);
-        // invariant: the discard route is chosen by the lanes this checkout can open: a one-checkout
-        // move releases both halves at once, a two-checkout exchange releases the half it holds here.
         const receipt = await discardAcrossAuthorities(context, {
           operationId: write.operationId,
           actor: write.actor,
@@ -378,19 +348,13 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         });
         return ok(id, { ...receipt, operationId: write.operationId });
       }
-      // invariant: `--expect-store` is the lane's store CAS, and every remaining route reads that base.
       if (expectStore === undefined) {
         const error = new Error("expectStore is required for a project move") as Error & { code: string; paths: string[] };
         error.code = "issue.invalid-payload";
         error.paths = ["expectStore"];
         throw error;
       }
-      // invariant: `--to-authority` selects the staged cross-authority route; without it the verb is the
-      // local project reassignment. A flag neither route admits refuses by code with the route that does.
       if (toAuthority === undefined) {
-        // invariant: The handoff flags belong to the two-checkout route alone. Without a destination
-        // authority neither is read, so admitting either here would perform a different mutation than
-        // the request names; both refuse by code instead.
         if (input.input !== undefined) {
           throw unsupportedMove("--input", `mstar issue move --id ${addressed} --to-authority <repo-key> --input <path|->`);
         }
@@ -399,9 +363,6 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         }
         return await runMutation((write) => moveIssue(context, addressed, payload, { ...write, expectedStoreRevision: expectStore }));
       }
-      // invariant: `--input`/`--out` select the two-checkout exchange. A checkout writes only the lane
-      // its own mode selects, so a move across a mode boundary is two halves that hand each other
-      // documents; the same command resumes from whatever phase its own ledger row holds.
       if (input.input !== undefined || input.out !== undefined) {
         const write = mutation(input);
         assertIssueWriteSeat(write.actor);
@@ -419,8 +380,6 @@ async function execute(id: string, input: IssueInput, invocation: InvocationCont
         const published = input.out === undefined || receipt.document === null
           ? { out: null, documentError: null }
           : publishMoveDocument(input.out, receipt.document);
-        // invariant: `operationId` stays the caller's move id, so the provider intent a step froze is
-        // reported beside it: it is the operation `outbox-dispatch`/`outbox-receipt` address.
         return ok(id, {
           ...receipt,
           out: published.out,
@@ -535,9 +494,6 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
   const commandInput = z.object({
     ...inputSchema.shape,
     id: requiresIssueId ? z.string().min(1) : z.string().optional(),
-    // invariant: `--expect` is the record's revision CAS on every route that reads a local record. The
-    // two-checkout exchange's destination half addresses a record it does not hold, so it carries no
-    // revision to compare: only there is the flag optional, and the requirement below states when.
     expect: expectedRevisionVerbs[verb] === true
       ? verb === "move"
         ? z.number().int().nonnegative().optional()
@@ -583,8 +539,6 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         ...(expectedRevisionVerbs[verb] === true
           ? [{
               name: "expect", ownership: "caller" as const, route, tokenKind: "revision" as const,
-              // invariant: `issue move`'s destination half addresses a record another authority holds, so it
-              // has no revision to compare; every other route reads the record it writes and requires it.
               ...(verb === "move" ? { required: true, condition: { field: "input", present: false } } : { required: true }),
               constraint: "fetch the current issue revision from `mstar issue show --id <id>` immediately before this write",
             }]
@@ -592,9 +546,6 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
         ...(verb === "move"
           ? [{
               name: "expectStore", ownership: "caller" as const, route, tokenKind: "revision" as const,
-              // invariant: A discard restores the record instead of reading a lane base it cannot hold:
-              // the move's own phase commits advance the store revision, so only the routes that read a
-              // base they can still compare — the local project move and the exchange halves — require it.
               required: true, condition: { field: "discard", present: false },
               constraint: "fetch the current `storeRevision` from `mstar issue list` immediately before this write",
             }]
@@ -616,8 +567,6 @@ function cliDefinition(id: string): CommandDefinition<IssueInput, unknown> {
     requirements,
     output: commandEnvelopeSchema,
     effects: readVerbs[verb] === true ? ["read"] : ["write"],
-    // why: `issue move --input`/`--out` carry the exchange handoff, so discovery publishes its shape
-    // beside the payload schema instead of leaving the document an operator must produce undocumented.
     ...(payloadType[verb] !== undefined || verb === "move"
       ? {
           payloads: {

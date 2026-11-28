@@ -260,10 +260,6 @@ async function snapshotFindingsCleanupViolations(doc: unknown, harnessDir: strin
     plans.push({ planId, mode })
   }
   if (plans.length === 0) return []
-  // invariant: ONE lane probe decides whether any findings gate can be evaluated. This is
-  // the same verdict the write-authority gate and the other hosts report, so a
-  // missing, staged or unreadable collaboration store names ONE cause instead
-  // of a per-row restatement — and it is never "no findings".
   const authority = await probeCollaborationAuthority({ harnessDir })
   if (authority.kind !== 'active') {
     return [

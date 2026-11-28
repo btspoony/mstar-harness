@@ -239,7 +239,6 @@ describe("catalog registration identity", () => {
     const handle = await openStore(context, "write");
     handle.db.prepare("update store_meta set authority_state = 'staged' where id = 1").run();
     handle.close();
-    // note: The catalog lives in the collaboration lane; staging execution is separate.
     const second = await registerCatalogEntity(context, doc("doc-2"), op("staged-2"));
     expect(second.id).toBe("doc-2");
     expect((await listCatalog(context, { kind: "document" })).total).toBe(2);
@@ -660,7 +659,7 @@ describe("migration 2", () => {
           [...migration.sql.matchAll(/create table ([a-z_][a-z0-9_]*)\s*\(/g)].map((match) => match[1]),
         ),
       ),
-    ].reverse(); // note: dependents before the tables they reference (foreign_keys=ON)
+    ].reverse();
     const existingTables = new Set(
       (handle.db.prepare("select name from sqlite_master where type='table'").all() as { name: string }[]).map((row) => row.name),
     );

@@ -731,12 +731,6 @@ export type CatalogFacts = {
   storeId: string | null;
   revision: number | null;
   relation_hash: string | null;
-  /**
-   * The source stores whose VERIFIED, active cutover publication targets this
-   * collaboration store and epoch (contract §Cutover state machine / §Security:
-   * lineage is an explicit publication, never inferred from a matching id).
-   * Empty when no catalog is active.
-   */
   lineage: readonly string[];
 };
 
@@ -747,25 +741,10 @@ export type CatalogFacts = {
  * `catalog_execution_bindings` stayed). Nothing here is a cross-file snapshot.
  */
 export type CatalogPinFacts = CatalogFacts & {
-  /** The workflow's registration binding (contract §3), when one is committed. */
   binding: { catalogId: string; relativePath: string | null } | null;
-  /**
-   * note: The execution store that owns the sealed input this pin was read for, or
-   * `null` when no execution store exists. A historical pin's lineage is
-   * proven only against THIS identity.
-   */
   executionStoreId: string | null;
 };
 
-/**
- * The registration gate (contract §3 step 3) for the prepare/bind/selection
- * readers: a root-visible workflow whose catalog registration is not committed
- * refuses `catalog.registration-pending` — a pending operation is never a
- * valid workspace. Pre-activation exclusion (§7 of the issue contract): a
- * missing or staged store, and a journal lane this workspace does not hold, are
- * not catalog verdicts, so workspaces without an ACTIVE store keep their
- * pass-through and are never retro-refused here.
- */
 async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflowId: string): Promise<void> {
   const context: StoreContext = { harnessDir: harnessRoot };
   let handle: StoreHandle;
@@ -776,9 +755,6 @@ async function assertWorkflowRegistrationCommitted(harnessRoot: string, workflow
     throw error;
   }
   try {
-    // invariant: One gate, one order: `assertCatalogExecutionCommittedWith` decides the
-    // execution store's own registry row BEFORE it pays for the journal's cross-file read,
-    // and tolerates a lane this workspace does not hold.
     await assertCatalogExecutionCommittedWith(context, handle.db, workflowId);
   } catch (error) {
     // A staged store is the pre-activation exclusion (§7), not a catalog verdict.
@@ -813,9 +789,6 @@ export async function readCatalogFacts(harnessRoot: string, planId: string): Pro
     if (error instanceof StoreError && error.code === "collaboration.not-active") {
       return { store: "inactive", storeId: null, revision: null, relation_hash: null, lineage: [] };
     }
-    // note: A workspace with no resolvable repository identity has no collaboration
-    // scope at all — the same harmless absence `path.ts` tolerates. A mode or
-    // config refusal is a real misconfiguration and still propagates.
     if (error instanceof CollaborationIdentityError && error.code === "collaboration.repo-identity-unresolved") {
       return { store: "absent", storeId: null, revision: null, relation_hash: null, lineage: [] };
     }
@@ -929,13 +902,6 @@ export function bindingFactsOn(
     : null;
 }
 
-/**
- * invariant: The registration binding of one workflow/plan, read from the execution lane.
- * A missing or non-active execution store carries no committed binding; the
- * catalog side is read separately, never joined in one transaction. The
- * execution store identity itself is returned so a pin can prove its lineage
- * against the exact source store.
- */
 async function readBindingFacts(
   harnessRoot: string,
   workflowId: string,
@@ -961,7 +927,6 @@ async function readBindingFacts(
   }
 }
 
-/** invariant: Both sides of a pin read, each from its own source and never joined. */
 async function readCatalogPinFacts(
   harnessRoot: string,
   workflowId: string,
@@ -1008,9 +973,6 @@ export async function readExecutionCatalogPin(input: {
     state.source = "row";
     state.pin = recorded;
     if (facts.store !== "active" || facts.storeId === null) return state;
-    // invariant: Reading a pin is also a verification: an identity that names neither the
-    // active catalog nor a VERIFIED migration source of this execution store is
-    // a conflict, never silently served as this catalog's selection.
     if (!pinIdentityIsProven(recorded, facts, facts.executionStoreId)) {
       state.conflict =
         `plan ${planId} is pinned to catalog store ${recorded.store_id}, which is neither the active catalog store ` +

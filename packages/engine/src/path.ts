@@ -1083,15 +1083,6 @@ async function registerScaffoldCatalog(harnessDir: string): Promise<void> {
   }
 }
 
-/**
- * invariant: Catalog writes live on the per-repository collaboration authority, so a
- * checkout whose scope has no resolvable origin or no active store yet has
- * nothing to register into: scaffold creates the harness and leaves the
- * catalog row to the store lifecycle. Only those harmless absence states defer
- * — an invalid/unsupported mode, an unreadable or misplaced config, or any
- * other actionable identity refusal must surface, and a real catalog verb's
- * refusal is never relaxed.
- */
 function catalogRegistrationUnavailable(error: unknown): boolean {
   if (error instanceof CollaborationIdentityError && error.code === "collaboration.repo-identity-unresolved") return true;
   if (

@@ -1,20 +1,3 @@
-/**
- * invariant: issue-sync.ts — the sync ledger state machine over the collaboration store's
- * ledger tables (spec: sync-ledger-contract). No network, no provider
- * dependency: P2 writes `project_bindings`, P3 drives the item transitions, and
- * nothing here mutates on the read path.
- *
- * TRANSACTION OWNERSHIP: the transport owns the transaction. Every exported
- * mutation runs inside the collaboration write transaction it is called in
- * (`withSyncWrite`, which takes `BEGIN IMMEDIATE`, re-verifies the binding and
- * active state under the writer lock, and commits), and a verb never begins,
- * commits or releases one — the guarded write connection refuses transaction
- * control, so a verb called the old way fails loudly instead of half-committing.
- * The row mutation and its receipt therefore still commit together or not at
- * all: an interruption cannot leave an advanced row without a receipt. Because
- * one command may run many verbs in one commit, the collaboration revision is
- * advanced ONCE at that boundary by `withSyncWrite`, never by a verb.
- */
 import { createHash } from "node:crypto";
 import { withCollaborationWrite, type CollaborationAuthority, type CollaborationStamp } from "./collaboration-store.js";
 import type { StoreContext, StoreDb } from "./store-db.js";
@@ -174,12 +157,6 @@ function syncRequestHash(kind: string, payload: Record<string, unknown>): string
   return createHash("sha256").update(JSON.stringify([kind, payload])).digest("hex");
 }
 
-/**
- * invariant: The standalone receipt an earlier effect of ANY collaboration domain left
- * under this operation id. The namespace is shared, so the ledger's replay rule
- * is also its cross-domain refusal: the same id with another payload is a
- * conflict, never a second receipt.
- */
 function replayOrRefuse<T>(db: StoreDb, operationId: string, hash: string): T | undefined {
   const existing = db
     .prepare(
@@ -196,17 +173,6 @@ function replayOrRefuse<T>(db: StoreDb, operationId: string, hash: string): T | 
   return JSON.parse(existing.result_json) as T;
 }
 
-/**
- * invariant: The receipt of one accepted effect. It does NOT advance the collaboration
- * revision: one command may record several receipts in one commit, and the
- * contract allows exactly one advance per committed mirror transaction — that
- * advance belongs to `withSyncWrite`'s boundary, which observes whether the
- * transaction changed anything at all (so a pure replay advances nothing).
- *
- * Upsert, not insert: a claim's key is stable per residue, so the retry that
- * opens the next cycle necessarily reuses it. Every other verb returns on its
- * replay before reaching here, so this only ever rewrites that one receipt.
- */
 function recordOperation(db: StoreDb, operationId: string, hash: string, receipt: unknown, at: string): void {
   db.prepare(
     "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at)" +
@@ -216,7 +182,6 @@ function recordOperation(db: StoreDb, operationId: string, hash: string, receipt
   ).run(operationId, hash, JSON.stringify(receipt), at);
 }
 
-/** note: Rows this connection has modified, in and out of the current transaction. */
 function changedRows(db: StoreDb): number {
   return (db.prepare("select total_changes() as n").get() as { n: number }).n;
 }
@@ -523,9 +488,6 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
     throw new SyncError("sync.invalid-input", "holderPid must be a positive process id");
   }
   const now = new Date().toISOString();
-  // invariant: The run token names THIS acquisition, which is what a release checks: a
-  // taken-over run's `finally` then matches nothing and cannot delete its
-  // successor's row.
   const runId = createHash("sha256")
     .update(`${bindingId}\u0000${direction}\u0000${input.holderPid}\u0000${holderHost}\u0000${now}`)
     .digest("hex")
@@ -534,12 +496,6 @@ export function acquireRun(db: StoreDb, input: AcquireRunInput): RunLease {
     .prepare(
       "insert into sync_runs(binding_id, direction, run_id, holder_pid, holder_host, started_at, reason) values (?, ?, ?, ?, ?, ?, ?)" +
         (input.takeRun === true
-          // why: The replacement keeps the ORIGINAL started_at: it is the baseline
-          // every earlier claim of this direction is judged against, so a
-          // predecessor's opened cycle stays recognisable to its successor
-          // (`push.ts` `openedByThisRun`) — which is exactly the residue a
-          // takeover exists to resolve. The new token, holder and reason are
-          // what change.
           ? " on conflict(binding_id, direction) do update set run_id = excluded.run_id, holder_pid = excluded.holder_pid," +
             " holder_host = excluded.holder_host, reason = excluded.reason"
           : " on conflict(binding_id, direction) do nothing"),
@@ -623,16 +579,8 @@ function writePlan(
   requireRunLease(db, { bindingId, direction, runId: input.runId });
   const replayed = replayOrRefuse<SyncItem>(db, operationId, hash);
   if (replayed !== undefined) {
-    // invariant: A replay answers "what did that call do", so it reports its receipt. A
-    // claim answers "may I send", so a receipt already on record means
-    // somebody else did — the CURRENT row is what that caller must act on.
     if (mode === "replay") return { claimed: false, item: replayed };
     const current = selectRow(db, bindingId, direction, localId);
-    // invariant: The claim key is stable per residue, not per attempt, so a recorded claim
-    // outlives the cycle that recorded it. It is an answer only while that
-    // cycle is still open: a `failed` row means the attempt ended (a refused
-    // write, a pre-send refusal), and the retry opens a new cycle under the
-    // SAME key. Only a `pending` row holds the send right.
     if (current !== undefined && current.item_state === "pending") return { claimed: false, item: toItem(current) };
   }
   requireLocalIssue(db, localId);
@@ -641,23 +589,16 @@ function writePlan(
   if (row === undefined) {
     db.prepare(
       "insert into issue_sync_state(binding_id, direction, local_id, external_id, item_state, last_remote_updated_at, pending_target, last_error, last_skip_reason, revision, updated_at)" +
-        // note: A brand-new row has copied nothing, so `last_remote_updated_at`
-        // starts null and the revision it was opened for sits in the target.
         " values (?, ?, ?, ?, 'pending', null, ?, null, null, 1, ?)",
     ).run(bindingId, direction, localId, externalId, remoteUpdatedAt, now);
   } else if (row.item_state === "failed" || row.item_state === "unbound") {
     casUpdate(db, { bindingId, direction, localId }, row.revision, {
       item_state: "pending",
       external_id: externalId ?? row.external_id,
-      // invariant: Opening a cycle records its TARGET only. The copied watermark stays
-      // where it is until an apply actually writes those fields, so a crash
-      // cannot leave a row claiming content it never took.
       last_remote_updated_at: row.last_remote_updated_at,
       pending_target: remoteUpdatedAt ?? row.pending_target,
       last_error: null,
       last_skip_reason: null,
-      // invariant: Opening a cycle changes no confirmed fact: both push columns carry
-      // forward, so a retry never forgets the hash or the ownership it holds.
       last_request_hash: row.last_request_hash,
       last_kind_label: row.last_kind_label,
     }, now);
@@ -729,9 +670,6 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
   const now = new Date().toISOString();
   const row = requireItem(selectRow(db, bindingId, direction, localId));
   if (row.item_state !== "applied") refuseTransition(row.item_state, "replanItem");
-  // invariant: The other half of the contract: a re-plan is for a NEWER remote revision.
-  // An equal or older one would rewind the watermark, so it is refused as an
-  // out-of-contract call rather than accepted as a no-op.
   const next = remoteUpdatedAt ?? row.last_remote_updated_at;
   if (next !== null && row.last_remote_updated_at !== null && !isNewerInstant(next, row.last_remote_updated_at)) {
     throw new SyncError(
@@ -742,9 +680,6 @@ export function replanItem(db: StoreDb, input: PlanItemInput): SyncItem {
   casUpdate(db, { bindingId, direction, localId }, row.revision, {
     item_state: "pending",
     external_id: externalId ?? row.external_id,
-    // why: The cycle TARGET, in its own column: the stale guard compares a
-    // replayed page against it, while `last_remote_updated_at` keeps meaning
-    // "what was actually copied".
     last_remote_updated_at: row.last_remote_updated_at,
     pending_target: remoteUpdatedAt ?? row.pending_target,
     last_error: null,
@@ -847,10 +782,6 @@ export function markUnconfirmed(db: StoreDb, input: MarkUnconfirmedInput): SyncI
   if (replayed !== undefined) return replayed;
   const now = new Date().toISOString();
   const row = requireItem(selectRow(db, bindingId, direction, localId));
-  // invariant: The discriminating fact is IDENTITY, not state: an update always addresses a
-  // row an earlier confirmed write gave an id. `pending` without one is the
-  // ambiguous CREATE residue, which reconciliation (or an explicit adoption)
-  // owns; it has no payload proof to invalidate, so this verb refuses it.
   if (row.external_id === null) refuseTransition(row.item_state, "markUnconfirmed");
   casUpdate(db, { bindingId, direction, localId }, row.revision, {
     item_state: row.item_state,
@@ -899,42 +830,21 @@ function markItem(
   if (replayed !== undefined) return replayed;
   const now = new Date().toISOString();
   const row = requireItem(selectRow(db, bindingId, direction, localId));
-  // why: Push has no intermediate observable state: a confirmed update is applied
-  // OVER applied, and the write itself is not resumable through the ledger
-  // (the payload hash decides the next run). Import keeps its strict edges.
   const pushReapply = target === "applied" && row.item_state === "applied" && direction === "push";
   if (row.item_state !== "pending" && !pushReapply && !(target === "skipped" && row.item_state === "failed")) {
     refuseTransition(row.item_state, `markItem -> ${target}`);
   }
-  // why: Only a successful apply has copied fields, so only it may advance the
-  // copied watermark; a failure or a stale skip leaves the cycle open and the
-  // watermark where it was. The caller's own revision wins over the planned
-  // target: a resumed cycle can copy a NEWER revision than it planned for, and
-  // recording the older one would let a page between the two overwrite it.
   const applied = target === "applied";
   const proposed = input.remoteUpdatedAt ?? row.pending_target ?? null;
-  // invariant: A replayed page can be applied precisely BECAUSE it is not the oldest
-  // candidate: recording a revision older than the one already copied would
-  // make that page look fresh again on the next run. The watermark never
-  // moves backwards.
   const copiedTarget =
     proposed !== null && isOlderInstant(proposed, row.last_remote_updated_at) ? row.last_remote_updated_at : proposed;
   casUpdate(db, { bindingId, direction, localId }, row.revision, {
     item_state: target,
-    // invariant: A CONFIRMED identity from the caller is the only way a push records
-    // `external_id`; an omission keeps what the row holds, so an ambiguous
-    // write can never erase an identity a previous run proved.
     external_id: applied ? (input.externalId ?? row.external_id) : row.external_id,
     last_remote_updated_at: applied ? (copiedTarget ?? row.last_remote_updated_at) : row.last_remote_updated_at,
     pending_target: applied ? null : row.pending_target,
     last_error: target === "failed" ? (text ?? null) : null,
     last_skip_reason: target === "skipped" ? (text ?? null) : null,
-    // invariant: The skip-rule hash and the label ownership follow the SAME rule: a
-    // confirmed apply updates them, anything else carries them forward. A
-    // confirmed update carries exactly the label it wrote, so ownership
-    // narrows to that one label; the removal it sent already took the rest.
-    // `clearProof` is the identity-CHANGE case: both facts described the
-    // previous remote issue, so neither may survive the new id.
     last_request_hash: applied ? (input.clearProof === true ? null : (input.requestHash ?? row.last_request_hash)) : row.last_request_hash,
     last_kind_label: applied
       ? input.clearProof === true

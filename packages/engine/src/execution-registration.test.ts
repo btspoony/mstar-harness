@@ -86,12 +86,6 @@ import { derivePlanRegistration, PREPARE_PHASE, WORKFLOW_SNAPSHOT_FILE, type Reg
 import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 
 const ROOT = mkdtempSync(join(tmpdir(), "mstar-execution-registration-"));
-/**
- * why: Every case ran against one combined store before the cutover; a registration
- * now publishes into the repository's user-level collaboration lane, so the
- * suite pins `homedir` to a temporary home (a real spy on the live module
- * binding) and gives each fixture workspace its own checkout identity.
- */
 const HOME = join(ROOT, "home");
 let homeSpy: { mockRestore: () => void };
 beforeAll(() => {
@@ -103,16 +97,8 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/**
- * why: The checkout identity and ACTIVE collaboration lane one fixture workspace
- * owns: a real Git checkout with an explicit `repo_id`, so the lane path is
- * deterministic and private, and the staged record flipped to active (this
- * release ships no public activator).
- */
 async function collaborationLane(workspace: string): Promise<void> {
   execFileSync("git", ["init", "-q"], { cwd: workspace, stdio: "ignore" });
-  // why: One lane per fixture workspace: the repo id is the workspace basename, a
-  // safe identifier because every fixture name is a lower-case slug.
   const repoId = workspace.split("/").pop()!.toLowerCase().replace(/[^a-z0-9._-]/g, "-");
   writeFileSync(join(workspace, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=${repoId.replace(/^[^a-z0-9]/, "x")}\n`);
   const context: StoreContext = { harnessDir: join(workspace, ".mstar") };
@@ -184,7 +170,6 @@ async function activeFixture(label: string): Promise<Fixture> {
     caller: { sessionId: COORDINATOR_ID, role: "coordinator", workflowId: WORKFLOW_ID },
   };
 }
-
 
 /**
  * The §4 registered plan document a reviewed registration selects: its
@@ -350,7 +335,6 @@ async function fixtureWrite(context: StoreContext, sql: string, ...params: Array
   }
 }
 
-/** note: Read rows from this fixture's own collaboration lane (the catalog's source). */
 function collaborationRows<T>(context: StoreContext, sql: string, ...params: Array<string | number>): T[] {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {
@@ -360,7 +344,6 @@ function collaborationRows<T>(context: StoreContext, sql: string, ...params: Arr
   }
 }
 
-/** note: The catalog revision a reviewed registration CASes against: the lane's own. */
 function catalogRevisionOf(context: StoreContext): number {
   const [row] = collaborationRows<{ catalog_revision: number }>(
     context,
@@ -375,8 +358,6 @@ function catalogRevisionOf(context: StoreContext): number {
  * the journal's in-flight count.
  */
 async function footprint(context: StoreContext): Promise<Record<string, unknown>> {
-  // note: A post-fence source no longer carries the journal table, so its pending count
-  // is answered by the lane's own copy below instead of an unnameable subquery.
   const executionHandle = await openStore(context, "read");
   const journalOnExecution = tableNamesOn(executionHandle.db).has("catalog_operations");
   executionHandle.close();
@@ -395,8 +376,6 @@ async function footprint(context: StoreContext): Promise<Record<string, unknown>
           ? ", (select count(*) from catalog_operations where phase in ('prepared','execution-written')) as pending"
           : ""),
     )) ?? {};
-  // why: The catalog and the collaboration revision live in the repository's own
-  // lane; the execution store keeps only the binding and the legacy journal.
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
   try {
@@ -456,7 +435,6 @@ async function plantPendingLegacyOperation(context: StoreContext, operationId: s
     TS,
   );
 }
-
 
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
   try {
@@ -531,12 +509,6 @@ describe("execution-registration", () => {
       catalog_revision: 1,
     });
 
-    // invariant: (c) exactly the rows one registration creates, and exactly the revision
-    // advances it owes: one root revision for the membership change, ONE
-    // collaboration revision for the whole catalog-effect transaction (§3.1),
-    // one catalog revision for the published entity, and one effect receipt —
-    // never a second collaboration advance for the same transaction, and no
-    // extra row at all.
     expect(await footprint(fixture.context)).toEqual({
       ...before,
       root_revision: (before.root_revision as number) + 1,
@@ -1285,10 +1257,6 @@ describe("execution-registration", () => {
     expect(refusal.code).toBe("catalog.duplicate");
     expect(refusal.message).toContain("elsewhere.md");
 
-    // invariant: The workflow rows and the first published entity were rolled back with
-    // the refused publish: neither half is visible, and no collaboration or
-    // catalog revision advanced. The deterministic refusal itself is recorded
-    // as the operation's durable decline — that receipt IS the replay answer.
     expect(await footprint(fixture.context)).toEqual({ ...before, effects: (before.effects as number) + 1 });
     expect(
       collaborationRows<{ result_json: string }>(
@@ -1366,8 +1334,6 @@ describe("execution-registration", () => {
       ),
     );
     expect(refusal.code).toBe("catalog.revision-conflict");
-    // note: The reviewed expectation did not match the lane, so nothing published and
-    // no revision moved; the deterministic refusal is the durable decline.
     expect(await footprint(fixture.context)).toEqual({ ...accepted, effects: (accepted.effects as number) + 1 });
   });
 
@@ -1380,13 +1346,7 @@ describe("execution-registration", () => {
     expect(refusal.code).toBe("catalog.registration-pending");
     expect(refusal.message).toContain("op-legacy-pending");
     expect(refusal.message).toContain("mstar catalog reconcile --abort");
-    // invariant: This journal carries NO identity-failure record, so the refusal offers only the
-    // route that applies. `purge-registration` refuses exactly this state
-    // (`catalog.purge-not-found`), and naming a command that refuses is not a recovery.
     expect(refusal.message).not.toContain("mstar catalog purge-registration");
-    // note: The refusal is reached by the registration entry itself, which holds no
-    // root visibility; the journal verdict is all this caller knows. (The dispatch and
-    // handle-taking gates, which DO read the registry row, still name it.)
     expect(refusal.message).not.toContain("root-visible");
 
     expect(await footprint(fixture.context)).toEqual(before);
@@ -1397,8 +1357,6 @@ describe("execution-registration", () => {
   test("execution-registration-keeps-the-stale-root-token-conflict-ahead-of-the-combined-journal", async () => {
     const fixture = await activeFixture("pending-combined-stale-root");
     await registerPlanWorkflow(fixture, "op-first");
-    // note: A combined source keeps its journal in the execution store, so this row is
-    // in the SAME transaction as the root-token CAS — the original ordering.
     await plantPendingLegacyOperation(fixture.context, "op-combined-pending", WORKFLOW_ID_ALT);
     const accepted = await footprint(fixture.context);
 
@@ -1411,15 +1369,12 @@ describe("execution-registration", () => {
         },
       ),
     );
-    // invariant: The stale token is reported, not the pending journal.
     expect(refusal.code).toBe("execution.stale-token");
     expect(await footprint(fixture.context)).toEqual(accepted);
   });
 
   test("execution-registration-refuses-a-split-owner-journal-inside-the-transaction", async () => {
     const fixture = await activeFixture("pending-split");
-    // why: The post-fence shape: the collaboration lane owns the journal, so the
-    // execution store no longer carries the table and the verdict is a split read.
     const fenced = new DatabaseSync(join(fixture.harnessRoot, "store.db"));
     try {
       fenced.exec("drop table catalog_operations");
@@ -1442,8 +1397,6 @@ describe("execution-registration", () => {
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
 
-    // invariant: The refusal is DECIDED inside the transaction, after the root-token CAS:
-    // a stale token is still reported as the token conflict, never as the journal verdict.
     await registerPlanWorkflow(fixture, "op-split-first", PLAN_ID, WORKFLOW_ID_ALT);
     const stale = await refusalOf(() =>
       commitExecutionRegistration(
@@ -1467,9 +1420,6 @@ describe("execution-registration", () => {
     }
     const before = await footprint(fixture.context);
     let seamRan = false;
-    // invariant: The split lane stays open across the registration transaction, so the verdict
-    // is read at its position: a row that appears after the owner verdict and before that lock
-    // refuses. A pre-read-only verdict missed exactly this row.
     setRegistrationJournalGapForTest(() => {
       seamRan = true;
       const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
@@ -1486,8 +1436,6 @@ describe("execution-registration", () => {
       expect(seamRan).toBe(true);
       expect(refusal.code).toBe("catalog.registration-pending");
       expect(refusal.message).toContain("op-split-gap");
-      // note: The planted row IS the only lane change; remove it so the footprint proves the
-      // refusal wrote nothing else.
       const lane = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
       try {
         lane.prepare("delete from catalog_operations where operation_id = 'op-split-gap'").run();
@@ -1510,19 +1458,12 @@ describe("execution-registration", () => {
       fenced.close();
     }
     const lanePath = resolveCollaborationLocation(fixture.context).dbPath;
-    // invariant: The verdict lane is a WRITE admission while the split journal's own lane is a
-    // READ one, so a checkout that records no binding opens the journal lane and then refuses at
-    // the stamp. The lane opened for the journal must be released by that refusal.
     rmSync(join(fixture.harnessRoot, "collaboration-binding.json"));
 
-    // note: Count the lane connections this call opens and the ones it closes, through the real
-    // driver: `busyAware` closes the raw connection, so a `close` spy on the prototype sees it.
     const driver = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: new (...args: unknown[]) => object };
     const realDatabaseSync = driver.DatabaseSync;
     const laneHandles: object[] = [];
     const closedHandles: object[] = [];
-    // note: `node:sqlite` ships no type for the driver prototype this spy must reach; the shape
-    // here is the one member the spy replaces.
     const driverPrototype: { close(this: object): void } = DatabaseSync.prototype;
     const realClose = driverPrototype.close;
     const constructorSpy = spyOn(driver, "DatabaseSync").mockImplementation(((...args: unknown[]) => {
@@ -1541,8 +1482,6 @@ describe("execution-registration", () => {
       constructorSpy.mockRestore();
       closeSpy.mockRestore();
     }
-    // why: A stamp refusal happens AFTER the journal lane is opened, so every connection this
-    // call took on the lane must be closed; a leaked one keeps the store file's handle alive.
     expect(laneHandles.length).toBeGreaterThan(0);
     for (const handle of laneHandles) expect(closedHandles).toContain(handle);
   });
@@ -1582,8 +1521,6 @@ describe("execution-registration \u2014 frozen input remains authoritative after
     expect(await registerPlanWorkflow(fixture, "op-frozen-source")).toEqual(receipt);
   });
 });
-
-
 
 /* ------------------------------------------------------------------------ *
  * Recovery-first registration on the ACTIVE DB (E06b: A02/A04/A05/A26/A28)
@@ -1787,10 +1724,6 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     const reviewed = planRequest({ context: fixture.context, operationId: "op-interrupted" });
     const before = await footprint(fixture.context);
 
-    // invariant: A refused attempt stops at the collaboration boundary and publishes
-    // nothing: no execution row, no catalog byte, no collaboration revision
-    // advance. The deterministic refusal is recorded as this operation's
-    // durable decline — the receipt a same-id retry reads.
     const interrupted = await refusalOf(() =>
       commitExecutionRegistration(
         { ...fixture.context, caller: fixture.caller },
@@ -1801,8 +1734,6 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     expect(await footprint(fixture.context)).toEqual({ ...before, effects: (before.effects as number) + 1 });
     const declined = await footprint(fixture.context);
 
-    // why: The same id re-raises the recorded decline instead of re-evaluating (or
-    // re-publishing) anything.
     expect(
       await refusalOf(() =>
         commitExecutionRegistration(
@@ -1813,9 +1744,6 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     ).toMatchObject({ code: "catalog.revision-conflict" });
     expect(await footprint(fixture.context)).toEqual(declined);
 
-    // invariant: The SAME normal intent under its own operation id completes exactly one
-    // registration, and the creation facts are the reviewed call's own — the
-    // original timestamp, the document-derived row — not a second attempt's.
     const accepted = await commitExecutionRegistration(
       { ...fixture.context, caller: fixture.caller },
       { ...planRequest({ context: fixture.context, operationId: "op-interrupted-retry" }), expected: fixture.rootToken },
@@ -1845,8 +1773,6 @@ describe("execution-registration \u2014 recovery-first registration", () => {
     expect(state.data.workflows.map((workflow) => workflow.state.id)).toEqual([WORKFLOW_ID]);
     expect(state.data.workflows[0]!.plans.map((view) => view.plan.id)).toEqual([PLAN_ID]);
 
-    // note: A retry after the commit replays the one recorded receipt and adds
-    // nothing, whatever tokens it re-read.
     const current = await readExecutionState(fixture.context);
     expect(
       await commitExecutionRegistration(
@@ -1927,17 +1853,6 @@ describe("execution-registration \u2014 recovery-first registration", () => {
   });
 });
 
-/* note: ------------------------------------------------------------------------ *
- * The collaboration composite: witness, conflict and interruption
- * ------------------------------------------------------------------------ */
-
-/**
- * invariant: Leave exactly what an interrupted finalization leaves behind: the
- * collaboration effect committed under its operation id, and none of the
- * execution delta that finalization would have written. This is fixture surgery
- * on a real store, not a mocked frame — the retry then exercises the real
- * reservation, effect replay and finalization.
- */
 async function simulateInterruptedFinalization(
   context: StoreContext,
   operationId: string,
@@ -1962,7 +1877,6 @@ describe("collaboration registration replay", () => {
     const fixture = await activeFixture("replay-witness");
     const location = resolveCollaborationLocation(fixture.context);
     const before = await footprint(fixture.context);
-    // note: A staged lane is not an authority a registration may publish into.
     const db = new DatabaseSync(location.dbPath);
     try {
       db.prepare("update collaboration_meta set authority_state = 'staged', activated_at = null where id = 1").run();
@@ -1980,7 +1894,6 @@ describe("collaboration registration replay", () => {
         restore.close();
       }
     }
-    // note: Nothing was admitted: no reservation, no effect, no catalog byte.
     expect(await one<{ n: number }>(fixture.context, "select count(*) as n from execution_collaboration_intents")).toEqual({ n: 0 });
     expect(await footprint(fixture.context)).toEqual(before);
     expect(noJsonRegistrationFiles(fixture.workspace)).toBe(true);
@@ -1998,8 +1911,6 @@ describe("collaboration registration replay", () => {
     await simulateInterruptedFinalization(fixture.context, "op-replay-interrupted", WORKFLOW_ID);
     expect(await footprint(fixture.context)).toMatchObject({ workflows: 0, entities: 1, catalog_revision: 1, effects: 1 });
 
-    // note: A DIFFERENT reviewed call under the same operation id is a conflict: the
-    // reservation froze the first payload, and nothing touches the lane.
     const interrupted = await readExecutionState(fixture.context);
     const changed = await refusalOf(() =>
       commitExecutionRegistration(
@@ -2010,9 +1921,6 @@ describe("collaboration registration replay", () => {
     expect(changed.code).toBe("execution.operation-conflict");
     expect(await footprint(fixture.context)).toMatchObject({ workflows: 0, entities: 1, catalog_revision: 1, effects: 1 });
 
-    // why: The ORIGINAL intent resumes. The caller supplies a catalog expectation
-    // that is WRONG for the moved catalog: the frozen one wins, so the recorded
-    // effect replays and no second delta publishes.
     const current = await readExecutionState(fixture.context);
     const resumed = await commitExecutionRegistration(
       { ...fixture.context, caller: fixture.caller },
@@ -2033,11 +1941,8 @@ describe("collaboration registration replay", () => {
       effects: 1,
       pending: 0,
     });
-    // note: The binding pins the EXACT catalog revision the effect receipt recorded,
-    // not whatever the caller re-presented or the catalog holds now.
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toMatchObject({ catalog_revision: 1, catalog_id: PLAN_ID });
 
-    // note: And the finalized replay is itself stable.
     const after = await readExecutionState(fixture.context);
     expect(
       await commitExecutionRegistration(
@@ -2052,7 +1957,6 @@ describe("collaboration registration replay", () => {
     const fixture = await activeFixture("replay-shipped-pending");
     const reviewed = planRequest({ context: fixture.context, operationId: "unused-shipped-pending" });
     const context: ExecutionContext = { ...fixture.context, caller: fixture.caller };
-    // note: The reviewed constraint the caller held before the lost response.
     const accepted = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
       workflow: reviewed.workflow,
@@ -2060,9 +1964,6 @@ describe("collaboration registration replay", () => {
       expectedCatalogRevision: 0,
     });
     await simulateInterruptedFinalization(fixture.context, accepted.operationId, WORKFLOW_ID);
-    // invariant: The catalog moved to 1 with no execution receipt, yet the retry with its
-    // ORIGINAL reviewed expectation must reach the frozen pending expectation
-    // and replay the committed effect instead of refusing a new-attempt CAS.
     const pending = await readExecutionState(fixture.context);
     const resumed = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
@@ -2083,7 +1984,6 @@ describe("collaboration registration replay", () => {
       effects: 1,
       pending: 0,
     });
-    // note: A genuinely NEW attempt still enforces its own reviewed expectation.
     const fresh = await readExecutionState(fixture.context);
     await expect(
       registerShippedCatalogExecution(context, {
@@ -2096,13 +1996,6 @@ describe("collaboration registration replay", () => {
   });
 });
 
-
-/* ------------------------------------------------------------------------ *
- * note: §7 the REMOTE registration route: the shipped wrapper resolves its authority
- * from the checkout's private cache and the composite freezes one outbox intent
- * ------------------------------------------------------------------------ */
-
-/** note: One reviewed plan registration against a REMOTE project journal. */
 function remotePlanWorkflow(
   context: StoreContext,
   input: { planId: string; title: string; workflowId: string; project?: string },
@@ -2119,7 +2012,6 @@ function remotePlanWorkflow(
   };
 }
 
-/** note: One reviewed ITERATION registration against a REMOTE project journal. */
 function remoteIterationWorkflow(
   context: StoreContext,
   input: { iterationId: string; rows: Array<{ planId: string; title: string }> },
@@ -2146,10 +2038,6 @@ type RemoteFixture = Readonly<{
   token: ExecutionToken;
 }>;
 
-/**
- * note: A remote-bound checkout whose cache holds one complete observation: the reviewed
- * bind, the observed project scope, and an ACTIVE (empty) execution authority.
- */
 async function remoteFixture(label: string): Promise<RemoteFixture> {
   const scope = createRemoteScope(ROOT, label);
   const commit = scope.publish();
@@ -2168,7 +2056,6 @@ async function remoteFixture(label: string): Promise<RemoteFixture> {
   };
 }
 
-/** note: The cache's outbox rows, newest last, as the composite froze them. */
 function outboxRows(context: StoreContext): Array<Record<string, unknown>> {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {
@@ -2180,7 +2067,6 @@ function outboxRows(context: StoreContext): Array<Record<string, unknown>> {
   }
 }
 
-/** note: The cache's highest stored observation revision for the fixture project. */
 function observedRevision(context: StoreContext): number {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {
@@ -2193,7 +2079,6 @@ function observedRevision(context: StoreContext): number {
   }
 }
 
-/** note: The execution reservation of one composite operation, as the ledger recorded it. */
 async function reservationRow(context: StoreContext, operationId: string) {
   return await one<{ phase?: string; cause_code?: string | null; cause_message?: string | null }>(
     context,
@@ -2202,7 +2087,6 @@ async function reservationRow(context: StoreContext, operationId: string) {
   );
 }
 
-/** note: The provider operation id a remote composite froze, from its partial refusal. */
 function frozenProviderIntent(error: unknown): string {
   if (error === null || typeof error !== "object" || !("details" in error)) {
     throw new Error("fixture: the refusal carries no details");
@@ -2218,14 +2102,12 @@ function frozenProviderIntent(error: unknown): string {
   return frozen[0];
 }
 
-/** note: The refusal's structured details, as the CLI publishes them. */
 function detailsOf(error: unknown): Record<string, unknown> {
   if (error === null || typeof error !== "object" || !("details" in error)) return {};
   const details = (error as { details?: unknown }).details;
   return details !== null && typeof details === "object" ? (details as Record<string, unknown>) : {};
 }
 
-/** note: The trusted caller of ONE registration: it must name the workflow that request creates. */
 function registrationContext(fixture: RemoteFixture, workflowId: string): ExecutionContext {
   return { ...fixture.context, caller: { ...fixture.caller, workflowId } };
 }
@@ -2245,8 +2127,6 @@ describe("remotely bound shipped registration", () => {
       operationId: "op-remote-register",
       expected: fixture.token,
     }).catch((error: unknown) => error);
-    // invariant: The provider intent is durable but unconfirmed, so the composite reports its
-    // partial state instead of success — never the local-lane refusal that came before it.
     expect(refused).toMatchObject({ code: "collaboration.operation-partial" });
     const rows = outboxRows(fixture.context);
     expect(rows).toHaveLength(1);
@@ -2262,7 +2142,6 @@ describe("remotely bound shipped registration", () => {
 
   test("a deterministic preparation refusal declines its reservation so a corrected retry proceeds", async () => {
     const fixture = await remoteFixture("remote-register-decline");
-    // note: One earlier registration leaves an enqueued intent ahead of this test's attempts.
     await registerShippedCatalogExecution(registrationContext(fixture, WORKFLOW_ID), {
       actor: "project-manager",
       workflow: {
@@ -2274,8 +2153,6 @@ describe("remotely bound shipped registration", () => {
       expected: fixture.token,
     }).catch(() => undefined);
 
-    // why: `plan-1` is already registered in the OBSERVED project, so the frozen delta can never
-    // publish: a deterministic refusal of the preparation itself, before any provider intent.
     const conflicting = {
       kind: "plan" as const,
       workflowId: WORKFLOW_ID_ALT,
@@ -2289,13 +2166,11 @@ describe("remotely bound shipped registration", () => {
         expected: fixture.token,
       }),
     ).rejects.toMatchObject({ code: "catalog.duplicate" });
-    // invariant: The reservation is DECLINED, not left prepared: it blocks no corrected retry.
     expect(await reservationRow(fixture.context, "op-remote-conflict")).toMatchObject({
       phase: "declined",
       cause_code: "catalog.duplicate",
     });
 
-    // note: The corrected request proceeds under a NEW operation id and enqueues its own intent.
     const corrected = await registerShippedCatalogExecution(registrationContext(fixture, WORKFLOW_ID_THIRD), {
       actor: "project-manager",
       workflow: {
@@ -2331,7 +2206,6 @@ describe("remotely bound shipped registration", () => {
     }).catch((error: unknown) => error);
     const providerIntent = frozenProviderIntent(conflicted);
 
-    // note: The provider recorded a fork instead of the effect; a reviewed resolution replaces it.
     const heads = await conflictFrozenIntent(fixture.context, providerIntent);
     const original = await readRemoteIntent(fixture.context, providerIntent);
     if (original.event === null) throw new Error("fixture: the conflicted intent discloses no frozen event");
@@ -2344,8 +2218,6 @@ describe("remotely bound shipped registration", () => {
     });
     await confirmFrozenIntent(fixture.context, resolutionId);
 
-    // invariant: The reissue interprets the live chain and commits the execution delta from the
-    // REPLACEMENT receipt, so the plan is never left waiting on the conflicted original.
     const accepted = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
       workflow: { kind: "plan", workflowId: WORKFLOW_ID, options },
@@ -2354,8 +2226,6 @@ describe("remotely bound shipped registration", () => {
     });
     expect(accepted).toMatchObject({ operationId: "op-remote-repair", workflowId: WORKFLOW_ID, recovered: false });
     expect(await reservationRow(fixture.context, "op-remote-repair")).toMatchObject({ phase: "confirmed" });
-    // invariant: The binding is written from the confirmed replacement's journal: the workflow is
-    // bound to the reviewed plan row the provider actually carries, at the pinned revision 0.
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toMatchObject({
       catalog_kind: "plan",
       catalog_id: "20260921-repaired",
@@ -2379,8 +2249,6 @@ describe("remotely bound shipped registration", () => {
     }).catch((error: unknown) => error);
     const providerIntent = frozenProviderIntent(pending);
 
-    // note: The provider recorded a fork; the reviewed replacement settles it but publishes a
-    // journal WITHOUT the reviewed plan — a legal project-replace that omits the outcome.
     const heads = await conflictFrozenIntent(fixture.context, providerIntent);
     const original = await readRemoteIntent(fixture.context, providerIntent);
     if (original.event === null || original.event.change.kind !== "project-replace") {
@@ -2406,8 +2274,6 @@ describe("remotely bound shipped registration", () => {
     });
     await confirmFrozenIntent(fixture.context, resolutionId);
 
-    // invariant: The settlement carries no reviewed outcome, so the reservation is declined with
-    // the settled disclosure and NO execution workflow or binding is recorded from a guess.
     await expect(
       registerShippedCatalogExecution(context, {
         actor: "project-manager",
@@ -2422,9 +2288,6 @@ describe("remotely bound shipped registration", () => {
     });
     expect(await bindingOf(fixture.context, WORKFLOW_ID)).toBeUndefined();
 
-    // invariant: The supported correction route works: the settled repair invalidated the cached
-    // base, so the operator re-observes at the cache's current revision first; a NEW registration
-    // under a new operation id is then admitted and enqueues its own intent.
     const cacheDb = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
     let revision = 0;
     try {
@@ -2471,8 +2334,6 @@ describe("remotely bound shipped registration", () => {
     }).catch((error: unknown) => error);
     const providerIntent = frozenProviderIntent(pending);
 
-    // note: The reviewed replacement settles the fork but publishes the same plan ID with another
-    // title — a legal project-replace that keeps every ID and changes the reviewed content.
     const heads = await conflictFrozenIntent(fixture.context, providerIntent);
     const original = await readRemoteIntent(fixture.context, providerIntent);
     if (original.event === null || original.event.change.kind !== "project-replace") {
@@ -2499,8 +2360,6 @@ describe("remotely bound shipped registration", () => {
     });
     await confirmFrozenIntent(fixture.context, resolutionId);
 
-    // invariant: ID presence is not the reviewed outcome: the changed portable field is disclosed
-    // with the settled operation and record, and no execution workflow or binding is recorded.
     const refused = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
       workflow: { kind: "plan", workflowId: WORKFLOW_ID, options },
@@ -2511,15 +2370,9 @@ describe("remotely bound shipped registration", () => {
     expect(detailsOf(refused)).toMatchObject({
       settled_operations: [resolutionId],
       mismatched_entity: { kind: "plan", id: planId },
-      // invariant: The settled provider work is durable and the decline names it, so the replay
-      // never claims an effect-free operation.
       confirmed_components: [`provider:${resolutionId}`],
     });
     expect(detailsOf(refused).settled_records).toHaveLength(1);
-    // invariant: The advertised correction is ONE ordered, runnable route — the CLI forwards the
-    // project only when it is given, so the printed form must carry the journal's own --project or
-    // a remote catalog write refuses `catalog.invalid-entity`. The structured recovery field names
-    // the same route the message does.
     const advertised = String(detailsOf(refused).recovery);
     const correction = `mstar catalog update plan ${planId}`;
     expect(refused instanceof Error ? refused.message : "").toContain(correction);
@@ -2534,8 +2387,6 @@ describe("remotely bound shipped registration", () => {
       cause_code: "remote.effect-mismatch",
     });
 
-    // note: The settled repair invalidated the cached base, so the operator re-observes the
-    // settled journal before the correcting catalog write.
     const settledCheck = positiveCheck();
     const settledBase = completeSnapshot(settledCheck);
     await ingestRemoteObservation(
@@ -2548,8 +2399,6 @@ describe("remotely bound shipped registration", () => {
       ),
     );
 
-    // note: The reviewed value is settled through its OWN remote catalog write, addressed at the
-    // observed row revision — the correction the refusal advertises.
     const updateId = "00000000-0000-4000-8000-0000000008c4";
     const pendingUpdate = await updateCatalogEntity(
       fixture.context,
@@ -2570,8 +2419,6 @@ describe("remotely bound shipped registration", () => {
       updatedJournal.catalogEntities.find((row) => row.kind === "plan" && row.id === planId),
     ).toMatchObject({ title: "Reviewed title", revision: 2 });
 
-    // invariant: Re-observing the settled journal and reissuing the SAME registration for the SAME
-    // workflow registers it: the settled row is identical, so it is adopted, not rewritten.
     const correctedCheck = positiveCheck();
     const correctedBase = completeSnapshot(correctedCheck);
     await ingestRemoteObservation(
@@ -2633,8 +2480,6 @@ describe("remotely bound shipped registration", () => {
     }).catch((error: unknown) => error);
     const providerIntent = frozenProviderIntent(pending);
 
-    // note: The reviewed replacement settles the fork and publishes EVERY entity row but omits the
-    // reviewed `plan belongs-to iteration` link the shipped iteration emits.
     const heads = await conflictFrozenIntent(fixture.context, providerIntent);
     const original = await readRemoteIntent(fixture.context, providerIntent);
     if (original.event === null || original.event.change.kind !== "project-replace") {
@@ -2663,8 +2508,6 @@ describe("remotely bound shipped registration", () => {
     });
     await confirmFrozenIntent(fixture.context, resolutionId);
 
-    // invariant: The reviewed relation is part of the business outcome; its absence is disclosed
-    // and declined instead of binding the workflow from an incomplete settlement.
     const refused = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
       workflow: { kind: "iteration", workflowId: iterationId, options },
@@ -2696,8 +2539,6 @@ describe("remotely bound shipped registration", () => {
       rows: [{ planId, title: "Ordered plan" }],
     });
     const context = registrationContext(fixture, iterationId);
-    // note: The observed journal already carries the reviewed membership at ordinal 2 (an earlier
-    // settled write), while the reviewed delta asks for ordinal 0.
     const check = positiveCheck();
     const base = completeSnapshot(check);
     await ingestRemoteObservation(
@@ -2736,8 +2577,6 @@ describe("remotely bound shipped registration", () => {
         link.toKind === "iteration" &&
         link.toId === iterationId,
     );
-    // invariant: Link identity is endpoints plus relation, so the settled ordinal-2 row is REPLACED by
-    // the reviewed ordinal 0 instead of publishing a second parallel membership edge.
     expect(edges).toEqual([
       { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 0 },
     ]);
@@ -2752,7 +2591,6 @@ describe("remotely bound shipped registration", () => {
       rows: [{ planId, title: "Twice-linked plan" }],
     });
     const context = registrationContext(fixture, iterationId);
-    // note: An earlier settlement left TWO parallel rows for the same relation, at ordinals 0 and 2.
     const check = positiveCheck();
     const base = completeSnapshot(check);
     await ingestRemoteObservation(
@@ -2784,8 +2622,6 @@ describe("remotely bound shipped registration", () => {
     const frozen = JSON.parse(String(row?.request_json)) as {
       event: { change: { project: { catalogLinks: Array<Record<string, unknown>> } } };
     };
-    // invariant: BOTH duplicated rows are replaced by the ONE reviewed edge (the reviewed ordinal
-    // wins), so the finalization's one-edge-per-relation proof can pass instead of declining forever.
     expect(
       frozen.event.change.project.catalogLinks.filter(
         (link) =>
@@ -2815,8 +2651,6 @@ describe("remotely bound shipped registration", () => {
     ).toEqual([
       { fromKind: "plan", fromId: planId, relation: "belongs-to", toKind: "iteration", toId: iterationId, ordinal: 0 },
     ]);
-    // invariant: The registration finalizes: exactly one edge per reviewed relation is the proof the
-    // execution binding is written from.
     expect(
       await registerShippedCatalogExecution(context, {
         actor: "project-manager",
@@ -2853,8 +2687,6 @@ describe("remotely bound shipped registration", () => {
     }).catch((error: unknown) => error);
     const providerIntent = frozenProviderIntent(pending);
 
-    // note: The reviewed replacement publishes the iteration, its first plan row and the links it
-    // carries — and omits the second plan row.
     const heads = await conflictFrozenIntent(fixture.context, providerIntent);
     const original = await readRemoteIntent(fixture.context, providerIntent);
     if (original.event === null || original.event.change.kind !== "project-replace") {
@@ -2888,9 +2720,6 @@ describe("remotely bound shipped registration", () => {
       }),
     ).rejects.toMatchObject({ code: "remote.effect-mismatch" });
 
-    // invariant: The same-outcome correction is the SAME registration under a NEW operation id: the
-    // rows the settlement already carries identically are adopted and only the omission is
-    // published, so the already-published rows never trip their create-only check.
     const cacheDb = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
     let revision = 0;
     try {
@@ -2961,8 +2790,6 @@ describe("remotely bound shipped registration", () => {
     });
     await confirmFrozenIntent(fixture.context, resolutionId);
 
-    // note: The access check expires, so the repair's receipt is withheld (metadata-only
-    // disclosure): state alone is not a receipt, and the composite proves nothing here.
     const db = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
     try {
       db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
@@ -2975,9 +2802,6 @@ describe("remotely bound shipped registration", () => {
       operationId: "op-remote-undisclosed",
       expected: fixture.token,
     }).catch((error: unknown) => error);
-    // invariant: The composite's own replay gate refuses first (the frozen request is withheld),
-    // so the settlement is never read from state alone: the reservation stays prepared, and no
-    // execution binding is written until the receipt is readable again.
     expect(refused).toMatchObject({ code: "collaboration.operation-partial" });
     expect((refused as { details?: { cause_code?: string } }).details?.cause_code).toBe("remote.unavailable");
     expect(await reservationRow(fixture.context, "op-remote-undisclosed")).toMatchObject({ phase: "prepared" });
@@ -3001,8 +2825,6 @@ describe("remotely bound shipped registration", () => {
     const providerIntent = frozenProviderIntent(pending);
     await abandonRemoteIntent(fixture.context, { operationId: providerIntent, reason: "superseded by review" });
 
-    // invariant: An abandoned intent can never confirm, so the reservation is released with a
-    // named refusal instead of reporting the pending effect forever.
     await expect(
       registerShippedCatalogExecution(context, {
         actor: "project-manager",
@@ -3016,7 +2838,6 @@ describe("remotely bound shipped registration", () => {
       cause_code: "remote.effect-abandoned",
     });
 
-    // note: The corrected request under a new operation id is admitted and enqueues its intent.
     const retried = await registerShippedCatalogExecution(context, {
       actor: "project-manager",
       workflow: {

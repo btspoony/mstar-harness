@@ -78,7 +78,6 @@ const COORDINATOR_2 = `session-${WF2}`;
 const OPERATOR = "ops-engineer";
 const AUTHORIZATION = "D29 execution recovery";
 
-/** note: The user-level collaboration lane is resolved through `homedir`; isolate it. */
 const LANE_HOME = join(ROOT, "lane-home");
 mkdirSync(LANE_HOME, { recursive: true });
 let laneHomeSpy: { mockRestore(): void } | undefined;
@@ -110,12 +109,6 @@ type World = Fixture & {
 
 let repoSequence = 0;
 
-/**
- * why: A real checkout: a Git main worktree, an explicit origin-less repository
- * identity and the collaboration mode, so the LANE resolves like an operator's.
- * Issue and catalog authority is the lane's; the execution store owns
- * execution and host state.
- */
 function workspace(name: string): Fixture {
   const root = mkdtempSync(join(ROOT, `${name}-`));
   execFileSync("git", ["init", "-q"], { cwd: root });
@@ -142,7 +135,6 @@ function rawRun(dbPath: string, sql: string, ...params: Array<string | number | 
     db.close();
   }
 }
-
 
 /** The typed refusal of one call: its stable code and message, whatever domain raised it. */
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string }> {
@@ -213,8 +205,6 @@ async function registerPlan(context: StoreContext, planId: string): Promise<void
  */
 async function recoveryWorld(name: string, planIds: readonly string[] = [PLAN_1]): Promise<World> {
   const fixture = workspace(name);
-  // invariant: Both authorities, exactly as `store init` leaves them: the lane owns
-  // issue/catalog, the execution store owns execution/host.
   await ensureCollaborationAuthority(fixture.context);
   const handle = await initializeStore(fixture.context);
   handle.close();
@@ -249,11 +239,6 @@ async function recoveryPoint(world: World, label: string): Promise<BackupReceipt
   return backupStore(world.context, { out: join(world.harness, "archived", "recovery", `${label}.db`) });
 }
 
-/**
- * why: The identity/count facts an untouched store is compared on. Issue and catalog
- * rows are the LANE's, so the execution footprint reports only what this store
- * owns — and proves it holds no collaboration payload.
- */
 function footprint(dbPath: string): Record<string, number> {
   return {
     epoch: rawGet<{ authority_epoch: number }>(dbPath, "select authority_epoch from store_meta where id = 1")!.authority_epoch,
@@ -289,13 +274,6 @@ function issueInput(title: string) {
   };
 }
 
-/**
- * note: The post-backup work of the loss cases: one change in each domain an
- * execution restore OWNS — a host ledger row, a whole new execution workflow
- * created through the published verb, and a further execution mutation. A lane
- * capture/registration rides along to prove the execution inventory neither
- * lists nor replaces collaboration authority.
- */
 async function mutateEveryDomain(world: World, name: string): Promise<void> {
   await captureIssue(world.context, issueInput(`Post-backup finding ${name}`), {
     operationId: `op-issue-${name}`,
@@ -350,7 +328,6 @@ describe("execution-backup", () => {
         expected: (await readExecutionState(world.context)).data.workflows[0]!.workflowToken,
         operationId: "backup-wal-bind",
       });
-      // note: The lane capture rides along to prove the execution image excludes it.
       await captureIssue(world.context, issueInput("WAL-visible finding"), {
         operationId: "op-backup-wal-issue",
         actor: "project-manager",
@@ -362,7 +339,6 @@ describe("execution-backup", () => {
       const receipt = await backupStore(world.context, { out: join(world.harness, "archived", "wal-point.db") });
       expect(receipt.walPending).toBe(true);
       expect(receipt.storeId).toBe((rawGet<{ store_id: string }>(world.dbPath, "select store_id from store_meta where id = 1")!).store_id);
-      // note: §8: the copy carries the EXECUTION identity, and no collaboration payload.
       expect(receipt.execution).not.toBeNull();
       expect(receipt.execution!.authorityState).toBe("active");
       expect(receipt.execution!.manifestId).toBeNull();
@@ -453,8 +429,6 @@ describe("execution-restore", () => {
 
   test("execution-restore-preview-lists-every-execution-and-host-row-and-proceeds-without-a-digest-approval", async () => {
     const world = await recoveryWorld("restore-preview");
-    // invariant: A lane capture rides along: it is collaboration authority, never part of
-    // the execution inventory.
     await captureIssue(world.context, issueInput("Origin-only baseline"), {
       operationId: "op-origin-baseline",
       actor: "project-manager",
@@ -502,8 +476,6 @@ describe("execution-restore", () => {
       // …and at least one side holds it (a listed row is never absent twice).
       expect(entry.liveRevision !== null || entry.backupRevision !== null).toBe(true);
     }
-    // invariant: …and the execution and host operation ids are listed; the lane's own
-    // capture is not execution authority and never appears.
     expect([...preview.lostOperationIds].sort()).toEqual(
       [`execution:${world.epoch}:op-workflow-preview`].sort(),
     );
@@ -523,8 +495,6 @@ describe("execution-restore", () => {
     const world = await recoveryWorld("restore-new-loss");
     const point = await recoveryPoint(world, "new-loss-point");
     const preview = await previewExecutionRestore(world.context, point.backupPath);
-    // why: A post-backup HOST commit is execution-authority loss; a lane capture is
-    // not, and would legitimately not block the restore.
     expect(appendDshLedgerRow(world.context, WF, JSON.stringify({ late: true }), "late-row")).toMatchObject({ kind: "written" });
     const before = footprint(world.dbPath);
     const staleImage = join(world.harness, `.store-restore-${randomUUID()}.db`);
@@ -571,7 +541,6 @@ describe("execution-restore", () => {
       await injector;
     }
     expect(swapped).toBe(true);
-    // note: The INVENTORIED image was installed, not whatever the path held later.
     expect(footprint(world.dbPath).hostEvents).toBe(selected.hostEvents);
     expect(footprint(world.dbPath).revision).toBe(selected.revision);
   });
@@ -731,9 +700,6 @@ describe("execution-restore", () => {
     expect(refusal!.code).toBe("execution.recovery-loss-unaccepted");
     expect(refusal!.message).toContain("outside the authorized loss inventory");
 
-    // invariant: Nothing was replaced and nothing was lost: the competitor's host row is
-    // still live, the authority generation is unmoved, and the live file is the
-    // SAME inode — this restore never renames the live database.
     expect(footprint(world.dbPath).hostEvents).toBe(liveFootprint.hostEvents + 1);
     expect(footprint(world.dbPath).epoch).toBe(liveFootprint.epoch);
     expect(statSync(world.dbPath).ino).toBe(liveInode);
@@ -1082,8 +1048,6 @@ describe("execution-restore", () => {
     expect(existsSync(receipt.preRestoreBackup.backupPath)).toBe(true);
   });
 
-
-
   test("execution-restore-refuses-an-incomplete-inventory-and-keeps-both-files", async () => {
     const world = await recoveryWorld("restore-incomplete");
     const point = await recoveryPoint(world, "incomplete-point");
@@ -1311,7 +1275,6 @@ describe("execution-restore", () => {
    */
   const FROZEN_PROTOCOL_VERSION = 3;
 
-
   /**
    * Constraint 2's restore face, mechanism-asserted: a store holding BOTH receipt
    * forms — the slim envelope T1's writer persists for the graph class and the
@@ -1513,7 +1476,6 @@ describe("execution-restore", () => {
     )).toEqual([{ epoch: restored.epoch, operation_id: operationId }]);
   });
 
-
   test("execution-restore-normalizes-a-malformed-live-inventory-row-to-the-loss-refusal", async () => {
     const world = await recoveryWorld("restore-malformed-row");
     const point = await recoveryPoint(world, "malformed-row-point");
@@ -1697,7 +1659,6 @@ describe("execution-export", () => {
     expect(projected.completion).not.toHaveProperty("completed_by");
     expect(projected.completion.completed_at).toBe(TS);
 
-
     // …and the artifact authorizes nothing: fed to a real writer as its
     // request, it is refused and the store is untouched.
     const before = footprint(world.dbPath);
@@ -1727,9 +1688,6 @@ describe("execution-export", () => {
 describe("schema-owned loss inventory", () => {
   test("a current store missing its reservation ledger refuses receipt writes instead of failing open", async () => {
     const world = await recoveryWorld("intents-drift");
-    // invariant: The store RECORDS the ledger's migration; deleting the table is drift, not
-    // a legacy pre-intent store. A receipt writer must refuse rather than commit
-    // an id a lost reservation may already own.
     const handle = await openStore(world.context, "write");
     try {
       handle.db.exec("drop table execution_collaboration_intents");
@@ -1769,8 +1727,6 @@ describe("schema-owned loss inventory", () => {
       kind: "written",
     });
     expect(recordDshStatusEmission(world.context, COORDINATOR, world.context.harnessDir, 1, '{"sv":1}')).toMatchObject({ kind: "written" });
-    // invariant: A LANE capture rides along: it is collaboration authority, so the
-    // execution inventory never lists it.
     await captureIssue(world.context, issueInput("Lane-only authority"), {
       operationId: "op-inventory-lane",
       actor: "project-manager",
@@ -1784,11 +1740,9 @@ describe("schema-owned loss inventory", () => {
     expect(keys).toContain(`host:scan-bound:${WF}/${COORDINATOR}`);
     expect(keys).toContain(`host:binding:${COORDINATOR}/${world.context.harnessDir}`);
     expect(keys).toContain(`host:emission:${COORDINATOR}/${world.context.harnessDir}`);
-    // note: Every listed row belongs to a domain this restore owns…
     for (const entry of preview.authorityDifferences) {
       expect(entry.domain === "execution" || entry.domain === "host").toBe(true);
     }
-    // invariant: …and the lane's own capture and receipt never appear in it.
     expect(keys.some((key) => key.includes("issue:"))).toBe(false);
     expect(preview.lostOperationIds).not.toContain("operation:op-inventory-lane");
     expect(preview.lostOperationIds.every((id) => id.startsWith("operation:") || id.startsWith("execution:"))).toBe(true);
@@ -1797,8 +1751,6 @@ describe("schema-owned loss inventory", () => {
   test("preview covers store rows only and never freezes, requires or deletes file bodies", async () => {
     const world = await recoveryWorld("inventory-projects");
     const point = await recoveryPoint(world, "project-inventory-point");
-    // why: A post-point EXECUTION fact, so the payload really carries this store's
-    // own difference.
     rawRun(
       world.dbPath,
       "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at, coverage_json) values (?, ?, 'retired', '{}', ?, ?, ?)",
@@ -1860,8 +1812,6 @@ describe("schema-owned loss inventory", () => {
   });
   test("inventory retains execution row content and never a collaboration row", async () => {
     const world = await recoveryWorld("inventory-issue-milestone");
-    // note: A LANE capture and catalog registration: collaboration authority that an
-    // execution restore neither lists nor replaces.
     const finding = await captureIssue(world.context, issueInput("Lane membership finding"), {
       operationId: "op-membership-issue",
       actor: "project-manager",
@@ -1869,8 +1819,6 @@ describe("schema-owned loss inventory", () => {
     const point = await recoveryPoint(world, "issue-milestone-point");
     expect(rawGet<{ n: number }>(point.backupPath, "select count(*) as n from issues")!.n).toBe(0);
 
-    // note: Post-point work: one more lane row (invisible here) and one host row
-    // (authority).
     await captureIssue(world.context, issueInput("Later lane finding"), {
       operationId: "op-membership-issue-later",
       actor: "project-manager",
@@ -1879,7 +1827,6 @@ describe("schema-owned loss inventory", () => {
       kind: "written",
     });
     const preview = await previewExecutionRestore(world.context, point.backupPath);
-    // note: Only the host row is disclosed; the lane rows are not execution authority.
     expect(preview.authorityDifferences).toContainEqual({
       domain: "host",
       key: `ledger-event:${rawGet<{ seq_rowid: number }>(world.dbPath, "select seq_rowid from dsh_ledger_events order by seq_rowid desc limit 1")!.seq_rowid}`,
@@ -1887,20 +1834,15 @@ describe("schema-owned loss inventory", () => {
       backupRevision: null,
     });
     expect(preview.authorityDifferences.every((entry) => entry.domain === "host" || entry.domain === "execution")).toBe(true);
-    // note: The association the lane holds is untouched by the preview.
     expect((await getIssue(world.context, finding.issueId)).title).toBe("Lane membership finding");
   });
 
   test("restore-installs-every-schema-owned-fact-of-the-execution-and-host-domains", async () => {
     const world = await recoveryWorld("restore-whole-domain");
-    // invariant: The lane holds one row: the restore must neither replace nor lose it.
     const laneFinding = await captureIssue(world.context, issueInput("Lane row across an execution restore"), {
       operationId: "op-whole-domain-lane",
       actor: "project-manager",
     });
-    // note: A coverage document on an execution migration row (migration 5's
-    // `coverage_json`) and a native host-state row: the two schema-owned facts
-    // this restore owns byte-for-byte.
     rawRun(
       world.dbPath,
       "insert into execution_migrations(manifest_id, manifest_hash, phase, manifest_json, created_at, updated_at, coverage_json) values (?, ?, 'retired', '{}', ?, ?, ?)",
@@ -1947,10 +1889,6 @@ describe("schema-owned loss inventory", () => {
     });
     expect(receipt.epoch).toBe(Math.max(world.epoch, point.epoch) + 1);
 
-    // note: Every schema-owned fact of the selected generation is installed, read back
-    // through the store's own schema rather than through the inventory: the
-    // retired migration row's WHOLE coverage document, the host-state row's own
-    // stream cursor, and the execution/host row counts.
     expect(rawGet<{ coverage_json: string }>(
       world.dbPath,
       "select coverage_json from execution_migrations where manifest_id = 'whole-domain-migration'",
@@ -1964,8 +1902,6 @@ describe("schema-owned loss inventory", () => {
       workflows: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from execution_workflows")!.n,
       sessions: rawGet<{ n: number }>(point.backupPath, "select count(*) as n from execution_sessions")!.n,
     });
-    // invariant: …and the collaboration authority is exactly where it was: the execution
-    // restore neither copies nor replaces the lane, so both captures survive.
     const laneHandle = await openCollaborationStore(world.context, "read");
     try {
       const titles = (laneHandle.db.prepare("select title from issues order by title").all() as Array<{ title: string }>).map(

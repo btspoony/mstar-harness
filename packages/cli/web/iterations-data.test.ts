@@ -75,7 +75,6 @@ const listEnvelope = (
   execution: null,
 });
 
-/** note: An explicit partial observation, as a source that could not prove its scope reports. */
 const partialObservation = {
   scope: { kind: "query" as const, key: "iterations" },
   completeness: "partial" as const,

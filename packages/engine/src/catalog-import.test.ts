@@ -504,9 +504,6 @@ describe("catalog export and portability", () => {
     expect(detail.entity.present).toBe(true);
     expect(imported.unknowns.some((unknown) => unknown.code === "source-missing" && unknown.key === "specs:extra.md")).toBe(true);
 
-    // note: No workflow session, no execution binding, no root registration. The pin
-    // table stayed execution-side at the cutover; the import journal is
-    // collaboration data.
     const execution = await openStore(clone.context, "read");
     const bindings = execution.db.prepare("select count(*) as n from catalog_execution_bindings").get() as { n: number };
     execution.close();

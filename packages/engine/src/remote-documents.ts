@@ -1,18 +1,3 @@
-/**
- * why: The engine-owned structural definitions of the strict JSON documents the remote/outbox
- * `--input` flags carry. This module is the ONE owner of those published shapes: the frozen
- * event, its project/issue subject and every history row are typed members built from the
- * same engine vocabularies the runtime parsers enforce, so discovery can never publish a
- * document the runtime refuses. The runtime authority stays the engine's DTO validators
- * (`collaboration-remote.ts`), which judge what only the engine can: frozen-event equality,
- * capability proof, scope freshness, a semantic key's quality, portable-text fidelity. The
- * published command derives its `payloadSchemas.inputDocument` descriptors from these
- * definitions (commands may depend on the engine, never the reverse).
- *
- * The descriptor key `inputDocument` deliberately names no input field: the CLI value of
- * `--input` stays a file path (or `-` for stdin), so composition and payload decoding have
- * nothing to reshape and only discovery sees the schema.
- */
 import {
   ISSUE_DISPOSITIONS,
   ISSUE_KINDS,
@@ -64,7 +49,6 @@ const scopeCheck = z.object({
   outcome: scopeOutcome,
 }).strict();
 
-/** note: `fields`: exactly the contract's domain fields, from the issue module's own vocabularies. */
 const mstarSubjectFields = z.object({
   title: z.string(),
   kind: z.enum(ISSUE_KINDS),
@@ -82,7 +66,6 @@ const mstarSubjectFields = z.object({
   milestoneId: z.string().nullish(),
 }).strict();
 
-/** note: One occurrence row: its business fields plus a stable event UUID, never a row id. */
 const occurrenceRecord = z.object({
   eventId: providerId.describe("the history row's stable event UUID"),
   occurrenceKey: z.string(),
@@ -98,7 +81,6 @@ const occurrenceRecord = z.object({
   imported: z.boolean(),
 }).strict();
 
-/** note: The closure document a non-imported transition records; every member is optional. */
 const closureEvidence = z.object({
   reason: z.string().nullish(),
   scope: z.string().nullish(),
@@ -107,7 +89,6 @@ const closureEvidence = z.object({
   alignmentRef: z.string().nullish(),
 }).strict();
 
-/** note: The reviewed portable legacy register row, under either spelling the engine accepts. */
 const importedRecordSpellings = [
   "legacyId", "id",
   "title",
@@ -152,17 +133,12 @@ const transitionRecord = z
     imported: z.boolean(),
   })
   .strict()
-  // invariant: The evidence arm follows `imported`, exactly as the runtime reads it: an imported
-  // transition carries the reviewed legacy register row, which must hold at least one business
-  // field, while a non-imported one carries the closure document. The bare union would admit an
-  // empty object through the all-optional closure arm.
   .refine((row) => (row.imported ? importedRecord : closureEvidence).safeParse(row.evidence).success, {
     path: ["evidence"],
     message:
       "must be the closure document, or the reviewed legacy register row with at least one business field when imported is true",
   });
 
-/** note: A dangling target stays as the spellable reference; the read boundary renders it unresolved. */
 const relationRecord = z.object({
   relation: z.enum(ISSUE_RELATIONS),
   target: issueRef,
@@ -170,7 +146,6 @@ const relationRecord = z.object({
 
 const provenanceKinds = [...ISSUE_PROVENANCE_KINDS, "capture", "migration"] as const;
 
-/** note: Provenance never carries the raw legacy JSON: `legacyJson` is parsed into `legacyRecord` by the engine. */
 const provenanceRecord = z.object({
   eventId: providerId.describe("the history row's stable event UUID"),
   kind: z.enum(provenanceKinds),
@@ -195,7 +170,6 @@ const projectMoveRecord = z.object({
   issueRevision: z.number().int().nonnegative(),
 }).strict();
 
-/** note: The six members every complete subject carries; each list is that member's typed history. */
 const subjectHistory = {
   occurrences: z.array(occurrenceRecord),
   transitions: z.array(transitionRecord),
@@ -204,14 +178,8 @@ const subjectHistory = {
   projectMoves: z.array(projectMoveRecord),
 };
 
-/** note: The event's issue subject: the complete normalized document minus the derived `head`. */
 const issueSubject = z.object({ fields: mstarSubjectFields, ...subjectHistory }).strict();
 
-/**
- * note: The complete portable subject a snapshot carries: exactly the shape the engine's
- * `mstarIssue` parser requires, `fields` included, so the descriptor accepts every marked
- * observation the runtime accepts.
- */
 const portableSubject = z
   .object({ issueRef, head: z.array(sha256Digest), fields: mstarSubjectFields, ...subjectHistory })
   .strict()
@@ -284,12 +252,6 @@ const remoteSnapshot = z
   })
   .strict();
 
-/**
- * note: The frozen event the host appends. `change` closes both arms: a project replacement
- * carries the project document (no derived `head`, no `binding`), and every issue change
- * carries the complete typed subject. A replacement cites the heads it replaces; that
- * minimum is the engine's judgement on the event it freezes.
- */
 const frozenEvent = z
   .object({
     version: z.literal(1),

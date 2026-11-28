@@ -1,19 +1,3 @@
-/**
- * invariant: collaboration-store.ts -- the independent user-level collaboration store.
- *
- * One current v1 DDL (not a replay of the combined store's nineteen historical
- * migrations), a create-only staged publication and active-only handles. Only
- * the path-independent connection, schema-ledger checksum and publication
- * primitives are shared with `store-db.ts`; no execution table, projection,
- * host-state ledger or execution method exists in this database.
- *
- * The store belongs to one canonical repository (collaboration-identity.ts):
- * its path, repository key and mode were resolved before this module is
- * reached, and a record that disagrees with the trusted selection refuses
- * rather than re-binding. Every mutation goes through `withCollaborationWrite`:
- * no public entry hands out a connection that can write after the selection,
- * state or epoch changes.
- */
 import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import {
@@ -76,14 +60,6 @@ import {
   type StoreDb,
 } from "./store-db.js";
 
-/**
- * why: The one current collaboration schema - the closed inventory of the Data
- * Model contract, at its current shape. Names in `issues`, `catalog_*`,
- * `project_*` and `sync_*` keep their existing domain vocabulary so the
- * domain SQL moved by the cutover does not see a second convention; nothing
- * from the execution lane (store_meta, execution_*, projection_*, dsh_*,
- * catalog_execution_bindings) appears here.
- */
 const COLLABORATION_SCHEMA_SQL = `
 create table collaboration_meta(
   id integer primary key check (id = 1),
@@ -404,14 +380,6 @@ export function assertIssueRef(value: unknown): IssueRef {
   return value;
 }
 
-/**
- * invariant: v2 `collaboration-remote-cache` - the exact Data Model delta over the byte-
- * identical v1 `collaboration-core`: `remote` joins the mode CHECK, `issues`
- * gains its stable `issue_ref`, and the three remote projection tables appear.
- * `collaboration_meta` is rebuilt because SQLite cannot alter a CHECK in place;
- * it references nothing and is referenced by nothing, so the copy is a plain
- * row move.
- */
 const COLLABORATION_META_V2_SQL = `
 create table collaboration_meta_remote_cache(
   id integer primary key check (id = 1),
@@ -473,14 +441,6 @@ create unique index remote_issue_identities_ref on remote_issue_identities(gener
 create unique index remote_issue_identities_provider on remote_issue_identities(generation, provider_issue_id);
 `;
 
-/**
- * invariant: `issues` gains `issue_ref TEXT NOT NULL UNIQUE`. It is referenced by six child
- * tables and this batch runs with `foreign_keys=ON` inside one transaction, so
- * the same FK-safe staging the execution lane's severity/disposition rebuilds
- * use applies here: the children are staged out, the parent rebuilt, the
- * children restored before COMMIT. Values are minted by the caller between the
- * two halves - a random per-row UUID cannot be expressed as table DDL.
- */
 const ISSUE_COLUMN_LIST =
   "id, project_id, title, kind, severity, disposition, impact, acceptance, owner, registered_at, closed_at, " +
   "closure_note, created_at, updated_at, revision, provider, external_id, url, identity_key, milestone_id";
@@ -563,23 +523,12 @@ drop table issue_project_moves_remote_cache_stage;
 drop table issue_sync_state_remote_cache_stage;
 `;
 
-/**
- * invariant: v2 `collaboration-remote-cache`. Its `sql` is the complete DDL (the checksum's
- * subject); applying it runs the two issue halves around the per-row reference
- * backfill, because the static text cannot carry a random value.
- */
 const COLLABORATION_REMOTE_SCHEMA: Migration = {
   version: 2,
   name: "collaboration-remote-cache",
   sql: `${COLLABORATION_META_V2_SQL}\n${COLLABORATION_ISSUES_V2_STAGE_SQL}\n${COLLABORATION_ISSUES_V2_RESTORE_SQL}`,
 };
 
-/**
- * invariant: v3 `collaboration-remote-outbox` - the durable intent ledger over the v2 cache.
- * A prepared intent is one operation id with its frozen request and hash; receipts are the
- * separate, append-only evidence that a send was attempted, with its own closed vocabulary.
- * The two self-references keep a reviewed resolution attributable to the intent it replaces.
- */
 const COLLABORATION_OUTBOX_V3_SQL = `
 create table remote_outbox(
   operation_id text not null primary key,
@@ -616,17 +565,6 @@ const COLLABORATION_OUTBOX_SCHEMA: Migration = {
   sql: COLLABORATION_OUTBOX_V3_SQL,
 };
 
-/**
- * invariant: v4 `collaboration-cross-authority` - the per-record move ledger over the v3 outbox. - the per-record move ledger over the v3 outbox.
- * A relation target that lives in another authority has no local issue row, so `to_issue` becomes
- * nullable beside the new `to_ref` and exactly one of the two is set (the spec's DDL). The partial
- * primary unique index deduplicates cross-authority relations because SQLite never compares two NULLs in a
- * primary key. `issue_moves` is the ledger AND the fence: the source row blocks every write to its
- * record from `staged` on, enforced by triggers stored here instead of by calling code. The row also
- * carries the request's `actor` and `reason`, so a replay under the same operation id is compared
- * against the whole immutable request and the membership it records uses the values it was staged
- * with, not the ones a later attempt supplied.
- */
 const COLLABORATION_MOVE_V4_SQL = `
 create table relations_cross_authority_stage(
   from_issue text not null references issues(id),
@@ -766,15 +704,6 @@ const COLLABORATION_MOVE_SCHEMA: Migration = {
   sql: COLLABORATION_MOVE_V4_SQL,
 };
 
-/**
- * invariant: v5 records each move's staged topology on its ledger row. A discard and the
- * remote-destination guard must never probe the peer's lane — a two-checkout exchange cannot open it —
- * so the route becomes a fact the staging run writes. Rows already in a v4 lane are backfilled in
- * two steps: this SQL labels every row from the fact the lane can still prove alone — a lane holds
- * only its OWN half of a move, so an unrouted row is an exchange half, and the lane's own mode names
- * its side — and `backfillMoveRoutes` then relabels the rows whose OTHER half provably lives in a
- * lane this checkout can open, which is exactly the one-checkout topology `local-local` names.
- */
 const COLLABORATION_MOVE_ROUTE_SQL = `
 alter table issue_moves add column route text not null default 'local-local'
   check (route in ('local-local', 'local-remote', 'remote-local', 'remote-unknown'));
@@ -792,13 +721,6 @@ const COLLABORATION_MOVE_ROUTE_SCHEMA: Migration = {
   sql: COLLABORATION_MOVE_ROUTE_SQL,
 };
 
-/**
- * invariant: v6 `collaboration-milestone-effort` - a project milestone plans its work as a count
- * of standard agent sessions, never a calendar date: `effort_sessions` is null or an integer of
- * at least 1, and `target` is retired. The two statements rewrite only `project_milestones`'s
- * own row of `sqlite_master`, so the foreign key from `issues.milestone_id` and the triggers
- * that read the table keep resolving without a table rebuild.
- */
 const COLLABORATION_MILESTONE_EFFORT_V6_SQL = `
 alter table project_milestones add column effort_sessions integer check (
   effort_sessions is null or
@@ -875,21 +797,14 @@ export const COLLABORATION_MIGRATIONS: readonly Migration[] = [
   COLLABORATION_ROADMAP_REMOVAL_SCHEMA,
 ];
 
-/** note: The v2-only projection tables: provider binding evidence and the snapshot cache. */
 const COLLABORATION_REMOTE_TABLES: readonly string[] = [
   "remote_bindings",
   "remote_issue_identities",
   "remote_observations",
 ];
 
-/** note: The v3-only intent tables. They exist in every lane; only a remote lane writes them. */
 const COLLABORATION_OUTBOX_TABLES: readonly string[] = ["remote_outbox", "remote_outbox_receipts"];
 
-/**
- * note: Apply the v2 delta inside the caller's open transaction and return the number of
- * issue rows that received a minted reference. The caller verifies the resulting
- * layout and records the ledger row before committing.
- */
 function applyRemoteCacheSchema(db: StoreDb): number {
   db.exec(COLLABORATION_META_V2_SQL);
   db.exec(COLLABORATION_ISSUES_V2_STAGE_SQL);
@@ -903,12 +818,6 @@ function applyRemoteCacheSchema(db: StoreDb): number {
   return rows.length;
 }
 
-/**
- * invariant: The closed collaboration table inventory this build requires - the v2 shape.
- * A store that is missing one of these - or carries a table outside it - is not
- * the current collaboration schema, and a damaged one must refuse instead of
- * admitting a handle whose domain queries would fail later.
- */
 const COLLABORATION_TABLES: readonly string[] = [
   "catalog_entities",
   "catalog_links",
@@ -1016,11 +925,6 @@ export const COLLABORATION_COLUMNS: Readonly<Record<string, readonly string[]>> 
   ],
 };
 
-/**
- * note: The v2 current-schema columns (plus the shared ledger table). A table that kept its
- * name but lost a required column is a damaged store, not a current one, and
- * must refuse at admission instead of failing a later domain query.
- */
 const COLLABORATION_V2_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V1_COLUMNS,
   issues: [...COLLABORATION_V1_COLUMNS.issues!, "issue_ref"],
@@ -1034,7 +938,6 @@ const COLLABORATION_V2_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ],
 };
 
-/** note: The v3 intent tables' exact columns. */
 const COLLABORATION_OUTBOX_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   remote_outbox: [
     "operation_id", "generation", "project_key", "request_hash", "request_json", "execution_key_json", "state",
@@ -1043,7 +946,6 @@ const COLLABORATION_OUTBOX_COLUMNS: Readonly<Record<string, readonly string[]>> 
   remote_outbox_receipts: ["operation_id", "receipt_hash", "source", "outcome", "evidence_json", "recorded_at"],
 };
 
-/** note: The v4 move ledger's exact columns, and the relation row that may now carry a remote target. */
 const COLLABORATION_MOVE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   relations: ["from_issue", "relation", "to_issue", "to_ref"],
   issue_moves: [
@@ -1053,24 +955,20 @@ const COLLABORATION_MOVE_COLUMNS: Readonly<Record<string, readonly string[]>> = 
   ],
 };
 
-/** note: The v5 delta: the ledger records the topology each move was staged under. */
 const COLLABORATION_ROUTE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   issue_moves: [...COLLABORATION_MOVE_COLUMNS.issue_moves!, "route"],
 };
 
-/** note: The v3 inventory: the v2 generation plus the outbox tables, before the move ledger widened `relations`. */
 const COLLABORATION_V3_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V2_COLUMNS,
   ...COLLABORATION_OUTBOX_COLUMNS,
 };
 
-/** note: The v4 inventory: the v3 generation plus the move ledger, before the v5 route column is added. */
 const COLLABORATION_V4_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V3_COLUMNS,
   ...COLLABORATION_MOVE_COLUMNS,
 };
 
-/** note: The v5 inventory: the v4 generation plus the recorded route, before `target` leaves `project_milestones`. */
 const COLLABORATION_V5_ROUTE_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   ...COLLABORATION_V4_COLUMNS,
   ...COLLABORATION_ROUTE_COLUMNS,
@@ -1091,14 +989,6 @@ export const COLLABORATION_CURRENT_COLUMNS: Readonly<Record<string, readonly str
   Object.entries(COLLABORATION_V6_COLUMNS).filter(([table]) => table !== COLLABORATION_ROADMAP_TABLE),
 );
 
-/**
- * invariant: The declared layout's enforced keys: the columns that must reject null, the
- * primary and foreign keys, the unique indexes and the state vocabulary. The
- * declared DDL is canonical, so admission proves what SQLite actually built
- * instead of trusting table and column names; a lane that kept its names but
- * lost a key or a CHECK can never admit a handle whose invariants it cannot
- * enforce.
- */
 type ForeignKeyLayout = readonly (readonly [column: string, table: string, target: string])[];
 type UniqueIndexLayout = Readonly<{ columns: readonly string[]; where: string | null }>;
 
@@ -1212,11 +1102,6 @@ const COLLABORATION_KEY_LAYOUT: readonly KeyLayout[] = [
   ...COLLABORATION_KEY_LAYOUT_OUTBOX,
 ];
 
-/**
- * note: The v4 keys. `relations.to_issue` is nullable now, so the exactly-one CHECK and the partial
- * unique index on `to_ref` are what keep a cross-authority row a single, addressable relation; the
- * blocking-phase index is the fence's own uniqueness.
- */
 const COLLABORATION_KEY_LAYOUT_MOVE: readonly KeyLayout[] = [
   {
     table: "relations",
@@ -1253,7 +1138,6 @@ const COLLABORATION_KEY_LAYOUT_MOVE: readonly KeyLayout[] = [
   },
 ];
 
-/** note: The v5 keys: the v4 move keys plus the recorded route every discard and remote guard reads. */
 const COLLABORATION_KEY_LAYOUT_ROUTE: readonly KeyLayout[] = [
   COLLABORATION_KEY_LAYOUT_MOVE[0]!,
   {
@@ -1271,7 +1155,6 @@ const COLLABORATION_KEY_LAYOUT_CURRENT: readonly KeyLayout[] = [
   ...COLLABORATION_KEY_LAYOUT_ROUTE,
 ];
 
-/** note: The v3 inventory an upgrade from v3 proves before the v4 move DDL runs. */
 const COLLABORATION_MOVE_TABLES: readonly string[] = ["issue_moves"];
 
 /** see packages/engine/src/collaboration-store.ts - The v6 inventory: the current lane plus the roadmap table v7 drops. */
@@ -1281,12 +1164,10 @@ const COLLABORATION_V3_TABLES: readonly string[] = COLLABORATION_V6_TABLES.filte
   (table) => !COLLABORATION_MOVE_TABLES.includes(table),
 );
 
-/** note: The v2 inventory an explicit upgrade from v2 proves before the outbox DDL runs. */
 const COLLABORATION_V2_TABLES: readonly string[] = COLLABORATION_V3_TABLES.filter(
   (table) => !COLLABORATION_OUTBOX_TABLES.includes(table),
 );
 
-/** note: The declared v1 inventory, unchanged: the shape an explicit upgrade starts from. */
 const COLLABORATION_V1_TABLES: readonly string[] = COLLABORATION_V6_TABLES.filter(
   (table) =>
     !COLLABORATION_REMOTE_TABLES.includes(table) &&
@@ -1461,7 +1342,6 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** note: The lane's unreadable refusal, preserving the cause this call established. */
 function unreadable(dbPath: string, detail: string, cause?: string): StoreError {
   return new StoreError(
     "collaboration.unreadable",
@@ -1471,7 +1351,6 @@ function unreadable(dbPath: string, detail: string, cause?: string): StoreError 
   );
 }
 
-/** note: A published store whose directory entry is not confirmed durable. */
 function barrierRefusal(dbPath: string, error: unknown): StoreError {
   const cause = publicationCause(error);
   return new StoreError(
@@ -1483,7 +1362,6 @@ function barrierRefusal(dbPath: string, error: unknown): StoreError {
   );
 }
 
-/** note: The bounded-contention verdict stays the shared, actionable `store.busy`. */
 function busyRefusal(dbPath: string): StoreError {
   return new StoreError(
     "store.busy",
@@ -1492,18 +1370,12 @@ function busyRefusal(dbPath: string): StoreError {
   );
 }
 
-/** why: Verdicts that stay their own top-level refusal instead of the lane's generic code. */
 const PASS_THROUGH_STORE_CODES: Readonly<Record<string, true>> = {
   "store.busy": true,
   "store.schema-unsupported": true,
   "store.runtime-unsupported": true,
 };
 
-/**
- * note: Preserve a real cause: collaboration codes and the shared verdicts that name
- * their own recovery pass through, contention stays busy, and the rest becomes
- * the lane's unreadable refusal.
- */
 function asRefusal(dbPath: string, error: unknown): StoreError {
   if (error instanceof StoreError) {
     if (error.code.startsWith("collaboration.") || PASS_THROUGH_STORE_CODES[error.code] === true) return error;
@@ -1530,11 +1402,6 @@ function notActive(dbPath: string, state: "staged" | "active"): StoreError {
   );
 }
 
-/**
- * note: An admitted old lane is never migrated implicitly. A local/mirror lane advances through
- * `store upgrade`; a `remote` lane is derived observation state, so its recovery is the reviewed
- * bind that replaces it — no local upgrade verb produces its receipt.
- */
 function upgradeRequired(location: CollaborationLocation, found: number): StoreError {
   const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
   const recovery =
@@ -1567,7 +1434,6 @@ function staleBinding(
   );
 }
 
-/** invariant: The final path must be a regular file or absent, decided without following a link. */
 function assertRegularTarget(dbPath: string): void {
   try {
     assertAbsentOrRegularStoreFile(dbPath);
@@ -1576,19 +1442,10 @@ function assertRegularTarget(dbPath: string): void {
   }
 }
 
-/** note: The one user-level storage tree: every canonical store lives beneath it. */
 function privateStoreAnchor(): string {
   return join(homedir(), ".mstar", "repos");
 }
 
-/**
- * invariant: The addressable store path must live in the private user storage tree and be
- * reached without following a link: every EXISTING component between the user
- * home and the store's directory is inspected with `lstat` (a symlink is never
- * traversed), and each storage component from the anchor down carries no
- * group/other permission bits. Missing components are left to creation, which
- * makes them private.
- */
 function assertPrivateStorePath(dbPath: string): void {
   const target = resolve(dbPath);
   const home = resolve(homedir());
@@ -1604,11 +1461,9 @@ function assertPrivateStorePath(dbPath: string): void {
     try {
       stats = lstatSync(current);
     } catch (error) {
-      if ((error as { code?: string }).code === "ENOENT") return; // note: creation makes the rest private
+      if ((error as { code?: string }).code === "ENOENT") return;
       throw unreadable(current, `a storage component could not be examined (${publicationCause(error)})`);
     }
-    // invariant: `.mstar` may predate this lane and belong to other tooling; the storage
-    // tree at and below the anchor is this lane's and must be private.
     const storageComponent = index >= 1;
     if (stats.isSymbolicLink()) throw unreadable(current, "a storage component is a symbolic link");
     if (!stats.isDirectory()) throw unreadable(current, "a storage component is not a directory");
@@ -1618,7 +1473,6 @@ function assertPrivateStorePath(dbPath: string): void {
   }
 }
 
-/** invariant: An existing store's bytes must be private too. */
 function assertPrivateStoreFile(dbPath: string): void {
   let stats;
   try {
@@ -1632,21 +1486,11 @@ function assertPrivateStoreFile(dbPath: string): void {
   }
 }
 
-/**
- * invariant: Every entry's admission checks, in one place: the private, link-free
- * namespace, the final target type, the private bytes and the lane's journal
- * layout - when the store exists. Refuses before creating directories or
- * opening SQLite.
- */
 function assertAdmittedTarget(dbPath: string): void {
   assertPrivateStorePath(dbPath);
   assertRegularTarget(dbPath);
   if (!existsSync(dbPath)) return;
   assertPrivateStoreFile(dbPath);
-  // invariant: The collaboration lane publishes and keeps DELETE-journal stores. A WAL
-  // layout (sidecar or header) cannot be inspected without either creating a
-  // `-shm` or guessing immutability, so it is refused before any open: no
-  // journal is repaired, created or ignored.
   const walSidecar = existsSync(`${dbPath}-wal`);
   if (walSidecar || walShapedStoreFile(dbPath)) {
     throw unreadable(
@@ -1659,45 +1503,30 @@ function assertAdmittedTarget(dbPath: string): void {
   }
 }
 
-/**
- * invariant: The closed table inventory, the exact columns, and the v3 intent tables' keys
- * and CHECKs. A dropped domain table, a foreign/combined database, an extra or
- * missing column, or a lost key refuses before admission.
- */
 function assertCurrentSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_TABLES, COLLABORATION_CURRENT_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
 
-/** note: The exact v2 shape an upgrade from v2 proves before the v3 delta: a partial v3 refuses. */
 function assertRemoteCacheSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V2_TABLES, COLLABORATION_V2_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_V2);
 }
 
-/**
- * invariant: The exact v3 shape - the whole v3 inventory INCLUDING the outbox tables' columns - proven
- * before the v4 move DDL and by the settlement admission that serves a v3 cache's outbox. A lane that
- * kept its v3 ledger row but lost or added an outbox column is refused instead of upgraded, because
- * the verbs that settle an intent are exactly the ones that read those columns.
- */
 function assertOutboxSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V3_TABLES, COLLABORATION_V3_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT);
 }
 
-/** note: The exact v4 shape an upgrade from v4 proves before the v5 route column: a partial v5 refuses. */
 function assertMoveSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V6_TABLES, COLLABORATION_V4_COLUMNS, true);
   assertKeyLayout(db, dbPath, [...COLLABORATION_KEY_LAYOUT, ...COLLABORATION_KEY_LAYOUT_MOVE]);
 }
 
-/** note: The pre-upgrade shape, proven before a v1 lane is rebuilt (its partial-v2 state is the upgrade's own case). */
 function assertLegacySchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V1_TABLES, COLLABORATION_V1_COLUMNS, false);
 }
 
-/** note: The exact v5 shape an upgrade from v5 proves before the v6 delta: a partial v6 refuses. */
 function assertMoveRouteSchema(db: StoreDb, dbPath: string): void {
   assertInventory(db, dbPath, COLLABORATION_V6_TABLES, COLLABORATION_V5_ROUTE_COLUMNS, true);
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
@@ -1709,12 +1538,6 @@ function assertMilestoneEffortSchema(db: StoreDb, dbPath: string): void {
   assertKeyLayout(db, dbPath, COLLABORATION_KEY_LAYOUT_CURRENT);
 }
 
-/**
- * invariant: A recovery open proves the lane against the EXACT inventory this build declares for
- * the recorded version - the same proof an explicit upgrade runs before its delta - derived from
- * `collaborationInventoryOf`, never a pinned version. A layout this build does not declare an
- * inventory for has no recovery proof and refuses.
- */
 function assertVersionInventory(db: StoreDb, dbPath: string, version: number): void {
   const inventory = collaborationInventoryOf(version);
   if (inventory === COLLABORATION_CURRENT_COLUMNS) assertCurrentSchema(db, dbPath);
@@ -1726,7 +1549,6 @@ function assertVersionInventory(db: StoreDb, dbPath: string, version: number): v
   else assertLegacySchema(db, dbPath);
 }
 
-/** invariant: The closed table inventory and required columns, or a named refusal. */
 function assertInventory(
   db: StoreDb,
   dbPath: string,
@@ -1756,7 +1578,6 @@ function assertInventory(
   }
 }
 
-/** note: Per table, the required columns `db` does not carry, and - when exact - the columns it adds. */
 function columnDrift(
   db: StoreDb,
   required: Readonly<Record<string, readonly string[]>>,
@@ -1776,7 +1597,6 @@ function columnDrift(
   return damaged;
 }
 
-/** note: The database's foreign keys, one string per constraint in `id`/`seq` order - never flattened. */
 function foreignKeyGroups(db: StoreDb, table: string): string[] {
   const rows = db.prepare(`pragma foreign_key_list(${table})`).all() as Array<{
     id?: unknown;
@@ -1798,7 +1618,6 @@ function foreignKeyGroups(db: StoreDb, table: string): string[] {
     .sort();
 }
 
-/** note: The trailing `WHERE` clause of a declared index, normalized; `null` for a full index. */
 function indexPredicate(sql: string | null): string | null {
   if (sql === null) return null;
   const match = /\bon\s+\S+\s*\([^)]*\)\s*(.*)$/i.exec(sql.replace(/\s+/g, " ").trim());
@@ -1806,7 +1625,6 @@ function indexPredicate(sql: string | null): string | null {
   return predicate === "" ? null : predicate;
 }
 
-/** note: The database's unique indexes with their columns and predicates: `WHERE 0` is not the declared index. */
 function uniqueIndexLayouts(db: StoreDb, table: string): UniqueIndexLayout[] {
   const rows = (db.prepare(`pragma index_list(${table})`).all() as Array<{ name?: unknown; unique?: unknown }>).filter(
     (index) => index.unique === 1 && typeof index.name === "string",
@@ -1826,13 +1644,6 @@ function uniqueIndexLayouts(db: StoreDb, table: string): UniqueIndexLayout[] {
   });
 }
 
-/**
- * invariant: The v2 delta's actual keys and vocabulary, read from the database's own
- * catalog: `table_info` for nullability and primary-key order,
- * `foreign_key_list`, `index_list`/`index_info` for unique indexes, and the
- * declared SQL's CHECK clauses. A lane with a retained name and checksum but a
- * lost constraint is damaged, not current.
- */
 function assertKeyLayout(
   db: StoreDb,
   dbPath: string,
@@ -1932,19 +1743,10 @@ function readMeta(db: StoreDb): CollaborationMeta {
   };
 }
 
-/**
- * invariant: The Data Model refuses unknown checksums. Every recorded collaboration
- * migration row must carry this build's own compiled name and bytes, not only a
- * contiguous version id; otherwise a lane whose DDL another build wrote would be
- * admitted and replayed. `store.corrupt` maps to `collaboration.unreadable` at
- * admission and stays itself for the explicit upgrade.
- */
 function validateCollaborationMigrations(applied: AppliedMigration[]): number {
   const version = validateAppliedMigrations(applied, COLLABORATION_MIGRATIONS);
   for (const row of applied) {
     const compiled = COLLABORATION_MIGRATIONS.find((migration) => migration.version === row.version)!;
-    // invariant: The lane's executed DDL must be exactly this build's compiled migration.
-    // hash-gate: authorized — Identify the lane's executed DDL as this build's compiled migration: a differing checksum means another build wrote the schema, so refusing is the only safe verdict.
     if (row.name !== compiled.name || row.checksum !== migrationChecksum(compiled)) {
       throw new StoreError(
         "store.corrupt",
@@ -1958,11 +1760,6 @@ function validateCollaborationMigrations(applied: AppliedMigration[]): number {
   return version;
 }
 
-/**
- * invariant: Ledger, current domain schema, metadata, trusted selection, required state and
- * (when given) the exact stamp must all agree before any handle or effect is
- * admitted. Every failure keeps its own distinguishable refusal.
- */
 function admit(
   db: StoreDb,
   location: CollaborationLocation,
@@ -1971,16 +1768,8 @@ function admit(
   options: RemoteCacheAdmission = {},
 ): CollaborationAuthority {
   try {
-    // note: The ledger's version verdict comes FIRST: a store written by a newer
-    // build is an upgrade requirement, not a damaged current schema, even when
-    // that build's layout no longer matches this one's inventory.
     const schemaVersion = validateCollaborationMigrations(readAppliedMigrations(db, false));
     const current = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
-    // invariant: A below-current lane is never opened for ordinary work; its pending intents are
-    // the operator's only evidence of an effect that may have landed. The ONE exception is the
-    // outbox settlement surface on a remote cache, admitted on exactly the generation this build
-    // still declares an inventory for - and on nothing else - while a replacement stays refused
-    // until the outbox is settled.
     const settlesOutbox =
       options.settleOutbox === true &&
       location.mode === "remote" &&
@@ -2023,7 +1812,6 @@ function admit(
   }
 }
 
-/** why: One handle owner: `close` is idempotent so the entry points can share it. */
 function handleFor(db: StoreDb, authority: CollaborationAuthority): CollaborationStoreHandle {
   let closed = false;
   return {
@@ -2037,16 +1825,11 @@ function handleFor(db: StoreDb, authority: CollaborationAuthority): Collaboratio
   };
 }
 
-/**
- * note: Async returns assimilate any object OR callable value that carries a `then`
- * function, so both shapes are "the effect is asynchronous" here.
- */
 function isThenable(value: unknown): value is PromiseLike<unknown> {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
   return typeof (value as { then?: unknown }).then === "function";
 }
 
-/** why: Statements that would end or re-take the transaction the wrapper owns. */
 const TRANSACTION_CONTROL_KEYWORDS: Readonly<Record<string, true>> = {
   BEGIN: true,
   COMMIT: true,
@@ -2056,13 +1839,6 @@ const TRANSACTION_CONTROL_KEYWORDS: Readonly<Record<string, true>> = {
   RELEASE: true,
 };
 
-/**
- * invariant: The first SQL keyword, ignoring everything that can precede it without being
- * a statement of its own: whitespace, line and block comments, and any number
- * of empty statements (`;`). SQLite's own prepare skips those separators, so
- * `"; commit"` prepares the `commit` statement - the classifier must skip them
- * too, or the prefix becomes a transaction-control bypass.
- */
 function leadingKeyword(sql: string): string {
   let rest = sql;
   for (;;) {
@@ -2103,12 +1879,6 @@ function batchRefusal(): StoreError {
   );
 }
 
-/**
- * invariant: The effect's connection keeps transaction ownership with the wrapper. `exec`
- * is denied outright - a batch's leading keyword says nothing about later
- * statements - so the only mutation path is a single prepared statement. Every
- * transaction-control statement and every close is refused.
- */
 function guardedWriteDb(db: StoreDb): StoreDb {
   return {
     exec(): never {
@@ -2124,7 +1894,6 @@ function guardedWriteDb(db: StoreDb): StoreDb {
   };
 }
 
-/** note: Connect with the same bounded transient read-open retry the execution lane uses. */
 async function connectAt(
   dbPath: string,
   mode: "read" | "write",
@@ -2145,11 +1914,6 @@ async function connectAt(
   }
 }
 
-/**
- * note: Admit one existing store on a READ-ONLY connection. `admit` names the only
- * state that may be returned: public handles admit `active`; initialization
- * continues a matching record in either state without clearing it.
- */
 async function openAdmission(
   location: CollaborationLocation,
   requirement: "active" | "any",
@@ -2160,8 +1924,6 @@ async function openAdmission(
   const dbPath = location.dbPath;
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
-  // invariant: The lane refuses a WAL layout before any open, so this read needs no repair
-  // and creates no sidecar.
   const db = await connectAt(dbPath, "read", timeout);
   try {
     return handleFor(db, admit(db, location, expected, requirement, options));
@@ -2171,14 +1933,6 @@ async function openAdmission(
   }
 }
 
-/**
- * why: Synchronize the published subtree before a success is reported: every
- * existing directory from the user home down to the store's own directory (the
- * parent entry that names it and the directory itself), ending with the store's
- * directory, whose fsync makes the database entry durable. Continuation runs
- * the same walk, so an ancestor barrier that failed in an earlier attempt is
- * retried instead of assumed durable.
- */
 function confirmPublishedChain(dbPath: string): void {
   const synced: Record<string, true> = {};
   const sync = (target: string): void => {
@@ -2199,33 +1953,16 @@ function confirmPublishedChain(dbPath: string): void {
   }
 }
 
-/**
- * invariant: Continue an already published record without clearing it. Reused by the
- * existing-path and competing-publication branches: both re-attempt the
- * directory barrier, so a retry after a failed barrier never reports success
- * for a name that is still not durable.
- */
 async function continueExisting(location: CollaborationLocation, timeout: number): Promise<CollaborationAuthority> {
   const handle = await openAdmission(location, "any", undefined, timeout);
   const authority = handle.authority;
   handle.close();
-  // note: The whole chain is re-confirmed: a previously failed ancestor barrier is
-  // retried here, not only the final directory entry.
   confirmPublishedChain(location.dbPath);
   return authority;
 }
 
-/** note: One outbox row's state and its `resolved_by` link, as the settlement walk needs them. */
 type OutboxSettlementLink = Readonly<{ state: string; resolvedBy: string | null }>;
 
-/**
- * note: Whether one repair chain reaches a settled terminal. Only a CONFIRMED repair settles the
- * fork it replaced: an `abandoned` repair is a withdrawn review, so the fork it withdrew from is
- * still repairable and another resolution may follow - it settles nothing. The chain is walked
- * because a repair may itself conflict and be repaired again, and it stops at the first row that is
- * still live: an `enqueued` or `unconfirmed` repair is an outstanding send, so the fork it repairs
- * is outstanding with it.
- */
 function settlementReached(chain: ReadonlyMap<string, OutboxSettlementLink>, start: string): boolean {
   const visited = new Set<string>();
   let cursor: string | null = start;
@@ -2240,13 +1977,6 @@ function settlementReached(chain: ReadonlyMap<string, OutboxSettlementLink>, sta
   return false;
 }
 
-/**
- * note: The intents whose provider outcome is still unknown. `enqueued` never left the process,
- * `unconfirmed` may have landed, and a `conflict` keeps counting only while its own repair chain
- * has reached no settlement: `outbox-resolve` records the repair as a SEPARATE intent and links it
- * with `resolved_by`, so the original row stays `conflict` for as long as it exists and its raw
- * state would otherwise make a repaired fork block its own replacement forever.
- */
 function countUnsettledOutboxIntents(db: StoreDb, dbPath: string): number {
   const rows = db.prepare("select operation_id, state, resolved_by from remote_outbox").all() as Array<{
     operation_id?: unknown;
@@ -2273,21 +2003,16 @@ function countUnsettledOutboxIntents(db: StoreDb, dbPath: string): number {
   return unsettled;
 }
 
-/** note: One carried row, column by column, in the order its insert binds them. */
 type CarriedRow = ReadonlyArray<string | number | null>;
 
-/** note: The settled outbox ledger one replacement carries into its successor. */
 type CarriedOutboxLedger = Readonly<{
   bindings: readonly CarriedRow[];
   intents: readonly CarriedRow[];
   receipts: readonly CarriedRow[];
-  /** why: the move ledger outlives the cache generation the same way - a switched source row is the only record a later admission handoff can settle against. */
   moves: Readonly<{ columns: readonly string[]; rows: readonly CarriedRow[] }>;
-  /** why: the predecessor's own mode, the fact the v5 route rule labels an unrouted row from when the carried ledger predates the column. */
   predecessorMode: string | null;
 }>;
 
-/** note: The declared column order of each carried row, so a row is read positionally and unambiguously. */
 const CARRIED_BINDING_COLUMNS =
   "generation, project_key, selector_commit, provider, workspace_id, team_id, provider_project_id, " +
   "journal_issue_id, writer_id, verified_at, verification_json";
@@ -2296,25 +2021,12 @@ const CARRIED_INTENT_COLUMNS =
   "created_at, updated_at, abandon_reason, resolves, resolved_by";
 const CARRIED_RECEIPT_COLUMNS = "operation_id, receipt_hash, source, outcome, evidence_json, recorded_at";
 
-/**
- * invariant: A replacement keeps the SETTLED outbox ledger. A confirmed intent's receipt is what a
- * prepared execution composite reads to finalize without repeating the provider effect, and an
- * abandoned row is the durable record that no effect will land; both outlive the cache generation
- * that froze them. Every row still in the predecessor is settled (an unsettled one refused this
- * replacement before any byte moved), so the successor carries the whole ledger - intents, their
- * append-only receipts, and the bindings those rows name as their foreign key.
- *
- * The rows are read through the ordinary refusing read connection rather than an ATTACH, so a WAL
- * predecessor's journal is never touched by the successor's build. Reads are ordered by primary key
- * so the carried ledger is reproducible.
- */
 async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise<CarriedOutboxLedger> {
   const db = await connectAt(dbPath, "read", timeout);
   try {
     const tables = tableNamesOn(db);
     const rows = (sql: string): CarriedRow[] =>
       (db.prepare(sql).all() as Array<Record<string, string | number | null>>).map((row) => Object.values(row));
-    // invariant: the move ledger is read by the columns ITS generation declares, so a pre-v6 (no route) or future lane carries positionally into the successor without inventing a default the predecessor never wrote.
     const moveColumns = tables.has("issue_moves")
       ? (db.prepare("pragma table_info(issue_moves)").all() as Array<{ name?: unknown }>)
           .map((column) => (typeof column?.name === "string" ? column.name : ""))
@@ -2324,9 +2036,6 @@ async function readSettledOutboxLedger(dbPath: string, timeout: number): Promise
       moveColumns.length > 0
         ? { columns: moveColumns, rows: rows(`select ${moveColumns.join(", ")} from issue_moves order by operation_id`) }
         : { columns: [], rows: [] as CarriedRow[] };
-    // invariant: the predecessor's own mode is the fact the v5 route rule labels an unrouted
-    // carried row from - the lane's metadata singleton records it, and the carry must never
-    // invent one the predecessor never wrote.
     const metaMode = tables.has("collaboration_meta")
       ? (db.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined)?.mode
       : undefined;
@@ -2362,11 +2071,8 @@ export function unroutedMoveHalfRoute(role: unknown, mode: string | null): strin
   return role === "source" ? (remote ? "remote-unknown" : "local-remote") : remote ? "local-remote" : "remote-local";
 }
 
-/** note: Write one carried outbox ledger into the successor's own (fresh) tables, at commit. */
 function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
   if (carried.intents.length === 0 && carried.moves.rows.length === 0) return;
-  // why: the intents cite each other through `resolves`/`resolved_by` in either order, so their
-  // foreign keys are proven once the whole carried ledger is in place, at commit.
   db.exec("pragma defer_foreign_keys = ON");
   const copy = (sql: string, rows: readonly CarriedRow[]): void => {
     const insert = db.prepare(sql);
@@ -2384,7 +2090,6 @@ function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
     "insert into remote_outbox_receipts(" + CARRIED_RECEIPT_COLUMNS + ") values (?, ?, ?, ?, ?, ?)",
     carried.receipts,
   );
-  // invariant: the staged successor's issue_moves is fresh, so a positional insert by the predecessor's own column order cannot collide with a default the successor would have minted.
   if (carried.moves.columns.length > 0 && carried.moves.rows.length > 0) {
     if (carried.moves.columns.includes("route")) {
       copy(
@@ -2392,10 +2097,6 @@ function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
         carried.moves.rows,
       );
     } else {
-      // invariant: a pre-route predecessor's rows are labelled by the generation's own v5 rule,
-      // not by the successor's column default: a lane holds only its own half of a move, so an
-      // unrouted row is an exchange half and the PREDECESSOR's own mode names its side. The mode
-      // is read where the carried ledger is built, never assumed.
       const roleIndex = carried.moves.columns.indexOf("role");
       if (roleIndex < 0) {
         throw new StoreError("store.corrupt", "the carried move ledger declares no role column; its rows cannot be labelled");
@@ -2412,25 +2113,6 @@ function carrySettledOutbox(db: StoreDb, carried: CarriedOutboxLedger): void {
   }
 }
 
-/**
- * invariant: A lane below `below` is REPLACED only when it is provably this repository's own
- * derived lane: a contiguous ledger of this build's compiled migrations, a readable metadata
- * singleton naming this repository and mode (and, when this checkout records one, exactly the
- * store identity that record names), and no unsettled outbox intent - an `enqueued`,
- * `unconfirmed` or `conflict` row may already have taken effect at the provider, so replacing
- * those bytes would leave the intent only in the preserved copy. A `conflict` row whose
- * `resolved_by` chain reaches a `confirmed` repair that ALSO carries a recorded confirmed
- * receipt counts as settled (conflictRepairSettled); an abandoned, missing, unproven or
- * unsettled link still blocks.
- * Anything unreadable, foreign, newer or another generation's is never touched. This probe only
- * reads: the canonical name is released after the successor is staged, never before.
- */
-/**
- * note: One `resolved_by` hop, classified: `absent` when the conflict names no repair at all,
- * `damaged` when the named operation id is not this scope's repair (missing row, another
- * generation or project, or no reverse `resolves` pointer at the parent), and `repair` when it
- * is. A damaged link is never treated as an absent one: their exits differ.
- */
 type ConflictRepairHop =
   | Readonly<{ kind: "absent" }>
   | Readonly<{ kind: "damaged" }>
@@ -2438,8 +2120,6 @@ type ConflictRepairHop =
       kind: "repair";
       state: string;
       resolvedBy: string | null;
-      // invariant: A confirmed repair holding only a conflict receipt is the laundering shape the
-      // settle path refuses a receipt onto; the hint must not route there.
       launderingRefused: boolean;
     }>;
 
@@ -2457,17 +2137,10 @@ function conflictRepairHop(
     | { generation?: unknown; project_key?: unknown; state?: unknown; resolved_by?: unknown; resolves?: unknown }
     | undefined;
   if (linked === undefined || typeof linked.state !== "string") return { kind: "damaged" };
-  // invariant: An operation id alone is not a link. The hop is this conflict's repair only when
-  // the linked row is the same generation and project_key and carries the reverse
-  // `resolves` pointer at its parent; a row of another generation or project, or one without
-  // that back-pointer (a valid-shaped but wrong link in foreign or damaged cache bytes), is a
-  // damaged link.
   if (linked.generation !== conflict.generation || linked.project_key !== conflict.project_key || linked.resolves !== parentId) {
     return { kind: "damaged" };
   }
   const resolvedBy = typeof linked.resolved_by === "string" ? linked.resolved_by : null;
-  // invariant: Only the confirmed state can reach the receipt-refusing guard, and only when the
-  // confirmed receipt that would prove the state is absent while a conflict receipt stands.
   const launderingRefused =
     receiptsPresent &&
     linked.state === "confirmed" &&
@@ -2582,13 +2255,9 @@ async function replaceDerivedLaneBelow(
   type UnsettledRow = OutboxRow & Readonly<{ repair: ConflictRepairHop }>;
   let recorded: { version: number; meta: CollaborationMeta; unsettled: UnsettledRow[] };
   try {
-    // invariant: The outbox guard reads the SAME connection as the version probe, so the check is
-    // taken at the first probe and again at the publication boundary - never against stale bytes.
     const outboxPresent = db
       .prepare("select count(*) as n from sqlite_master where type = 'table' and name = 'remote_outbox'")
       .get() as { n?: unknown };
-    // note: The settle rule reads the receipts table, so bytes without one prove no confirmation:
-    // nothing there is settled, and no statement runs against a missing table.
     const receiptsPresent = hasReceiptLedger(db);
     const unsettled: UnsettledRow[] =
       Number(outboxPresent?.n ?? 0) === 0
@@ -2600,8 +2269,6 @@ async function replaceDerivedLaneBelow(
             )
             .all() as OutboxRow[])
             .filter((row) => !(receiptsPresent && conflictRepairSettled(db, row, receiptsPresent)))
-            // note: The link's own classification comes with the row: the refusal's route for one
-            // conflict depends on it (no repair, a damaged link, or the repair's state).
             .map((row) => ({
               ...row,
               repair:
@@ -2621,8 +2288,6 @@ async function replaceDerivedLaneBelow(
   if (recorded.meta.repoKey !== location.repoKey || recorded.meta.mode !== location.mode) {
     throw staleBinding(dbPath, recorded.meta, `this checkout's ${location.repoKey} (${location.mode})`);
   }
-  // invariant: The bytes about to be replaced must be the generation this checkout's own binding
-  // names; another identity is a replacement it never recorded, so it is refused before any move.
   if (
     expected !== undefined &&
     (recorded.meta.storeId !== expected.storeId || recorded.meta.epoch !== expected.epoch)
@@ -2634,12 +2299,6 @@ async function replaceDerivedLaneBelow(
     );
   }
   if (recorded.unsettled.length > 0) {
-    // note: The refusal names EVERY distinct unsettled state present, one line each, so a later
-    // `unconfirmed` or `conflict` row behind the oldest `enqueued` one is never invisible: the
-    // listing covers every unsettled state, and each line additionally names that state's oldest
-    // operation id and the commands that actually move THAT state: a dispatch issues only a
-    // permit, a resolve only enqueues a repair, and a receipt records evidence, so none of them is
-    // called settling on its own.
     const cli = (verb: string): string => `mstar store collaboration remote ${verb}`;
     const showCommand = (operation: string): string =>
       "`" + cli("outbox-show") + " --harness <abs> --operation " + operation + "`";
@@ -2654,11 +2313,6 @@ async function replaceDerivedLaneBelow(
       "`" + cli("outbox-receipt") + " --harness <abs> --input <file|->`";
     const reconciled = (): string =>
       "`" + cli("outbox-reconcile") + " --harness <abs> --input <file|->`";
-    // why: An abandon, a dispatch and a receipt are admitted for different repair states, so the
-    // conflict line names only what moves the repair its own `resolvedBy` actually holds. A repair
-    // that is `confirmed` AND holds its recorded receipt never reaches this branch: the settle
-    // rule dropped its parent row, so an unblocked bind needs no line. A link this scope cannot
-    // honor is named as damaged, never as an absent one: `outbox-resolve` refuses while it stands.
     const rebuild = REMOTE_CACHE_REBUILD_ROUTE;
     const conflictStep = (repair: ConflictRepairHop): string => {
       if (repair.kind === "damaged") {
@@ -2674,8 +2328,6 @@ async function replaceDerivedLaneBelow(
       const follow = "follow the repair its resolvedBy names with " + showCommand("<repair-uuid>");
       if (repair.state === "confirmed") {
         if (repair.launderingRefused) {
-          // invariant: A receipt submission onto this row is refused by the laundering guard, so
-          // the only live route is the same rebuild the damaged-link branch names.
           return shown("<uuid>") + "; its repair is marked confirmed but holds only a recorded conflict receipt, so " +
             "its recorded state contradicts its recorded evidence and this scope cannot settle it in place: " + rebuild;
         }
@@ -2695,9 +2347,6 @@ async function replaceDerivedLaneBelow(
           withdrawn("<repair-uuid>");
       }
       if (repair.state === "conflict") {
-        // why: A conflict row itself accepts `outbox-resolve`, while its parent does not while
-        // this repair is linked and no abandon ever applies to a conflict row: the route is to
-        // settle the REPAIR row, and the parent settles once the chain reaches a confirmed repair.
         return shown("<uuid>") + "; its repair is itself a conflict row, so prepare the reviewed replacement of " +
           "THAT repair row with `" + cli("outbox-resolve") + " --harness <abs> --operation <repair-uuid> --input <file>`" +
           " - a resolve only enqueues the repair - then dispatch it with " + dispatched("<new-uuid>") +
@@ -2745,12 +2394,6 @@ async function replaceDerivedLaneBelow(
   return { storeId: recorded.meta.storeId, epoch: recorded.meta.epoch };
 }
 
-/**
- * note: The replacement's stale-probe seam: a competing bind (and, behind it, a real writer that
- * freezes an outbox row) lands between this attempt's decision to replace and its critical section.
- * The probe is re-taken inside that critical section, so the seam never authorizes replacing bytes
- * that advanced.
- */
 let remoteCacheReplacementGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteCacheReplacementGapForTest(callback: (() => void | Promise<void>) | undefined): void {
   remoteCacheReplacementGapForTest = callback;
@@ -2762,10 +2405,6 @@ export function setCollaborationRoadmapRemovalGapForTest(callback: ((db: StoreDb
   collaborationRoadmapRemovalGapForTest = callback;
 }
 
-/**
- * note: The publication seam: a regression fails after the predecessor is preserved and the
- * successor is fully staged, immediately before the one atomic rename that publishes it.
- */
 let remoteCacheReplacementPublishGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteCacheReplacementPublishGapForTest(
   callback: (() => void | Promise<void>) | undefined,
@@ -2773,11 +2412,6 @@ export function setRemoteCacheReplacementPublishGapForTest(
   remoteCacheReplacementPublishGapForTest = callback;
 }
 
-/**
- * note: The predecessor-ledger seam: a real settlement write commits on the predecessor between
- * the carried snapshot and the guard's write lock, so a regression shows whether the re-read
- * comparison refuses the replacement instead of publishing a successor that omits that evidence.
- */
 let remoteCacheReplacementLedgerGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteCacheReplacementLedgerGapForTest(
   callback: (() => void | Promise<void>) | undefined,
@@ -2785,11 +2419,6 @@ export function setRemoteCacheReplacementLedgerGapForTest(
   remoteCacheReplacementLedgerGapForTest = callback;
 }
 
-/**
- * note: The commit seam: runs INSIDE the replacement's exclusive writer scope, after the ledger
- * comparison passed and before the rename, so a regression shows whether a settlement write that
- * arrives there is excluded from the window instead of being lost by it.
- */
 let remoteCacheReplacementCommitGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteCacheReplacementCommitGapForTest(
   callback: (() => void | Promise<void>) | undefined,
@@ -2797,10 +2426,6 @@ export function setRemoteCacheReplacementCommitGapForTest(
   remoteCacheReplacementCommitGapForTest = callback;
 }
 
-/**
- * invariant: Ensure the store's directory chain exists: every existing component must
- * already be a real directory, and creation makes the missing chain private.
- */
 function createStoreDirectories(dir: string): void {
   let current = dir;
   for (;;) {
@@ -2825,14 +2450,11 @@ function createStoreDirectories(dir: string): void {
   }
 }
 
-/** note: Retire this attempt's private staging alias and its directory. */
 function discardStaging(stagingDir: string, stagingPath: string): void {
   removeStagingFiles(stagingPath);
   try {
     rmdirSync(stagingDir);
   } catch {
-    // invariant: The staging directory is private, engine-owned scratch: a failure leaves
-    // at most an empty directory that no code reads.
   }
 }
 
@@ -2873,19 +2495,12 @@ export async function initializeRemoteCacheStore(
   expected?: RetainedLaneIdentity,
 ): Promise<CollaborationAuthority> {
   assertStoreRuntimeSupported();
-  // invariant: A cache is DERIVED observation state, so any generation below this build is
-  // REPLACED by the reviewed bind instead of being refused by it - the floor is the current
-  // version, never an intermediate one. The one thing a replacement may not destroy is unsettled
-  // outbox work, which `replaceDerivedLaneBelow` probes and refuses by route before it moves any
-  // bytes, so no intent that may have taken effect at the provider is left behind in the preserved
-  // copy.
   return createOrContinueStore(location, {
     replaceBelowVersion: COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version,
     expectedIdentity: expected,
   });
 }
 
-/** note: The inode the canonical name holds, or `null` when the path holds nothing examinable. */
 function laneInodeOf(dbPath: string): number | null {
   try {
     return statSync(dbPath).ino;
@@ -2894,21 +2509,10 @@ function laneInodeOf(dbPath: string): number | null {
   }
 }
 
-/** note: The identity a replaced derived lane keeps, so its checkout binding still names it. */
 type RetainedLaneIdentity = Readonly<{ storeId: string; epoch: number }>;
 
-/** note: One staged, admitted successor: its private names and the authority its bytes prove. */
 type StagedStore = Readonly<{ stagingDir: string; stagingPath: string; authority: CollaborationAuthority }>;
 
-/**
- * invariant: Build the complete successor in a private staging directory before it can be named:
- * every supported migration applied in order, the retained (or a fresh) identity recorded, the
- * settled predecessor ledger carried, the bytes admitted as this build's own complete store, and
- * the journal folded into one database file.
- *
- * `carried` is the predecessor's settled outbox ledger, read before the build; writing it here
- * keeps the copy in the SAME transaction that creates the tables it lands in.
- */
 async function stageCompleteStore(
   location: CollaborationLocation,
   retained: RetainedLaneIdentity | undefined,
@@ -2919,7 +2523,7 @@ async function stageCompleteStore(
   const dir = dirname(dbPath);
   createStoreDirectories(dir);
   const stagingDir = join(dir, `.staging-${process.pid}-${randomUUID()}`);
-  const stagingPath = join(stagingDir, basename(dbPath)); // note: reserved authority basename, protected by every host gate
+  const stagingPath = join(stagingDir, basename(dbPath));
   try {
     mkdirSync(stagingDir, { mode: 0o700 });
   } catch (error) {
@@ -2942,8 +2546,6 @@ async function stageCompleteStore(
     try {
       const at = nowRfc3339();
       db.exec(SCHEMA_VERSION_TABLE_SQL);
-      // invariant: Fresh initialization applies every supported version in order before
-      // publication, and each row is appended only after its layout is applied.
       for (const migration of COLLABORATION_MIGRATIONS) {
         if (migration.version === COLLABORATION_REMOTE_SCHEMA.version) {
           applyRemoteCacheSchema(db);
@@ -2967,15 +2569,10 @@ async function stageCompleteStore(
       try {
         db.exec("rollback");
       } catch {
-        // note: nothing committed either way
       }
       throw error;
     }
-    // note: The staged bytes are verified as this build's own complete store before
-    // they can be named.
     authority = admit(db, location, undefined, "any");
-    // why: A hard link names one inode, not a journal: fold the staged journal into
-    // the database file so the published name is self-contained.
     const folded = db.prepare("pragma journal_mode=delete").get() as { journal_mode?: string } | undefined;
     if (folded?.journal_mode !== "delete") {
       throw unreadable(
@@ -2990,7 +2587,6 @@ async function stageCompleteStore(
       try {
         db.close();
       } catch {
-        // note: connection-level failure; the staging name is unlinked below
       }
     }
     discardStaging(stagingDir, stagingPath);
@@ -3000,11 +2596,6 @@ async function stageCompleteStore(
   return { stagingDir, stagingPath, authority };
 }
 
-/**
- * invariant: Create the scope's store when no bytes are named: one create-only hard link publishes
- * the staged successor. A competing initializer that won the name first keeps its cache; nothing
- * another attempt published is ever deleted.
- */
 async function createFreshStore(location: CollaborationLocation, timeout: number): Promise<CollaborationAuthority> {
   const dbPath = location.dbPath;
   const staged = await stageCompleteStore(location, undefined, timeout);
@@ -3018,7 +2609,6 @@ async function createFreshStore(location: CollaborationLocation, timeout: number
     throw unreadable(dbPath, `the staged store could not be linked into place (${publicationCause(error)})`);
   }
   try {
-    // note: The published subtree and its own name become durable before success.
     confirmPublishedChain(dbPath);
   } finally {
     discardStaging(staged.stagingDir, staged.stagingPath);
@@ -3026,18 +2616,6 @@ async function createFreshStore(location: CollaborationLocation, timeout: number
   return staged.authority;
 }
 
-/**
- * invariant: Replace one verified derived lane holding no unsettled outbox intent with a staged
- * successor, inside ONE critical section under the lane's replacement lock: the ownership/schema
- * probe, the staging, the preservation of the predecessor and the publication all hold that lock,
- * so a probe taken before another binder advanced the lane can never authorize overwriting its
- * bytes — and a replacement that publishes a cache with only settled rows and an ordinary writer's
- * frozen outbox row are never unlinked.
- *
- * The predecessor is preserved by hard link (same inode) before the name moves, and the successor
- * is published with ONE atomic rename: the canonical name is never absent, so an interruption
- * leaves either the predecessor or the successor named, never a fresh-init ambiguity.
- */
 async function replaceDerivedLane(
   location: CollaborationLocation,
   below: number,
@@ -3047,73 +2625,43 @@ async function replaceDerivedLane(
   const dbPath = location.dbPath;
   const retained = await replaceDerivedLaneBelow(location, below, timeout, expected);
   if (retained === undefined) return continueExisting(location, timeout);
-  // invariant: The successor carries the predecessor's settled outbox ledger. `replaceDerivedLaneBelow`
-  // proved above that no row is unsettled, so every carried row is an outcome (or an abandonment)
-  // whose evidence a prepared composite still reads; the re-probe below discards this staging if the
-  // bytes it was copied from advanced in the meantime.
   const carried = await readSettledOutboxLedger(dbPath, timeout);
-  // note: The predecessor-ledger window: a settlement write that commits HERE is carried by no
-  // snapshot, so only the guard's re-read comparison can keep it from being dropped.
   await remoteCacheReplacementLedgerGapForTest?.();
   const staged = await stageCompleteStore(location, retained, timeout, carried);
   const preservedPath = join(dirname(dbPath), `.replaced-${process.pid}-${randomUUID()}.db`);
   try {
-    // note: Create-only, so a preserved image of other bytes is never overwritten.
     linkSync(dbPath, preservedPath);
   } catch (error) {
     discardStaging(staged.stagingDir, staged.stagingPath);
     throw unreadable(dbPath, `its derived cache could not be preserved before replacement (${publicationCause(error)})`);
   }
   try {
-    // invariant: The final probe, the ledger comparison and the rename are ONE exclusive writer
-    // scope, shared with `withRemoteCacheWrite`: the predecessor's write lock is held from before
-    // the probe until the rename has run (the replacement lock is already held around this whole
-    // function). A settlement write committed before this attempt took the write lock is therefore
-    // VISIBLE to the comparison and refuses the replacement; one that begins afterwards is refused
-    // `store.busy` with nothing written; and one that opened the predecessor before this scope but
-    // begins afterwards is refused by its own commit-time inode proof. Without the scope, a receipt
-    // committed between the comparison and the rename was dropped by the staged successor.
     const guard = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true });
     try {
-      // invariant: The lock transaction writes nothing, so it creates no journal of its own and its
-      // release never rewrites the successor this scope renames into place.
       guard.exec("begin immediate");
-      // invariant: The ownership and schema proof is RE-TAKEN at the publication boundary: the bytes
-      // this attempt is about to replace are proven this checkout's own pre-outbox generation, not a
-      // cache another process advanced while the successor was staged.
       const proven = await replaceDerivedLaneBelow(location, below, timeout, expected);
       if (proven === undefined || proven.storeId !== retained.storeId || proven.epoch !== retained.epoch) {
-        // note: A non-cooperating publisher advanced the lane; its bytes are kept, never replaced.
         discardStaging(staged.stagingDir, staged.stagingPath);
         rmSync(preservedPath, { force: true });
         return continueExisting(location, timeout);
       }
-      // invariant: The carried ledger is RE-READ inside the same scope. The unsettled probe above
-      // cannot see a settled row that appeared while the successor was staged (a fork repaired to
-      // confirmation), so an equal ledger is the only proof that the evidence about to be published
-      // is the evidence on disk. A changed ledger keeps the predecessor, exactly like a moved
-      // identity.
       if (!isDeepStrictEqual(await readSettledOutboxLedger(dbPath, timeout), carried)) {
         discardStaging(staged.stagingDir, staged.stagingPath);
         rmSync(preservedPath, { force: true });
         return continueExisting(location, timeout);
       }
-      // note: The publication seam stays immediately before the one atomic rename.
       await remoteCacheReplacementCommitGapForTest?.();
       await remoteCacheReplacementPublishGapForTest?.();
-      // note: A stale sidecar would otherwise be picked up by the replacement's name.
       for (const suffix of ["-journal", "-wal", "-shm"]) rmSync(`${dbPath}${suffix}`, { force: true });
       renameSync(staged.stagingPath, dbPath);
     } finally {
       try {
         guard.exec("rollback");
       } catch {
-        // note: connection-level failure; closing the handle releases the lock either way
       }
       guard.close();
     }
   } catch (error) {
-    // note: The canonical name still holds the predecessor; the preserved duplicate is dropped.
     discardStaging(staged.stagingDir, staged.stagingPath);
     rmSync(preservedPath, { force: true });
     throw asRefusal(
@@ -3124,7 +2672,6 @@ async function replaceDerivedLane(
     );
   }
   try {
-    // note: The published subtree and its own name become durable before success.
     confirmPublishedChain(dbPath);
   } finally {
     discardStaging(staged.stagingDir, staged.stagingPath);
@@ -3141,12 +2688,8 @@ async function createOrContinueStore(
   const timeout = busyTimeoutMs();
   assertAdmittedTarget(dbPath);
   if (options.replaceBelowVersion !== undefined && location.mode === "remote") {
-    // note: The replacement decision is taken INSIDE the lane's critical section (below), so a
-    // probe taken before it can never authorize replacing bytes that advanced in the meantime.
     await remoteCacheReplacementGapForTest?.();
-    // note: The lane's own directory chain exists before its lock file can be created.
     createStoreDirectories(dirname(dbPath));
-    // note: A lazy import keeps this module free of a static cycle with the lock primitive's owner.
     const { withCollaborationLockFile } = await import("./collaboration-cutover.js");
     return withCollaborationLockFile(
       join(dirname(dbPath), "collaboration-cache-replace.lock"),
@@ -3160,7 +2703,6 @@ async function createOrContinueStore(
   if (existsSync(dbPath)) return continueExisting(location, timeout);
   return createFreshStore(location, timeout);
 }
-
 
 /** note: What one explicit upgrade did: the versions crossed and the references it minted. */
 export type CollaborationUpgradeReceipt = Readonly<{
@@ -3187,16 +2729,6 @@ export function collaborationInventoryOf(version: number): Readonly<Record<strin
   return COLLABORATION_CURRENT_COLUMNS;
 }
 
-/**
- * invariant: The v5 route backfill's second half, run inside the ladder transaction after the SQL
- * labelled every row from this lane's own mode. A one-checkout move is the topology whose OTHER half
- * provably lives in a lane this checkout can open — and a lane file is present only in the same home
- * — so a row is relabelled `local-local` only when the peer lane's file exists, declares a
- * local/mirror mode, and holds the peer row of the same operation. An exchange half, an unreadable
- * peer and an absent peer all keep the label the SQL derived, which is the route a discard must
- * release one side at a time anyway. Reads run on short-lived read-only connections because this
- * ladder is synchronous.
- */
 function backfillMoveRoutes(db: StoreDb): void {
   const meta = db.prepare("select mode from collaboration_meta where id = 1").get() as { mode?: unknown } | undefined;
   const ownMode = meta?.mode;
@@ -3209,10 +2741,6 @@ function backfillMoveRoutes(db: StoreDb): void {
     DatabaseSync: new (path: string, options?: { readOnly?: boolean }) => StoreDb;
   };
   const peers = new Map<string, { mode: string | null } | null>();
-  // invariant: A peer key this checkout cannot resolve is a peer it cannot open: the resolution
-  // itself refuses malformed keys, and a v4 ledger row may carry any string an older build wrote.
-  // Resolution failure is "peer not present" — the row keeps its own-mode label and the upgrade
-  // completes.
   const peerPathOf = (repoKey: string): string | null => {
     try {
       return collaborationLocationOfRepoKey(repoKey, "local").dbPath;
@@ -3233,14 +2761,11 @@ function backfillMoveRoutes(db: StoreDb): void {
           ?.mode;
         peer = { mode: typeof mode === "string" ? mode : null };
       } catch {
-        // note: An unreadable or partially applied peer lane cannot prove the one-checkout
-        // topology; the exchange label the SQL wrote stands.
         peer = null;
       } finally {
         try {
           lane?.close();
         } catch {
-          // note: connection-level failure only
         }
       }
     }
@@ -3264,12 +2789,10 @@ function backfillMoveRoutes(db: StoreDb): void {
         .get(row.operationId, peerRole) as { found?: number } | undefined;
       if (staged !== undefined) relabel.run(row.operationId);
     } catch {
-      // note: The peer opened a moment ago; a mid-migration failure keeps the exchange label.
     } finally {
       try {
         lane?.close();
       } catch {
-        // note: connection-level failure only
       }
     }
   }
@@ -3314,8 +2837,6 @@ export function applyCollaborationLadder(
       nowRfc3339(),
     );
   }
-  // invariant: The v2 shape is proven before the v3 DDL: an outbox table without its
-  // ledger row is a partial apply, and is refused instead of being accepted by CREATE.
   if (appliedMax < COLLABORATION_OUTBOX_SCHEMA.version) {
     assertRemoteCacheSchema(db, dbPath);
     db.exec(COLLABORATION_OUTBOX_SCHEMA.sql);
@@ -3326,10 +2847,6 @@ export function applyCollaborationLadder(
       nowRfc3339(),
     );
   }
-  // invariant: The v3 shape is proven before the v4 rebuild: a move ledger or a widened
-  // `relations` under a v3 ledger row is a partial apply, refused instead of re-created. The
-  // proof guards the partial apply only: a lane whose v4 row is recorded already holds the move
-  // ledger, and that row is what proves it, so the step is skipped instead of re-run.
   if (appliedMax < COLLABORATION_MOVE_SCHEMA.version) {
     assertOutboxSchema(db, dbPath);
     db.exec(COLLABORATION_MOVE_SCHEMA.sql);
@@ -3340,8 +2857,6 @@ export function applyCollaborationLadder(
       nowRfc3339(),
     );
   }
-  // invariant: The v4 shape is proven before the v5 column: a ledger row that already carries an
-  // unexpected `route` under a v4 checksum is a partial apply, refused instead of re-altered.
   if (appliedMax < COLLABORATION_MOVE_ROUTE_SCHEMA.version) {
     assertMoveSchema(db, dbPath);
     db.exec(COLLABORATION_MOVE_ROUTE_SCHEMA.sql);
@@ -3353,8 +2868,6 @@ export function applyCollaborationLadder(
     );
     backfillMoveRoutes(db);
   }
-  // invariant: The exact v5 shape is proven before the v6 DDL: an altered project_milestones
-  // without its ledger row is a partial apply, and is refused instead of being repaired.
   if (appliedMax < COLLABORATION_MILESTONE_EFFORT_SCHEMA.version) {
     assertMoveRouteSchema(db, dbPath);
     db.exec(COLLABORATION_MILESTONE_EFFORT_SCHEMA.sql);
@@ -3432,10 +2945,6 @@ export async function upgradeCollaborationStore(
       if (meta.repoKey !== location.repoKey || meta.mode !== location.mode) {
         throw staleBinding(dbPath, meta, `this checkout's ${location.repoKey} (${location.mode})`);
       }
-      // invariant: The ladder is mutated only for the generation THIS checkout is bound to.
-      // Repository and mode alone admit a replaced same-repository lane, so a stale or unbound
-      // checkout must refuse here - under the migration lock, before any DDL or backfill -
-      // instead of writing another generation's bytes and leaving bootstrap to refuse after.
       const owned =
         binding !== null &&
         binding.state === "active" &&
@@ -3462,7 +2971,6 @@ export async function upgradeCollaborationStore(
       });
       const ladder = applyCollaborationLadder(db, dbPath);
       if (ladder.fromVersion === current) {
-        // note: A committed earlier upgrade revalidates instead of reapplying.
         db.exec("commit");
         return receipt(current, 0);
       }
@@ -3483,8 +2991,6 @@ export async function upgradeCollaborationStore(
         }),
         nowRfc3339(),
       );
-      // invariant: A selector that moved while the migration held the write lock refuses
-      // under it: the ladder is never advanced under a selection this process lost.
       assertSelectionUnchanged(context, location);
       db.exec("commit");
       return receipt(ladder.fromVersion, ladder.issuesBackfilled);
@@ -3492,7 +2998,6 @@ export async function upgradeCollaborationStore(
       try {
         db.exec("rollback");
       } catch {
-        // note: nothing committed either way
       }
       throw error instanceof StoreError ? error : asRefusal(dbPath, error);
     }
@@ -3500,7 +3005,6 @@ export async function upgradeCollaborationStore(
     try {
       db.close();
     } catch {
-      // note: connection-level failure; the transaction above already rolled back
     }
   }
 }
@@ -3521,27 +3025,6 @@ export async function upgradeExistingCollaborationStore(
   return upgradeCollaborationStore(context, operator);
 }
 
-/**
- * invariant: Open the scope's active collaboration authority. Never creates a database:
- * a missing one is `collaboration.not-initialized`, an inert staged one is
- * `collaboration.not-active`, and an invalid/corrupt/inaccessible one is
- * `collaboration.unreadable`. An expected stamp that no longer matches refuses
- * `collaboration.stale-binding` before the handle is returned.
- *
- * Both modes return the same non-mutating inspection handle: the lane's writer
- * exists only inside `withCollaborationWrite`, so no retained handle can write
- * after the selection, state or epoch changes. `mode: "write"` additionally
- * proves the store file is writable now, so a mutation-intent caller learns a
- * read-only filesystem before attempting the guarded write.
- */
-/**
- * Prove one collaboration IMAGE at an arbitrary path with the runtime's own
- * admission: the single supported migration and its checksum, the closed table
- * and column inventory, the metadata singleton and the repository binding —
- * everything `openCollaborationStore` proves, over bytes that are not yet the
- * canonical authority. Nothing is created; a refused image never becomes a
- * target this checkout could not open afterwards.
- */
 export async function admitCollaborationImage(
   location: CollaborationLocation,
   imagePath: string,
@@ -3569,10 +3052,6 @@ export function assertCollaborationTargetAdmission(location: CollaborationLocati
   assertAdmittedTarget(location.dbPath);
 }
 
-// ---------------------------------------------------------------------------
-// note: The control checkout's binding to one collaboration authority
-// ---------------------------------------------------------------------------
-
 /**
  * The recorded binding of ONE control checkout to the repository authority it
  * uses: the derived scope (repository key and mode), the authority's own store
@@ -3588,12 +3067,6 @@ export function assertCollaborationTargetAdmission(location: CollaborationLocati
 export type CollaborationBinding =
   | Readonly<{
       version: 2;
-      /**
-       * why: `claimed` while an activation holds the authority publication open: the
-       * checkout is already committed to that generation, so a crash leaves evidence
-       * instead of an unbound checkout that looks fresh. `active` once the authority
-       * is published (or a supported adoption recorded it).
-       */
       state: "claimed" | "active";
       repoKey: string;
       mode: "local" | "mirror";
@@ -3606,9 +3079,7 @@ export type CollaborationBinding =
       state: "active";
       repoKey: string;
       mode: "remote";
-      /** note: The checked Git object ID the selector was read from. */
       selectorCommit: string;
-      /** note: The selector generation this checkout is bound to. */
       generation: number;
       storeId: string;
       epoch: number;
@@ -3619,10 +3090,8 @@ function bindingPath(context: StoreContext): string {
   return join(context.harnessDir, COLLABORATION_BINDING_FILE);
 }
 
-/** note: A Git object ID: SHA-1 or SHA-256 spelling, lowercase hex. */
 const SELECTOR_COMMIT = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
-/** note: The binding file's shape refusal: never treated as a fresh or foreign checkout's record. */
 function malformedBinding(context: StoreContext): never {
   throw new StoreError(
     "collaboration.stale-binding",
@@ -3651,8 +3120,6 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
   try {
     parsed = JSON.parse(text);
   } catch {
-    // invariant: Unreadable is NOT fresh: the checkout cannot be proven to own the authority
-    // it would use, and the supported route is an explicit re-bind.
     throw new StoreError(
       "collaboration.stale-binding",
       `The collaboration binding at ${bindingPath(context)} is not readable JSON; this checkout cannot be proven to belong ` +
@@ -3662,8 +3129,6 @@ export function readCollaborationBinding(context: StoreContext): CollaborationBi
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) malformedBinding(context);
   const body = parsed as Record<string, unknown>;
-  // invariant: v2 binds a local/mirror checkout; v3 binds a remote one to the exact checked
-  // selector commit and generation. Nothing else is a binding.
   const common =
     typeof body.repoKey === "string" &&
     typeof body.storeId === "string" &&
@@ -3694,8 +3159,6 @@ export function writeCollaborationBinding(
   context: StoreContext,
   authority: Pick<CollaborationAuthority, "repoKey" | "mode" | "storeId" | "epoch"> & { binding?: "claimed" | "active" },
 ): void {
-  // invariant: A remote checkout's v3 binding records the checked selector commit and generation,
-  // so only the reviewed remote bind may write it; the local authority verbs never fake one.
   const mode = localBindingMode(authority.mode);
   const path = bindingPath(context);
   mkdirSync(dirname(path), { recursive: true });
@@ -3717,7 +3180,6 @@ export function writeCollaborationBinding(
   }
 }
 
-/** invariant: The ATTEMPT-scoped claim path: never the primary binding file. */
 function bindingClaimPath(context: StoreContext): string {
   return join(context.harnessDir, "collaboration-binding.claim.json");
 }
@@ -3770,7 +3232,6 @@ export function clearBindingClaim(context: StoreContext): void {
   try {
     rmSync(bindingClaimPath(context), { force: true });
   } catch {
-    // note: scratch removal is best-effort
   }
 }
 
@@ -3801,17 +3262,10 @@ export function beginBindingClaim(
       rmSync(path, { force: true });
       syncDirectoryEntry(dirname(path));
     } catch {
-      // note: The claim is attempt scratch; removing it is best-effort.
     }
   };
 }
 
-/**
- * invariant: One recorded publication behind the live authority: the cutover's active
- * publication row, the file-era activation phase row, the restore receipt row, or
- * the fresh-creation receipt of an ordinary `store init` lane — each with the
- * generation it names. This is durable lane data, never a mutable binding.
- */
 type RecordedLineage = Readonly<{
   kind: "cutover" | "activation" | "restore" | "creation";
   operationId: string;
@@ -3855,7 +3309,6 @@ function recordedLineage(db: StoreDb): RecordedLineage[] {
       if (parsed === null || typeof parsed !== "object") continue;
       const record = parsed as Record<string, unknown>;
       if (row.operation_id.startsWith("restore:")) {
-        // note: A restore names its authority under `authority` (receipt document v2).
         const authority = record.authority;
         if (authority === null || typeof authority !== "object") continue;
         const restored = authority as Record<string, unknown>;
@@ -3884,19 +3337,11 @@ export type CollaborationAdoption = Readonly<{
   lineage: RecordedLineage;
 }>;
 
-/**
- * note: The lane state adoption reads: an ACTIVE v1 lane is proven by the immutable v1
- * ledger and layout (never migrated here), a current lane by the full current admission.
- * Either way the checkout's binding is only written AFTER this read, so the explicit
- * adoption is the supported recovery for a replacement clone of a v1 authority.
- */
 async function readAdoptionSnapshot(location: CollaborationLocation): Promise<{
   authority: CollaborationAuthority;
   lineage: RecordedLineage[];
 }> {
   assertStoreRuntimeSupported();
-  // invariant: Adoption reads an EXISTING lane through the same private, link-free,
-  // non-WAL admission every other entry uses; it never creates one.
   assertAdmittedTarget(location.dbPath);
   if (!existsSync(location.dbPath)) throw notInitialized(location.dbPath);
   const db = await connectAt(location.dbPath, "read", busyTimeoutMs());
@@ -3949,8 +3394,6 @@ export async function adoptCollaborationBinding(
 ): Promise<CollaborationAdoption> {
   const location = resolveCollaborationLocation(context);
   if (location.mode === "remote") remoteLaneRefusal();
-  // note: Foreign checkout / legacy owner: the scope's authority is not this checkout's
-  // to adopt while it still owns a combined source.
   await assertControlCheckoutScope(context, location);
   const binding = readCollaborationBinding(context);
   if (binding !== null && binding.repoKey !== location.repoKey) {
@@ -3977,11 +3420,6 @@ export async function adoptCollaborationBinding(
         `adoption refuses rather than binding the wrong generation. Nothing was written.`,
     );
   }
-  // note: Lineage is keyed by generation: records for the LIVE generation corroborate
-  // each other (an activation later restored, then adopted, still names one live
-  // authority), while records for EARLIER generations are superseded history, not
-  // ambiguity. Ambiguity is a lane whose live generation is unnamed but whose
-  // history claims several different generations.
   const kindPriority = ["restore", "activation", "creation", "cutover"] as const;
   const live = snapshot.lineage
     .filter((entry) => entry.storeId === authority.storeId && entry.epoch === authority.epoch)
@@ -4004,8 +3442,6 @@ export async function adoptCollaborationBinding(
         `it. Nothing was written.`,
     );
   }
-  // invariant: A recorded claim may be cleared only when it names the proven generation; a
-  // mismatched claim is never promoted or silently replaced.
   const claim = readBindingClaim(context);
   if (claim !== null && (claim.storeId !== authority.storeId || claim.epoch !== authority.epoch)) {
     throw new StoreError(
@@ -4051,7 +3487,6 @@ export async function adoptCollaborationBinding(
   };
 }
 
-/** invariant: The fail-closed refusal of a present execution store this probe cannot read. */
 function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
   return new StoreError(
     "collaboration.unreadable",
@@ -4062,27 +3497,15 @@ function executionProbeRefusal(dbPath: string, error: unknown): StoreError {
   );
 }
 
-/**
- * invariant: The execution store path's shape, as `store-db`'s own open discriminates it:
- * only a genuinely missing entry is "no store". A path that cannot be examined,
- * a directory or any other non-regular entry — including a dangling symlink,
- * which `existsSync` would follow to "absent" — is a PRESENT store that cannot
- * be read, never an absent one.
- */
 function executionStorePresence(dbPath: string): "absent" | "regular" | "unusable" {
   try {
     return lstatSync(dbPath).isFile() ? "regular" : "unusable";
   } catch (error) {
-    // invariant: A path that cannot even be examined is an existing-but-unreadable store.
     if (error !== null && typeof error === "object" && "code" in error && error.code === "ENOENT") return "absent";
     return "unusable";
   }
 }
 
-/**
- * note: The legacy-owner refusal for a store whose held collaboration rows were READ,
- * optionally after the rest of the inspection failed.
- */
 function legacyOwnerRefusal(held: readonly string[], cause?: string): StoreError {
   return new StoreError(
     "collaboration.cutover-required",
@@ -4093,57 +3516,25 @@ function legacyOwnerRefusal(held: readonly string[], cause?: string): StoreError
   );
 }
 
-/**
- * invariant: Refuse a legacy collaboration owner: a combined store at the execution path
- * that still holds collaboration rows and records no fence.
- *
- * The execution lane is a SEPARATE domain, so this inspects the file directly
- * instead of admitting it: `openStore` refuses a damaged `execution_meta` or
- * schema ledger as `store.corrupt` before any table is visible, which would
- * hide a readable legacy owner's collaboration rows. A genuinely absent file
- * has no local rows to inspect.
- *
- * `ownershipProven` says this checkout's finalized binding already names the
- * resolved repository and mode. Such a checkout was ADOPTED, so it is not a
- * legacy owner: a file that cannot be opened at all proves nothing and is left
- * to the execution domain (whose own `store.corrupt`/`store.busy` is the
- * actionable answer) instead of becoming a collaboration refusal. That
- * exemption NEVER covers an observation: the moment a held row is read, the
- * rows win — a later failure in the same pass refuses instead of admitting.
- */
 async function assertNoLegacyCollaborationOwner(context: StoreContext, ownershipProven: boolean): Promise<void> {
   const dbPath = storeDbPath(context);
   const presence = executionStorePresence(dbPath);
   if (presence === "absent") return;
   if (presence === "unusable") {
-    // invariant: A present-but-unreadable path is `store.corrupt` in the execution domain;
-    // an adopted checkout leaves that verdict to it, an unbound one cannot rule
-    // the shape out as a hidden legacy owner.
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, "the store path is not a readable regular store file");
   }
   let probe: StoreDb;
   try {
-    // note: The same bounded read-open retry the execution lane uses: a same-process
-    // writer's deferred sidecar cleanup reports a transient SQLITE_CANTOPEN for
-    // an intact store.
     probe = await connectAt(dbPath, "read", busyTimeoutMs());
   } catch (error) {
-    // note: Vanished between the classification and the open: nothing local to inspect.
     if (executionStorePresence(dbPath) === "absent") return;
-    // why: Bounded contention is transient and keeps its own retryable refusal.
     if (error instanceof StoreError && error.code === "store.busy") throw error;
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   }
-  // note: The held tables read SO FAR: once one is observed, nothing that follows can
-  // admit this lane, whatever the binding says.
   const observed: string[] = [];
   try {
-    // invariant: A store recorded by another build is a verdict this probe must not guess
-    // around: a newer/unknown chain means the collaboration layout is not this
-    // build's to interpret, so its own upgrade refusal stands. A merely damaged
-    // ledger says nothing about the rows, which the fence and counts still decide.
     try {
       validateAppliedMigrations(readAppliedMigrations(probe, false));
     } catch (error) {
@@ -4159,12 +3550,8 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
     if (held.length === 0) return;
     throw legacyOwnerRefusal(held);
   } catch (error) {
-    // note: A typed verdict (schema/corrupt/fence/cutover) is already the answer.
     if (error instanceof StoreError) throw error;
-    // invariant: An observation already made is not undone by a later failure: the rows
-    // were readable, so this is the legacy owner the cutover must move.
     if (observed.length > 0) throw legacyOwnerRefusal(observed, `${error instanceof Error ? error.message : String(error)}`);
-    // note: A lazy driver may reject the header only when the first statement runs.
     if (ownershipProven) return;
     throw executionProbeRefusal(dbPath, error);
   } finally {
@@ -4172,10 +3559,6 @@ async function assertNoLegacyCollaborationOwner(context: StoreContext, ownership
   }
 }
 
-/**
- * note: The one refusal for a resolved remote selection on a LOCAL domain entry: the remote
- * lane is a verified cache, and no local collaboration table is its authority.
- */
 function remoteLaneRefusal(): never {
   throw new StoreError(
     "collaboration.mode-unavailable",
@@ -4238,7 +3621,6 @@ export async function readLaneMode(location: CollaborationLocation): Promise<Col
     const mode = row?.mode;
     return mode === "local" || mode === "mirror" || mode === "remote" ? mode : null;
   } catch {
-    // note: An unreadable lane here is only unclassifiable; opening it is what reports the real cause.
     return null;
   } finally {
     db.close();
@@ -4253,10 +3635,6 @@ export function localPredecessorRetiredPath(
   return join(dirname(location.dbPath), `collaboration.retired-${identity.storeId}-${String(identity.epoch)}.db`);
 }
 
-/**
- * note: The retirement's publish-to-snapshot seam: a regression simulates a competing
- * checkout that preserved a different image after this one's last inode check.
- */
 let localPredecessorPublicationGapForTest: (() => void | Promise<void>) | undefined;
 export function setLocalPredecessorPublicationGapForTest(
   callback: (() => void | Promise<void>) | undefined,
@@ -4300,8 +3678,6 @@ export async function retireLocalPredecessorLane(
     );
   }
   if (existsSync(retiredPath)) {
-    // note: A crash after the link leaves both names on one inode; completing that move is
-    // not replacement. Any other image is a different authority's history and is preserved.
     const source = statSync(location.dbPath);
     const preserved = statSync(retiredPath);
     if (source.dev === preserved.dev && source.ino === preserved.ino) {
@@ -4319,10 +3695,6 @@ export async function retireLocalPredecessorLane(
         `Inspect the transition before repeating it; nothing was changed.`,
     );
   }
-  // why: The proof runs in one immediate transaction, but the rename happens AFTER that
-  // transaction closes: SQLite may still need the file's own name to finish a commit, so
-  // moving it under an open connection is unsafe. The commit-time selector fence keeps a
-  // writer admitted before the transition from landing afterwards.
   const before = statSync(location.dbPath);
   const db = await connectAt(location.dbPath, "write", busyTimeoutMs(), { noCreate: true, keepJournalMode: true });
   try {
@@ -4348,7 +3720,6 @@ export async function retireLocalPredecessorLane(
       try {
         db.exec("rollback");
       } catch {
-        // note: nothing was written either way
       }
       throw error instanceof StoreError ? error : asRefusal(location.dbPath, error);
     }
@@ -4356,10 +3727,8 @@ export async function retireLocalPredecessorLane(
     try {
       db.close();
     } catch {
-      // note: connection-level failure; the transaction above already settled
     }
   }
-  // invariant: The path still holds the file this proof examined; a replacement is never renamed.
   const after = statSync(location.dbPath);
   if (after.ino !== before.ino) {
     throw staleBinding(
@@ -4368,8 +3737,6 @@ export async function retireLocalPredecessorLane(
       `the predecessor lane this transition proved`,
     );
   }
-  // invariant: The reviewed successor is still the live selection: a selector that moved or
-  // was deleted while this transition waited never moves the predecessor's bytes.
   assertSelectionUnchanged(context, location);
   if (statSync(location.dbPath).ino !== after.ino) {
     throw staleBinding(
@@ -4378,8 +3745,6 @@ export async function retireLocalPredecessorLane(
       `the predecessor lane this transition proved`,
     );
   }
-  // note: The gap a competing checkout's completed retirement lands in: the archive name is
-  // still free here, so only the create-if-absent link below decides which image survives.
   await localPredecessorPublicationGapForTest?.();
   try {
     linkSync(location.dbPath, retiredPath);
@@ -4413,30 +3778,9 @@ export async function retireLocalPredecessorLane(
  */
 export type RemoteCacheAdmission = Readonly<{
   previousDuringDraining?: boolean;
-  /**
-   * note: Admit the cache's own OUTBOX generation (v3) instead of refusing it as an upgrade
-   * requirement. The verbs that settle an already-frozen intent pass this — and so does the
-   * observation that refreshes the access check their dispatch re-proves: without it an expired check
-   * behind an unsettled v3 intent could never be refreshed, because the replacement that would upgrade
-   * the lane refuses while that intent is unsettled. Both write only `remote_bindings`,
-   * `remote_observations` and the outbox tables, which exist unchanged in that generation. Every other
-   * read and write stays refused.
-   */
   settleOutbox?: boolean;
 }>;
 
-/**
- * invariant: A remote-cache entry's scope: the checkout resolves remote, its recorded v3 binding
- * is active and names the exact checked commit and generation, and the checked
- * selection exists. Anything else refuses before a lane is opened. A caller that
- * already resolved this pair passes it, so one request reads the selector and the
- * binding ONCE and the lane it opens is admitted for exactly that sample.
- */
-
-/**
- * note: Whether this checkout's v3 binding is the generation a DRAINING selector pins as
- * its previous active one. That is the only recovery scope a draining generation admits.
- */
 function drainingPreviousBinding(
   location: CollaborationLocation,
   binding: CollaborationBinding,
@@ -4494,16 +3838,11 @@ export function assertRemoteCacheIdentity(authority: CollaborationAuthority, bin
   }
 }
 
-/** note: A v2 binding names a local/mirror authority only; a remote scope records v3 through the reviewed bind. */
 function localBindingMode(mode: CollaborationMode): "local" | "mirror" {
   if (mode === "remote") remoteLaneRefusal();
   return mode;
 }
 
-/**
- * invariant: A finalized binding must name this scope, and a remote one the exact checked
- * selector commit and generation. Anything else is a foreign or superseded record.
- */
 function assertBindingMatches(binding: CollaborationBinding, location: CollaborationLocation): void {
   if (binding.repoKey !== location.repoKey || binding.mode !== location.mode) {
     throw new StoreError(
@@ -4527,12 +3866,6 @@ function assertBindingMatches(binding: CollaborationBinding, location: Collabora
   }
 }
 
-/**
- * invariant: The domain gate a `remote` selection passes before ANY collaboration I/O: its
- * checkout binding is proven against the checked selector first, so a stale, absent or foreign
- * record keeps its own code, and only then is the missing remote lane refused. A local/mirror
- * checkout holding a remote (v3) binding is a foreign record and never drifts onto local rows.
- */
 function assertSelectedLane(context: StoreContext, location: CollaborationLocation): void {
   const binding = readCollaborationBinding(context);
   if (location.mode === "remote") {
@@ -4557,14 +3890,8 @@ function assertSelectedLane(context: StoreContext, location: CollaborationLocati
   }
 }
 
-/**
- * invariant: Refuse a retargeted checkout: an origin or `.mstarc` change never re-points a
- * binding. Returns the checkout's finalized binding (or `null`), so an admission
- * caller reads it once.
- */
 function assertBoundScope(context: StoreContext, location: CollaborationLocation): CollaborationBinding | null {
   const binding = readCollaborationBinding(context);
-  // note: A claim is attempt-scoped evidence, not this checkout's binding: readers ignore it.
   if (binding === null || binding.state !== "active") return null;
   assertBindingMatches(binding, location);
   return binding;
@@ -4573,13 +3900,9 @@ function assertBoundScope(context: StoreContext, location: CollaborationLocation
 /** The checkout scope guard: the legacy-owner probe plus the retarget refusal. */
 export async function assertControlCheckoutScope(context: StoreContext, location: CollaborationLocation): Promise<void> {
   const binding = assertBoundScope(context, location);
-  // why: A binding that names this repository and mode is proof of ADOPTION, not of an
-  // unreadable execution lane's innocence; it only keeps an uninspectable file
-  // from becoming a collaboration refusal.
   await assertNoLegacyCollaborationOwner(context, binding !== null);
 }
 
-/** note: The scope guard's fuller form: the finalized binding is returned for the generation check. */
 async function checkoutScopeBinding(
   context: StoreContext,
   location: CollaborationLocation,
@@ -4589,35 +3912,15 @@ async function checkoutScopeBinding(
   return binding;
 }
 
-/**
- * invariant: Refuse before any domain I/O when this checkout cannot own the resolved
- * authority:
- *
- * - an UNFENCED combined store that still holds collaboration rows is the legacy
- *   owner: only the reviewed cutover may hand that authority on;
- * - a recorded binding that names another repository/mode, store or epoch than
- *   the one at the resolved path means the checkout was retargeted (an origin or
- *   `.mstarc` change) or its lane was replaced by another generation: the verb
- *   must re-resolve or adopt deliberately, never drift onto another's data.
- *
- * A read from a checkout with no finalized binding (a fresh replacement clone)
- * is admitted and records nothing; a WRITE additionally requires a binding, so an
- * unbound checkout adopts the resolved authority first.
- */
 async function assertControlBinding(
   context: StoreContext,
   location: CollaborationLocation,
   authority: CollaborationAuthority,
   requirement: "read" | "write",
 ): Promise<void> {
-  // note: ONE scope pass returns the finalized binding: the retarget refusal, the
-  // legacy-owner probe and the generation comparison share one read.
   const binding = await checkoutScopeBinding(context, location);
   if (binding === null) {
     if (requirement === "read") return;
-    // why: A LIVE authority with no recorded binding is NOT a fresh clone: it may be a
-    // switched checkout or a lost/interrupted binding write, and silently adopting
-    // it would let one repository's verbs reach another's data.
     throw new StoreError(
       "collaboration.stale-binding",
       `This checkout holds no collaboration binding for the ACTIVE authority store ${authority.storeId} at ` +
@@ -4650,8 +3953,6 @@ export async function openCollaborationStore(
 ): Promise<CollaborationStoreHandle> {
   assertStoreRuntimeSupported();
   const location = resolveCollaborationLocation(context);
-  // invariant: A remote selection never opens a local-authority lane: its binding is proven
-  // first, then the missing remote lane refuses with its own code.
   assertSelectedLane(context, location);
   if (mode === "write" && existsSync(location.dbPath)) {
     try {
@@ -4662,9 +3963,6 @@ export async function openCollaborationStore(
   }
   const handle = await openAdmission(location, "active", expected, busyTimeoutMs());
   try {
-    // invariant: ONE comparison for both modes: a bound checkout proves the same repository,
-    // mode, store and epoch, and only an UNBOUND read (a replacement clone) is
-    // admitted without it — reading never writes the binding.
     await assertControlBinding(context, location, handle.authority, mode);
   } catch (error) {
     handle.close();
@@ -4680,7 +3978,6 @@ export async function readCollaborationAuthority(context: StoreContext): Promise
   return handle.authority;
 }
 
-/** note: One refusal's stable code (anything without one is the lane's generic cause). */
 function probeRefusal(error: unknown): { code: string; message: string } {
   const code = (error as { code?: unknown } | null | undefined)?.code;
   return {
@@ -4723,8 +4020,6 @@ export function readCollaborationObservation(
   handle: CollaborationStoreHandle,
   scope: CollaborationScope,
 ): CompleteCollaborationObservation {
-  // invariant: The observation's instant is the moment THIS source's own transaction reads
-  // its first row: a slow open of the other authority never backdates it.
   const asOf = new Date().toISOString();
   const row = handle.db.prepare("select revision, catalog_revision from collaboration_meta where id = 1").get() as
     | { revision?: unknown; catalog_revision?: unknown }
@@ -4829,8 +4124,6 @@ async function writeStage<T>(
             "nothing was written.",
         );
       }
-      // invariant: The checked selection is re-proved on the live ref under the write lock:
-      // a bind staged against a moved selector rolls back instead of committing.
       if (context !== undefined) assertSelectionUnchanged(context, location);
       db.exec("commit");
       return result;
@@ -4838,7 +4131,6 @@ async function writeStage<T>(
       try {
         db.exec("rollback");
       } catch {
-        // note: nothing committed either way
       }
       throw error;
     }
@@ -4846,7 +4138,6 @@ async function writeStage<T>(
     try {
       db.close();
     } catch {
-      // note: connection-level failure; the transaction above already rolled back
     }
   }
 }
@@ -4917,7 +4208,6 @@ async function withWriteLane<T>(
   lane: "domain" | "remote-cache",
   admission: RemoteCacheAdmission = {},
   holdAsync = false,
-  // note: Internal outbox-recovery switch, constructed only by `withRemoteCacheRecoveryWrite`.
   recovery = false,
 ): Promise<T> {
   assertStoreRuntimeSupported();
@@ -4936,29 +4226,16 @@ async function withWriteLane<T>(
   assertAdmittedTarget(dbPath);
   if (!existsSync(dbPath)) throw notInitialized(dbPath);
 
-  // invariant: Admission on a refusing read: a WAL layout was already refused, so this
-  // probe neither repairs a journal nor creates a sidecar.
   const probe = await connectAt(dbPath, "read", timeout);
   try {
-    // note: The recovery lane drives the one settlement switch admit reads.
     const admitted = admit(probe, location, expected, "active", recovery ? { ...admission, settleOutbox: true } : admission);
-    // note: The binding is proved on the same refusing read, before a writer exists.
     if (lane === "remote-cache") assertRemoteCacheIdentity(admitted, remoteBinding!);
     else await assertControlBinding(context, location, admitted, "write");
   } finally {
     probe.close();
   }
 
-  // invariant: The bytes this writer commits must still be the bytes its path names. A lane
-  // replacement renames a successor over the canonical name, and a handle opened before that still
-  // addresses the PREDECESSOR inode: committing through it would write evidence into a file the
-  // published cache never carries. The inode is sampled BEFORE the open and re-proved under the
-  // write lock, immediately before commit, so any replacement in between refuses rather than loses
-  // the write.
   const openedInode = lane === "remote-cache" ? laneInodeOf(dbPath) : null;
-  // invariant: The writer never creates the database and never changes its journal mode:
-  // a replacement that appears between the probe and here is refused without
-  // being converted, and a vanished one cannot be recreated.
   const db = await connectAt(dbPath, "write", timeout, { noCreate: true, keepJournalMode: true }).catch(
     (error: unknown) => {
       if (!existsSync(dbPath)) throw notInitialized(dbPath);
@@ -4969,16 +4246,7 @@ async function withWriteLane<T>(
     db.exec("begin immediate");
     try {
       const authority = admit(db, location, expected, "active", recovery ? { ...admission, settleOutbox: true } : admission);
-      // invariant: The private cache identity is re-proved on the LOCKED handle, not only on
-      // the refusing probe: a replaced lane is never written through this binding.
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
-      // note: The schema-object proof runs on the recovery READ open only. Proving it here as well
-      // would refuse every settlement write on a foreign cache carrying a trigger on a recovery
-      // table, which no supported route could then settle or replace - a block without an exit.
-      // The settlement write relies on the statement guard and the version inventory instead; the
-      // trigger case is a known, accepted limitation (assertRecoverySurfaceIsolated).
-      // invariant: The transaction stays with this wrapper: the effect sees only a
-      // connection that refuses its own commit/rollback/close.
       const effect = apply({
         db: guardedWriteDb(recovery ? recoverySurfaceDb(db) : db),
         authority,
@@ -4989,9 +4257,6 @@ async function withWriteLane<T>(
       let result: T;
       if (isThenable(effect)) {
         if (!holdAsync) {
-          // invariant: Consume the abandoned result before refusing: an async effect's
-          // rejection must not surface as an unhandled rejection after this call
-          // has already reported the synchronous-effect refusal.
           void Promise.resolve(effect).catch(() => undefined);
           throw new StoreError(
             "store.corrupt",
@@ -5003,15 +4268,8 @@ async function withWriteLane<T>(
       } else {
         result = effect as T;
       }
-      // invariant: The checked selection (and, for a remote lane, the private cache stamp) is
-      // re-proved immediately before commit: a selector that moved to a draining or successor
-      // generation while this writer waited refuses, and the effect rolls back.
       assertSelectionUnchanged(context, location);
       if (lane === "remote-cache") assertRemoteCacheIdentity(authority, remoteBinding!);
-      // invariant: The canonical name still holds the inode this transaction wrote; a cache
-      // replacement that renamed a successor over it while this writer waited refuses here instead
-      // of committing evidence into the replaced predecessor. The transaction rolls back and the
-      // caller retries against the published generation.
       if (openedInode !== null && laneInodeOf(dbPath) !== openedInode) {
         throw new StoreError(
           "collaboration.stale-binding",
@@ -5025,7 +4283,6 @@ async function withWriteLane<T>(
       try {
         db.exec("rollback");
       } catch {
-        // note: nothing committed either way
       }
       throw error;
     }
@@ -5033,7 +4290,6 @@ async function withWriteLane<T>(
     try {
       db.close();
     } catch {
-      // note: connection-level failure; the transaction above already rolled back
     }
   }
 }
@@ -5067,7 +4323,6 @@ export async function openRemoteCacheRecovery(
   return openRemoteCacheAdmission(context, mode, resolved, admission, true);
 }
 
-/** note: The ordinary open admits only the current schema; the recovery open proves its exact version inventory. */
 async function openRemoteCacheAdmission(
   context: StoreContext,
   mode: "read" | "write",
@@ -5098,7 +4353,6 @@ async function openRemoteCacheAdmission(
     throw error;
   }
   if (!recovery) return handle;
-  // invariant: The surface is installed only after its isolation is proven on these exact bytes.
   try {
     assertRecoverySurfaceIsolated(handle.db);
   } catch (error) {
@@ -5108,16 +4362,11 @@ async function openRemoteCacheAdmission(
   return { db: recoverySurfaceDb(handle.db), authority: handle.authority, close: handle.close };
 }
 
-/**
- * note: The tables a recovery open serves: the intent tables plus the remote projection rows the
- * settlement verbs read. Every domain table stays behind the ordinary current-schema admission.
- */
 const REMOTE_CACHE_RECOVERY_TABLES: ReadonlySet<string> = new Set([
   ...COLLABORATION_REMOTE_TABLES,
   ...COLLABORATION_OUTBOX_TABLES,
 ]);
 
-/** why: The recovery surface is an outbox escape hatch, not a current-schema substitute. */
 function recoverySurfaceRefusal(reason: string): StoreError {
   return new StoreError(
     "collaboration.upgrade-required",
@@ -5125,22 +4374,11 @@ function recoverySurfaceRefusal(reason: string): StoreError {
   );
 }
 
-/**
- * note: The recovery surface guard is FAIL CLOSED, statement by statement, against the
- * lower-cased text: (1) any statement form that could escape the surface (pragma, attach,
- * detach, vacuum, create, drop, alter, temp tables) is refused, and so is a REPLACE statement -
- * anchored at a statement start, so the scalar replace(...) function remains usable inside an
- * outbox statement; (2) any statement naming none of the allowlisted surface tables is refused,
- * so an unparseable or unclassifiable statement never runs; and (3) any statement naming a domain
- * table, in ANY casing, is refused. Table identity is SQLite's own; this text guard is the belt
- * over that allowlist, never a substitute for it.
- */
 const RECOVERY_FORBIDDEN_FORM = /\b(pragma|attach|detach|vacuum|create|drop|alter|temp)\b/;
 const RECOVERY_FORBIDDEN_REPLACE = /(?:^|;)\s*replace\s+into\b/;
 
 function recoverySurfaceGuard(sql: string): void {
   const text = sql.toLowerCase();
-  // note: The domain check comes first so the refusal names the table, not the generic form.
   for (const table of COLLABORATION_TABLES) {
     if (REMOTE_CACHE_RECOVERY_TABLES.has(table)) continue;
     if (new RegExp(`\\b${table}\\b`).test(text)) throw recoverySurfaceRefusal(`the domain table "${table}"`);
@@ -5153,30 +4391,6 @@ function recoverySurfaceGuard(sql: string): void {
   }
 }
 
-/**
- * note: The schema-object proof, and where it runs: ONLY on the recovery READ open, immediately
- * before that open installs its surface wrapper. With `recoverySurfaceGuard` it refuses a
- * statement naming a domain table, a statement form that could escape the surface, and a
- * statement over no recovery-surface table; and it refuses to install at all when a recovery
- * table carries a trigger, or when a trigger that touches the surface or a view names a table
- * outside the recovery allowlist.
- *
- * why the settlement WRITE path is not schema-proved: a foreign or damaged cache carrying a
- * trigger on a recovery table would make every settlement write refuse, and the bind refuses to
- * replace the cache until those intents are settled - a block with no supported exit. The write
- * lane therefore relies on the statement guard plus the version inventory alone, and a trigger on
- * a recovery table WOULD fire during a settlement write. That is a known, accepted limitation of
- * the indirect-access residue (an open issue in the repository issue ledger), never a claim of
- * write-side isolation; it is not reachable through this build's own schema, which creates no
- * trigger on a recovery table.
- *
- * why the residue is stated here: this is NOT a database-level sandbox, and no reader may take it
- * for one. Indirect access is not proven. A view's dependency chain is not resolved, so an
- * INSTEAD OF trigger on a view whose own body spells no domain table passes. A foreign key whose
- * target this build's key layout does not validate is not checked, so an unvalidated inbound edge
- * from a domain table into the surface is not excluded. The READ guarantee covers the objects this
- * build enumerates in `sqlite_master`, over the statements its own verbs write.
- */
 function assertRecoverySurfaceIsolated(db: StoreDb): void {
   const tables: string[] = [];
   for (const row of db.prepare("select name from sqlite_master where type = 'table'").all() as Array<{ name?: unknown }>) {
@@ -5202,7 +4416,6 @@ function assertRecoverySurfaceIsolated(db: StoreDb): void {
   }
 }
 
-/** note: Read/write wrapper composing the surface guard under the caller's connection. */
 function recoverySurfaceDb(db: StoreDb): StoreDb {
   return {
     exec(sql: string): void {
@@ -5241,9 +4454,6 @@ export function writeRemoteCollaborationBinding(
     epoch: number;
   }>,
 ): CollaborationBinding {
-  // invariant: A publication never replaces a newer or foreign record. A slower bind that
-  // lost the race leaves the checkout's current binding and its cache rows in place, so it
-  // is never re-pointed onto a generation it did not record.
   const existing = readCollaborationBinding(context);
   if (
     existing !== null &&

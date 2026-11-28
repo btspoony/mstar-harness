@@ -1,31 +1,3 @@
-/**
- * invariant: store-cutover.test.ts — G4b: the OpenCode plugin's issue/catalog authority
- * boundary: what the store cutover refuses once it is the authority, and
- * what it leaves untouched.
- *
- * The OpenCode binding owns the same two refusals as the omp write gate and
- * the ZCode hook, in this host's GateResult dialect (`hardBlocked: true` —
- * OpenCode's `tool.execute.before` returns void, so a refusal-capable caller
- * must act on the structured result):
- *
- * 1. `{HARNESS_DIR}/store.db` (`-wal`/`-shm`) is never hand-writable.
- * 2. A project register is decided by the collaboration-authority probe
- *    against REAL stores built by the engine (`initializeStore` / `openStore`,
- *    real `node:sqlite` migrations): active → `project.register.retired`,
- *    missing or staged → `store.authority-unavailable` (never a pre-activation
- *    register permission), unreadable → `store.authority-unavailable` with the
- *    probe's own cause.
- * 3. Every gated coordination document probes the authority route first
- *    (§4.3/§5: the decision precedes any document read) and an unrelated write
- *    never enters the route at all; absent EXECUTION authority is no verdict
- *    for status/snapshot documents, so their document lint is unchanged. Plan
- *    S4 adds the execution authority to that route: a retired root register or
- *    snapshot write is refused `execution.direct-write-refused` while it is
- *    ACTIVE.
- * 4. The runtime floor comes from the ACTUAL runtime (engine
- *    `detectStoreRuntime`: the Bun global first, never Bun's emulated
- *    `process.versions.node`).
- */
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
@@ -59,15 +31,12 @@ afterEach(() => {
 
 const projects: string[] = [];
 
-/** note: Isolated user home for the collaboration lane; restored when the file ends. */
 const FIXTURE_HOME = mkdtempSync(join(tmpdir(), "opencode-g4b-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => FIXTURE_HOME);
 });
 afterAll(() => {
-  // why: A leaked spy would redirect every later test file at this deleted
-  // directory and make the suite order-dependent.
   homeSpy?.mockRestore();
   rmSync(FIXTURE_HOME, { recursive: true, force: true });
 });
@@ -91,8 +60,6 @@ function makeHarnessProject(enforcement?: "hard" | "soft"): { project: string; h
   mkdirSync(join(harness, "projects", "_default"), { recursive: true });
   const statusPath = join(harness, "status.json");
   writeFileSync(statusPath, JSON.stringify(validStatus, null, 2));
-  // why: A collaboration identity: the register route reads that lane, and the
-  // fixture home keeps its store out of the real home.
   const repoId = `opencode-${project.split(/[\\/]/).pop()!.toLowerCase().replace(/[^a-z0-9._-]+/g, "-")}`;
   writeFileSync(
     join(project, ".mstarc"),
@@ -107,19 +74,16 @@ function makeHarnessProject(enforcement?: "hard" | "soft"): { project: string; h
   };
 }
 
-/** note: REAL ACTIVE authorities (the `store init` pair). */
 async function seedActiveStore(harness: string): Promise<void> {
   await ensureCollaborationAuthority({ harnessDir: harness });
   const handle = await initializeStore({ harnessDir: harness });
   handle.close();
 }
 
-/** invariant: REAL staged-only collaboration lane (built, never activated). */
 async function seedStagedStore(harness: string): Promise<void> {
   await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
 }
 
-/** note: Unreadable COLLABORATION authority through the REAL engine channel. */
 function corruptCollaboration(harness: string): void {
   const dbPath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
   rmSync(dbPath, { force: true });
@@ -169,7 +133,7 @@ describe("opencode authority boundary — store/retired-register direct writes (
 
         const result = await validateStatusWrite(fixture.registerPath, { doc: invalidRegister, log });
         expect(result?.ok).toBe(false);
-        expect(result?.hardBlocked).toBe(true); // note: authority invariant, not the enforcement axis
+        expect(result?.hardBlocked).toBe(true);
         expect(result?.violations[0]!.code).toBe("store.authority-unavailable");
         expect(result?.violations[0]!.message).toContain(
           state === "staged" ? "collaboration.not-active" : "collaboration.not-initialized",
@@ -237,10 +201,6 @@ describe("opencode authority boundary — store/retired-register direct writes (
       const { entries, log } = capture();
       const caseVariant = join(fixture.harness, "projects", "_default", "RESIDUALS.json");
 
-      // invariant: The folded shape walk classifies the case-variant basename as a
-      // register document (dsh/omp/ZCode parity): the collaboration authority
-      // decides, and a missing/staged lane is a refusal — never the document
-      // validator and never silence.
       const result = await validateStatusWrite(caseVariant, { doc: invalidRegister, log });
       expect(result?.ok).toBe(false);
       expect(result?.hardBlocked).toBe(true);
@@ -256,8 +216,6 @@ describe("opencode authority boundary — store/retired-register direct writes (
     writeFileSync(join(fixture.project, "notes.md"), "# notes\n");
     expect(await validateStatusWrite(join(fixture.project, "notes.md"), { doc: "x", log })).toBeNull();
 
-    // why: No execution store = the pre-activation state: absence is not an
-    // execution verdict, so the valid status document passes.
     const status = await validateStatusWrite(fixture.statusPath, { doc: validStatus, log });
     expect(status?.ok).toBe(true);
     expect(status?.hardBlocked).toBe(false);
@@ -269,8 +227,6 @@ describe("opencode authority boundary — store/retired-register direct writes (
     expect(snapshot?.ok).toBe(false);
     expect(snapshot?.violations[0]?.code).toBe("workflow.snapshot.missing-status");
 
-    // invariant: The register is the one document whose route reads the collaboration
-    // lane: with no ACTIVE lane it refuses by authority, never by shape.
     const register = await validateStatusWrite(fixture.registerPath, { doc: validRegister, log });
     expect(register?.hardBlocked).toBe(true);
     expect(register?.violations[0]!.code).toBe("store.authority-unavailable");

@@ -11,10 +11,6 @@ import { getCommandDefinitions, getExecutionCommandDefinitions, getStoreCommandD
 import type { CommandDefinition, CommandEnvelope, InvocationContext } from "../src/types.js";
 
 const roots: string[] = [];
-/**
- * note: The collaboration lane is user-level, so every fixture's `homedir` is a
- * private temp tree: no case reads or writes the real user home.
- */
 const HOME = mkdtempSync(join(tmpdir(), "mstar-command-home-"));
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
@@ -40,11 +36,6 @@ afterEach(() => {
 
 let fixtureSequence = 0;
 
-/**
- * why: A synthetic checkout: a real Git main worktree and an explicit origin-less
- * collaboration identity, because every repository-scoped store verb now owns a
- * repository-level collaboration authority beside this checkout's execution.
- */
 function fixture(label: string): string {
   const root = mkdtempSync(join(tmpdir(), `mstar-${label}-`));
   roots.push(root);
@@ -123,7 +114,6 @@ describe("store and execution command surface", () => {
     expect(missing).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
     const relative = await invoke(definition("store.collaboration.plan"), { harness: ".mstar" }, root);
     expect(relative).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
-    // invariant: The restore verb names its pair explicitly and never discovers one.
     const noBackup = await invoke(definition("store.collaboration.restore"), { harness: join(root, ".mstar"), operator: "ops" }, root);
     expect(noBackup).toMatchObject({ status: "usage", code: "usage", exitCode: 2 });
     expect(noBackup.status === "usage" ? noBackup.message : "").toContain("--backup");
@@ -252,7 +242,6 @@ describe("store and execution command surface", () => {
       execution: { backupPath: string };
       collaboration: { path: string; counts: Record<string, number> };
     };
-    // note: One published pair: the manifest names BOTH verified images.
     expect(pair.version).toBe(1);
     expect(existsSync(manifest)).toBe(true);
     expect(existsSync(join(dirname(manifest), pair.execution.backupPath))).toBe(true);
@@ -288,7 +277,6 @@ describe("store and execution command surface", () => {
     if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
     expect(await storeSnapshot(harness)).toEqual(before);
 
-    // why: The receipt keeps the finding: the collaboration half of the pair holds it.
     const pair = dataOf(backup) as {
       manifestPath: string;
       execution: { backupPath: string; counts: { issues: number } };
@@ -353,8 +341,6 @@ describe("store and execution command surface", () => {
     const backupPath = join(harness, "point.db");
     const backup = await invoke(definition("store.backup"), { harness, out: backupPath }, root);
     if (backup.status !== "ok") throw new Error(JSON.stringify(backup));
-    // note: The execution restore route addresses the pair's EXECUTION image; the
-    // collaboration half is restored only by `store collaboration restore`.
     const executionReceipt = dataOf(backup).execution;
     if (
       executionReceipt === null
@@ -364,7 +350,6 @@ describe("store and execution command surface", () => {
     ) {
       throw new Error("the pair receipt names no execution image");
     }
-    // note: The pair publishes sibling basenames; the execution verb takes an absolute path.
     const executionImage = join(dirname(backupPath), executionReceipt.backupPath);
     await captureIssue({ harnessDir: harness }, {
       projectId: "_default",
@@ -436,7 +421,6 @@ describe("store and execution command surface", () => {
     ) {
       throw new Error("the pair receipt names no execution image");
     }
-    // note: The pair publishes sibling basenames; the execution verb takes an absolute path.
     const executionImage = join(dirname(backupPath), executionReceipt.backupPath);
     const firstPreview = join(root, "first-preview.json");
     const first = await invoke(definition("store.execution.restore-preview"), { harness, backup: executionImage, out: firstPreview }, root);
@@ -519,8 +503,6 @@ describe("store and execution command surface", () => {
     const root = fixture("store-upgrade-usage-first");
     const harness = join(root, ".mstar");
     mkdirSync(harness, { recursive: true });
-    // invariant: A real un-upgraded lane, so "nothing was mutated" is observable on the bytes
-    // the migration would have rewritten.
     const lane = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
     mkdirSync(dirname(lane), { recursive: true, mode: 0o700 });
     const v1 = COLLABORATION_MIGRATIONS[0]!;

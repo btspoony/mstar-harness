@@ -79,8 +79,6 @@ async function fixture(name: string): Promise<Fixture> {
     cwd: workspace,
     stdio: ["ignore", "ignore", "ignore"],
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${workspace}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],

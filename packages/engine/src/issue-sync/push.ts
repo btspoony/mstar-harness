@@ -406,10 +406,6 @@ function recordOne(db: StoreDb, context: PushContext, result: PushResult): PushO
     });
     return { localId, outcome: "applied", externalId };
   } catch (error) {
-    // why: A lease refusal is not this item's cause: the run no longer owns the
-    // direction, so the whole run must stop instead of being reported per item.
-    // Neither is a failure that is not a ledger refusal: it may have landed after
-    // the row was written, so only a rollback keeps the row and its receipt together.
     if (!(error instanceof SyncError) || error.code === "sync.run-taken") throw error;
     return { localId, outcome: "refused", externalId: null, cause: error.message };
   }
@@ -480,10 +476,6 @@ function failed(
       else recordRefusal(db, { ...input, error: message });
     }
   } catch (error) {
-    // invariant: A lease refusal is not this item's cause: the run no longer owns the
-    // direction, so the whole run must stop instead of being reported per item.
-    // A non-ledger failure may have committed this row before the receipt failed,
-    // so it aborts the batch rather than becoming this item's refusal.
     if (!(error instanceof SyncError) || error.code === "sync.run-taken") throw error;
     // The returned outcome still carries the cause.
   }

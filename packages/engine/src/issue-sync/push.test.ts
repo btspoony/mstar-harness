@@ -1,11 +1,3 @@
-/**
- * note: push.test.ts — the push ledger protocol without a transport: planning a
- * payload, recording the caller's results, and reconciling ambiguous creates.
- *
- * Everything here runs against a REAL store (the ledger is SQL). No fake
- * provider: mstar makes no call, so the test plays the agent's side and hands
- * the engine what a Linear tool would return.
- */
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -38,7 +30,6 @@ const ROOT = mkdtempSync(join(tmpdir(), "mstar-push-test-"));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
 
-/** why: The collaboration store is user-level, so the resolver's home is the fixture's. */
 let homeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => HOME);
@@ -52,13 +43,6 @@ afterAll(() => {
 const PROJECT = "p-push";
 const BINDING = "linear:" + PROJECT;
 
-/**
- * invariant: The push ledger fixture: one ACTIVE collaboration authority, and ONE
- * caller-owned transaction for the whole case — the same ownership the command's
- * `withSyncWrite` holds around an `apply`. A row and its receipt therefore commit
- * together at `close()`, exactly as in production; the per-batch advance and the
- * failing-receipt abort are covered in `issue-sync.test.ts`.
- */
 async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: string; close: () => void }> {
   const harnessDir = mkdtempSync(join(ROOT, name));
   const checkoutRoot = join(harnessDir, "checkout");
@@ -69,8 +53,6 @@ async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: str
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${basename(harnessDir)}.git`], {
     cwd: checkoutRoot,
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${checkoutRoot}.insteadOf`, `https://github.com/acme/${basename(harnessDir)}.git`],
@@ -105,7 +87,6 @@ async function openedStore(name: string): Promise<{ db: StoreDb; harnessDir: str
   };
 }
 
-/** note: v2 made the stable reference NOT NULL and unique; the fixture derives one from its display id. */
 function fixtureIssueRef(id: string): string {
   return `mstar:issue:00000000-0000-4000-8000-${id.replace(/\D/g, "").padStart(12, "0").slice(-12)}`;
 }
@@ -172,11 +153,6 @@ function record(externalId: string, description: string): ProviderItem {
   };
 }
 
-/**
- * note: Take the run lease, as the command does before any planning. The holder pid is
- * part of the run token, so two acquisitions in the same millisecond still name
- * different runs.
- */
 function lease(db: StoreDb, options: { holderPid?: number; takeRun?: boolean } = {}) {
   return acquireRun(db, {
     bindingId: BINDING,
@@ -206,8 +182,6 @@ describe("selectPushCandidates", () => {
     try {
       addIssue(db, "I-000901");
       addIssue(db, "I-000902");
-      // note: A source row in a blocking phase is the fence the record's writes meet; a push of
-      // it could never be reconciled, so the planner never sees it. A terminal row is history.
       for (const [operationId, issueId, phase] of [
         ["move-frozen", "I-000901", "switched"],
         ["move-done", "I-000902", "published"],

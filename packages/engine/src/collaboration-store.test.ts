@@ -1,11 +1,3 @@
-/**
- * why: collaboration store -- independent staged schema, create-only publication and
- * active-only admission for the user-level collaboration database.
- *
- * Every case builds a synthetic checkout and user home under the temp root; the
- * user home is isolated by a `node:os` test spy, so no case reads the real home
- * or the control harness store, and no product API gained a home selector.
- */
 import { execFileSync } from "node:child_process";
 import * as nodeFs from "node:fs";
 import {
@@ -67,7 +59,6 @@ import {
   type CollaborationStoreHandle,
 } from "./collaboration-store.js";
 
-/** note: The lane's current version and full ledger, read from the registry: no test pins the literal. */
 const LANE_CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
 const LANE_LEDGER_VERSIONS = COLLABORATION_MIGRATIONS.map(({ version }) => version);
 const LANE_LEDGER_ROWS = COLLABORATION_MIGRATIONS.map(({ version, name }) => ({ version, name }));
@@ -138,16 +129,11 @@ import { planFrontMatter } from "./plan-frontmatter.test-support.js";
 const ROOT = realpathSync(mkdtempSync(join(tmpdir(), "mstar-collab-store-")));
 const HOME = join(ROOT, "home");
 mkdirSync(HOME);
-/** note: The home the single spy resolves; a case may switch it to a fresh tree. */
 let resolvedHome = HOME;
 
 let homeSpy: { mockRestore(): void } | undefined;
 
 beforeAll(() => {
-  // why: The resolver's fixture seam is its explicit `userHome` option; the store
-  // entry points keep the locked signatures without one, so the isolated home
-  // is installed at the runtime boundary the resolver calls. One spy serves the
-  // whole file: nesting another and restoring it would discard this one.
   homeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => resolvedHome);
 });
 
@@ -156,12 +142,6 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/**
- * note: The closed collaboration table inventory (spec Data Model): collaboration
- * metadata, its own schema ledger, issue/governance/catalog/sync domains, and
- * the collaboration receipt namespaces. No `execution_*`, projection, dsh or
- * combined-store table belongs here.
- */
 const COLLABORATION_TABLES = [
   "catalog_entities",
   "catalog_links",
@@ -190,7 +170,6 @@ const COLLABORATION_TABLES = [
   "sync_runs",
 ];
 
-/** note: One standalone receipt insert, for the transaction-boundary cases. */
 function receiptInsert(operationId: string): string {
   return (
     "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
@@ -204,7 +183,6 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
-/** note: A synthetic checkout whose `.mstarc` selects the local collaboration mode. */
 function makeRepo(origin: string): string {
   const dir = join(ROOT, `repo-${sequence++}`);
   mkdirSync(dir, { recursive: true });
@@ -212,14 +190,11 @@ function makeRepo(origin: string): string {
   git(dir, "config", "user.name", "Collaboration Store Test");
   git(dir, "config", "user.email", "store@example.test");
   git(dir, "config", "remote.origin.url", origin);
-  // note: Every origin-backed checkout proves selector absence with a live lookup; route the
-  // synthetic origin to this fixture's own repository, which never publishes the selector ref.
   git(dir, "config", `url.${dir}.insteadOf`, origin);
   writeFileSync(join(dir, ".mstarc"), "[collaboration]\nmode=local\n");
   return dir;
 }
 
-/** note: Fixture contexts by resolved lane path, so `activate` can record the binding. */
 const contextsByDbPath = new Map<string, StoreContext>();
 
 function contextAt(root: string): StoreContext {
@@ -230,7 +205,6 @@ function contextAt(root: string): StoreContext {
     const location = resolveCollaborationLocation(context);
     contextsByDbPath.set(location.dbPath, context);
   } catch {
-    // invariant: A fixture testing an unresolved scope never reaches activation.
   }
   return context;
 }
@@ -239,7 +213,6 @@ function locationAt(root: string): CollaborationLocation {
   return resolveCollaborationLocation(contextAt(root));
 }
 
-/** note: Publish the staged lane and the owning checkout's binding. */
 function activate(dbPath: string): void {
   const db = new DatabaseSync(dbPath);
   let storeId = "";
@@ -319,7 +292,6 @@ function laneIsFree(dbPath: string): boolean {
   }
 }
 
-/** invariant: The journal mode actually persisted in the file (a plain open never changes it). */
 function journalMode(dbPath: string): string {
   const db = new DatabaseSync(dbPath);
   try {
@@ -342,7 +314,6 @@ function receipts(dbPath: string): string[] {
 
 const REAL_FSYNC = nodeFs.fsyncSync;
 
-/** note: Whether this descriptor currently names a directory - the barrier's target. */
 function namesDirectory(fd: number): boolean {
   try {
     return fstatSync(fd).isDirectory();
@@ -351,7 +322,6 @@ function namesDirectory(fd: number): boolean {
   }
 }
 
-/** note: Fail every directory barrier this process attempts, with an errno. */
 function failDirectoryBarriers(): { restore: () => void } {
   const spy = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
     if (namesDirectory(fd)) throw Object.assign(new Error("simulated directory fsync failure"), { code: "EIO" });
@@ -360,7 +330,6 @@ function failDirectoryBarriers(): { restore: () => void } {
   return { restore: () => spy.mockRestore() };
 }
 
-/** note: Count the directory barriers that actually run. */
 function observeDirectoryBarriers(): { restore: () => void; synced: () => number } {
   let synced = 0;
   const spy = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
@@ -370,7 +339,6 @@ function observeDirectoryBarriers(): { restore: () => void; synced: () => number
   return { restore: () => spy.mockRestore(), synced: () => synced };
 }
 
-/** note: The directory's file entries that name the same inode. */
 function aliasesOf(dir: string, inode: number): string[] {
   return nodeFs.readdirSync(dir).filter((name) => {
     const stats = nodeFs.lstatSync(join(dir, name));
@@ -378,12 +346,10 @@ function aliasesOf(dir: string, inode: number): string[] {
   });
 }
 
-/** note: Engine-owned staging entries still present beside a published store. */
 function stagingLeftovers(dir: string): string[] {
   return nodeFs.readdirSync(dir).filter((name) => name.startsWith(".staging-"));
 }
 
-/** note: The stamp a caller holds for one admitted authority. */
 function stampOf(authority: {
   repoKey: string;
   mode: CollaborationMode;
@@ -410,7 +376,6 @@ describe("collaboration store", () => {
     });
     expect(first.storeId).toMatch(/^[0-9a-f-]{36}$/);
 
-    // note: Same stage, same authority: no second ledger row, no cleared metadata.
     const again = await initializeCollaborationStore(location);
     expect(again).toEqual(first);
 
@@ -426,7 +391,6 @@ describe("collaboration store", () => {
     expect(tableNames(location.dbPath).length).toBe(COLLABORATION_TABLES.length);
     expect(receipts(location.dbPath)).toEqual([]);
 
-    // note: A private store file inside a private directory.
     expect(statSync(location.dbPath).mode & 0o777).toBe(0o600);
     expect(statSync(dirname(location.dbPath)).mode & 0o777).toBe(0o700);
   });
@@ -443,8 +407,6 @@ describe("collaboration store", () => {
 
     const db = new DatabaseSync(location.dbPath);
     try {
-      // note: Collaboration initialization creates no issue, no execution row and no
-      // combined-store leftover.
       expect((db.prepare("select count(*) as n from issues").get() as { n: number }).n).toBe(0);
       expect((db.prepare("select count(*) as n from project_bindings").get() as { n: number }).n).toBe(0);
     } finally {
@@ -474,7 +436,6 @@ describe("collaboration store", () => {
     await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
       code: "collaboration.not-active",
     });
-    // invariant: A refused admission neither activates nor rewrites the staged record.
     expect(await initializeCollaborationStore(location)).toEqual(staged);
   });
 
@@ -496,8 +457,6 @@ describe("collaboration store", () => {
       expect(metaRecord(locations[index].dbPath).repository_key).toBe(locations[index].repoKey);
     }
 
-    // invariant: A path whose directory segments carry percent-encoded uppercase must still
-    // open for a guarded write: the no-create write URI addresses it literally.
     const upperRoot = makeRepo("https://git.example.com/Team/Repo.git");
     const upperLocation = locationAt(upperRoot);
     const upperStaged = await initializeCollaborationStore(upperLocation);
@@ -529,14 +488,11 @@ describe("collaboration store", () => {
     await initializeCollaborationStore(location);
     const writer = new DatabaseSync(location.dbPath);
     try {
-      // note: one row past THIS build's ladder, whichever version that is.
       writer
         .prepare(
           "insert into schema_version(version, name, checksum, applied_at) values (?, 'future', 'x', ?)",
         )
         .run(LANE_CURRENT_VERSION + 1, "2026-11-21T00:00:00.000Z");
-      // invariant: A newer layout no longer matches this build's inventory; the verdict is
-      // still the upgrade requirement, never "damaged store".
       writer.exec("create table future_extra(id text primary key)");
     } finally {
       writer.close();
@@ -565,7 +521,6 @@ describe("collaboration store", () => {
       code: "collaboration.unreadable",
       message: expect.stringContaining("symbolic link"),
     });
-    // note: The link target was neither followed nor modified.
     expect(await initializeCollaborationStore(target)).toEqual(authority);
     expect(metaRecord(target.dbPath).repository_key).toBe("github.com/acme/link-target");
   });
@@ -583,7 +538,6 @@ describe("collaboration store", () => {
       code: "collaboration.unreadable",
       message: expect.stringContaining("symbolic link"),
     });
-    // note: The redirected destination stays untouched.
     expect(nodeFs.readdirSync(outside)).toEqual([]);
     expect(existsSync(location.dbPath)).toBe(false);
   });
@@ -649,8 +603,6 @@ describe("collaboration store", () => {
     activate(location.dbPath);
     const db = new DatabaseSync(location.dbPath);
     try {
-      // note: Same table name, current ledger and metadata, but the issue shape lost
-      // every required column including `impact`.
       db.exec("alter table issues rename to issues_original");
       db.exec("create table issues(id text primary key)");
       db.exec("drop table issues_original");
@@ -694,7 +646,6 @@ describe("collaboration store", () => {
     expect(handle.authority).toEqual(authority);
     handle.close();
 
-    // invariant: A stale generation is refused before the effect runs.
     let applied = false;
     const stale = { ...stamp, epoch: stamp.epoch + 1 };
     await expect(
@@ -722,7 +673,6 @@ describe("collaboration store", () => {
     );
     expect(committed).toBe(authority.revision);
 
-    // note: A thrown effect commits nothing: the wrapper owns the transaction.
     await expect(
       withCollaborationWrite(
         context,
@@ -759,7 +709,6 @@ describe("collaboration store", () => {
     }
     expect(receipts(location.dbPath)).toEqual([]);
 
-    // note: A retained handle stays non-mutating when the recorded generation changes.
     const retained = await openCollaborationStore(context, "write", stamp);
     const selection = new DatabaseSync(location.dbPath);
     try {
@@ -771,8 +720,6 @@ describe("collaboration store", () => {
     retained.close();
     expect(receipts(location.dbPath)).toEqual([]);
 
-    // note: The bump is a NEW generation: this checkout is only admitted once it is
-    // re-bound to the epoch the lane now records (as an activation/restore does).
     writeCollaborationBinding(context, {
       repoKey: authority.repoKey,
       mode: authority.mode,
@@ -781,7 +728,6 @@ describe("collaboration store", () => {
       binding: "active",
     });
 
-    // note: The guarded transaction's writer is closed when the call returns.
     let escaped: CollaborationStoreHandle | undefined;
     await withCollaborationWrite(
       context,
@@ -791,8 +737,6 @@ describe("collaboration store", () => {
       },
       { ...stamp, epoch: stamp.epoch + 1 },
     );
-    // why: The guarded facade denies `exec`, so the closed connection is proved
-    // through the one prepared statement the facade still forwards.
     expect(() => escaped?.db.prepare("select 1").get()).toThrow();
   });
 
@@ -809,8 +753,6 @@ describe("collaboration store", () => {
       epoch: staged.epoch,
     };
 
-    // invariant: No test-side `.catch`: the wrapper itself must observe the abandoned
-    // promise, so an unhandled rejection here fails the case.
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => unhandled.push(reason);
     process.on("unhandledRejection", onUnhandled);
@@ -826,8 +768,6 @@ describe("collaboration store", () => {
           stamp,
         ),
       ).rejects.toMatchObject({ code: "store.corrupt", message: expect.stringContaining("synchronous") });
-      // invariant: Unhandled rejections are reported at the runtime's next task boundary,
-      // so drain exactly one; no duration is being guessed here.
       const drained = Promise.withResolvers<void>();
       setImmediate(drained.resolve);
       await drained.promise;
@@ -882,13 +822,10 @@ describe("collaboration store", () => {
     const published = metaRecord(location.dbPath);
     expect(published.authority_state).toBe("staged");
 
-    // invariant: The failed publication retired its own staging alias: exactly one name
-    // for the runtime bytes remains, and no staging scratch is left behind.
     const storeDir = dirname(location.dbPath);
     expect(aliasesOf(storeDir, statSync(location.dbPath).ino)).toEqual(["collaboration.db"]);
     expect(stagingLeftovers(storeDir)).toEqual([]);
 
-    // note: The retry continues the SAME record and really re-runs the barrier.
     const observer = observeDirectoryBarriers();
     let authority;
     try {
@@ -907,7 +844,6 @@ describe("collaboration store", () => {
   test("a competing publication continues the published record only after confirming its directory entry", async () => {
     const location = locationAt(makeRepo("https://github.com/acme/competitor.git"));
     const competitor = spyOn(nodeFs, "linkSync").mockImplementation(((from: string, to: string) => {
-      // note: A competing initializer published the same complete bytes first.
       copyFileSync(from, to);
       throw Object.assign(new Error("EEXIST: file already exists"), { code: "EEXIST" });
     }) as never);
@@ -920,8 +856,6 @@ describe("collaboration store", () => {
       failing.restore();
       expect(refusal).toMatchObject({ code: "collaboration.unreadable", details: { published: true } });
 
-      // note: The next attempt stages again, meets the competitor again, and only
-      // reports success after the continuation confirms the directory entry.
       rmSync(location.dbPath);
       const observer = observeDirectoryBarriers();
       let authority;
@@ -989,10 +923,6 @@ describe("collaboration store", () => {
     const racer = spyOn(nodeFs, "lstatSync").mockImplementation(((target: string) => {
       if (target === location.dbPath) {
         checks += 1;
-        // why: 1: the entry's regular-file check, 2: its private-file check,
-        // 3: the read-only probe's guard, 4: the WRITER's guard - so the
-        // canonical database is renamed away in the exact window between
-        // admission and the writer open.
         if (checks === 4) renameSync(location.dbPath, movedPath);
       }
       return realLstat(target);
@@ -1004,8 +934,6 @@ describe("collaboration store", () => {
     } finally {
       racer.mockRestore();
     }
-    // note: Nothing was recreated at the authority path; the real store is intact
-    // under the name the racing actor moved it to.
     expect(existsSync(location.dbPath)).toBe(false);
     expect(metaRecord(movedPath).authority_state).toBe("active");
   });
@@ -1025,8 +953,6 @@ describe("collaboration store", () => {
     const racer = spyOn(nodeFs, "lstatSync").mockImplementation(((target: string) => {
       if (target === location.dbPath) {
         checks += 1;
-        // note: 4: the writer's own guard - the admitted file is replaced in place by
-        // a staged database after admission passed.
         if (checks === 4) copyFileSync(stagedLocation.dbPath, location.dbPath);
       }
       return realLstat(target);
@@ -1038,7 +964,6 @@ describe("collaboration store", () => {
     } finally {
       racer.mockRestore();
     }
-    // invariant: The replacement was refused without a journal change or a sidecar.
     expect(readFileSync(location.dbPath).equals(stagedBytes)).toBe(true);
     expect(journalMode(location.dbPath)).toBe("delete");
     expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
@@ -1051,13 +976,11 @@ describe("collaboration store", () => {
     await initializeCollaborationStore(location);
     activate(location.dbPath);
 
-    // note: A normal DELETE-journal store admits and needs no sidecar.
     const authority = await readCollaborationAuthority(context);
     expect(authority.state).toBe("active");
     expect(existsSync(`${location.dbPath}-wal`)).toBe(false);
     expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
 
-    // invariant: A present WAL sidecar is refused before the database is opened.
     const mainBytes = readFileSync(location.dbPath);
     writeFileSync(`${location.dbPath}-wal`, "wal sidecar presence marker", { mode: 0o600 });
     const sidecarBytes = readFileSync(`${location.dbPath}-wal`);
@@ -1068,14 +991,11 @@ describe("collaboration store", () => {
     await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
-    // note: Nothing was opened, repaired, created or converted.
     expect(readFileSync(location.dbPath).equals(mainBytes)).toBe(true);
     expect(readFileSync(`${location.dbPath}-wal`).equals(sidecarBytes)).toBe(true);
     expect(existsSync(`${location.dbPath}-shm`)).toBe(false);
     rmSync(`${location.dbPath}-wal`, { force: true });
 
-    // invariant: A quiesced WAL file (header WAL, no journal) is refused too, never read
-    // immutably and never given a fresh journal.
     const wal = new DatabaseSync(location.dbPath);
     try {
       wal.exec("pragma journal_mode=wal");
@@ -1103,14 +1023,10 @@ describe("collaboration store", () => {
     const attempts: Array<(write: CollaborationStoreHandle) => unknown> = [
       (write) => write.db.exec("commit"),
       (write) => write.db.exec("/* the wrapper owns it */ rollback"),
-      // invariant: A batch whose FIRST statement is ordinary DML still cannot reach its
-      // trailing transaction control: `exec` is refused outright.
       (write) => write.db.exec(`${receiptInsert("op-batch")}; commit`),
       (write) => write.db.prepare("end").run(),
       (write) => write.db.exec("savepoint inner"),
       (write) => write.close(),
-      // why: SQLite's prepare skips leading empty statements, so a prefixed
-      // transaction-control statement is still the statement that would run.
       (write) => write.db.prepare("; commit").run(),
       (write) => write.db.prepare(";; rollback").run(),
       (write) => write.db.prepare("  ; /* lead */ -- then\n ; end").run(),
@@ -1121,9 +1037,7 @@ describe("collaboration store", () => {
         message: expect.stringContaining("owned"),
       });
     }
-    // invariant: No statement of a refused batch ran, and no effect survived.
     expect(receipts(location.dbPath)).toEqual([]);
-    // note: The wrapper still owns the transaction and commits a legitimate effect.
     await withCollaborationWrite(
       context,
       (write) => {
@@ -1174,8 +1088,6 @@ describe("collaboration store", () => {
     try {
       const location = locationAt(makeRepo("https://github.com/acme/ancestor-retry.git"));
       const mstarcDir = join(freshHome, ".mstar");
-      // note: Fail only the `.mstar` directory's own barrier: an ancestor, not the
-      // store's final directory entry.
       const failing = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
         if (namesDirectory(fd)) {
           let ancestorInode: number | undefined;
@@ -1198,8 +1110,6 @@ describe("collaboration store", () => {
       expect(refusal).toMatchObject({ code: "collaboration.unreadable", details: { published: true } });
       expect(existsSync(location.dbPath)).toBe(true);
 
-      // why: The retry re-walks the chain, so the ancestor that failed is confirmed
-      // again before success is reported.
       const syncedInodes = new Set<number>();
       const observer = spyOn(nodeFs, "fsyncSync").mockImplementation(((fd: number) => {
         if (namesDirectory(fd)) syncedInodes.add(fstatSync(fd).ino);
@@ -1253,15 +1163,11 @@ describe("collaboration store", () => {
     await initializeCollaborationStore(location);
     activate(location.dbPath);
 
-    // note: The store stays in its DELETE journal mode: the holder takes the write
-    // reservation, readers proceed, and the guarded writer waits at
-    // BEGIN IMMEDIATE for the bounded budget.
     const holder = new DatabaseSync(location.dbPath);
     holder.exec("begin immediate");
     const started = Date.now();
     try {
       await expect(withCollaborationWrite(context, () => "unused")).rejects.toMatchObject({ code: "store.busy" });
-      // note: The bounded wait ran out at the transaction boundary, not at connect.
       expect(Date.now() - started).toBeGreaterThanOrEqual(4_000);
     } finally {
       try {
@@ -1286,14 +1192,11 @@ describe("collaboration store", () => {
       const tables = (
         handle.db.prepare("select name from sqlite_master where type = 'table' order by name").all() as Array<{ name: string }>
       ).map((row) => row.name);
-      // invariant: The execution store carries its own authority and no collaboration
-      // metadata: the two lanes never share a file or a table.
       expect(tables).toEqual(expect.arrayContaining(["execution_meta", "store_meta"]));
       expect(tables).not.toContain("collaboration_meta");
     } finally {
       handle.close();
     }
-    // note: The collaboration database stays a separate file with its own schema.
     expect(tableNames(locationAt(repo).dbPath)).toEqual(COLLABORATION_TABLES);
   });
 });
@@ -1304,8 +1207,6 @@ describe("collaboration host authority", () => {
     const context = contextAt(repo);
     const handle = await initializeStore(context);
     handle.close();
-    // invariant: The execution store is ACTIVE, but no collaboration record exists: the
-    // probe is `absent`, never a permission and never an execution inference.
     expect(await probeCollaborationAuthority(context)).toMatchObject({
       kind: "absent",
       code: "collaboration.not-initialized",
@@ -1314,15 +1215,12 @@ describe("collaboration host authority", () => {
 
   test("active, staged and unreadable lanes are named as themselves", async () => {
     const activeRepo = makeRepo("https://github.com/acme/host-active.git");
-    // invariant: The fresh-init route: create-only publication plus this checkout's own
-    // binding (a raw state flip would legitimately refuse as stale-binding).
     await ensureCollaborationAuthority(contextAt(activeRepo));
     const active = await probeCollaborationAuthority(contextAt(activeRepo));
     expect(active).toMatchObject({
       kind: "active",
       authority: { repoKey: "github.com/acme/host-active", mode: "local", state: "active" },
     });
-    // note: The probe is independent of execution: no execution store exists here.
     expect(existsSync(join(contextAt(activeRepo).harnessDir, "store.db"))).toBe(false);
 
     const stagedRepo = makeRepo("https://github.com/acme/host-staged.git");
@@ -1345,8 +1243,6 @@ describe("collaboration host authority", () => {
     const context = contextAt(repo);
     await ensureCollaborationAuthority(context);
     const dbPath = locationAt(repo).dbPath;
-    // note: A dangling symlink in the storage chain hides the database from a plain
-    // existence test while admission rejects the component itself.
     const component = dirname(dirname(dbPath));
     rmSync(component, { recursive: true, force: true });
     symlinkSync(join(ROOT, "does-not-exist"), component);
@@ -1367,8 +1263,6 @@ describe("collaboration host authority", () => {
       code: "collaboration.repo-identity-unresolved",
     });
 
-    // invariant: An unreachable origin never selects the remote authority, and the probe
-    // discloses that as unavailable rather than as a missing lane.
     const remote = makeRepo("ssh://git@127.0.0.1:1/acme/host-remote.git");
     writeFileSync(join(remote, ".mstarc"), "[collaboration]\nmode=remote\n");
     expect(await probeCollaborationAuthority(contextAt(remote))).toMatchObject({
@@ -1395,7 +1289,6 @@ describe("collaboration host authority", () => {
         ...overrides,
       });
 
-    // note: The positive shape parses; every deviation below refuses as stale, not as fresh.
     writeFileSync(bindingFile, remoteBinding());
     expect(readCollaborationBinding(context)).toMatchObject({ version: 3, generation: 2 });
     for (const overrides of [
@@ -1410,9 +1303,6 @@ describe("collaboration host authority", () => {
       expect(() => readCollaborationBinding(context)).toThrow("collaboration.stale-binding");
     }
 
-    // invariant: A checkout recorded against a remote selector never drifts onto the local
-    // rows: a live-confirmed absence of that recorded selector refuses the resolution before
-    // any admission can open them.
     writeFileSync(bindingFile, remoteBinding());
     expect(() => locationAt(repo)).toThrow("collaboration.stale-binding");
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
@@ -1421,11 +1311,6 @@ describe("collaboration host authority", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: v2 `collaboration-remote-cache`: the explicit upgrade and its backfill
-// ---------------------------------------------------------------------------
-
-/** note: A real v1 lane: the immutable v1 migration, its ledger row, and an active record. */
 function writeV1Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
   mkdirSync(dirname(location.dbPath), { recursive: true, mode: 0o700 });
   const db = new DatabaseSync(location.dbPath);
@@ -1450,7 +1335,6 @@ function writeV1Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: A real v2 lane with no issue rows: the v1 body, the v2 delta and its ledger row. */
 function writeV2Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
   writeV1Lane(location);
   const db = new DatabaseSync(location.dbPath);
@@ -1470,7 +1354,6 @@ function writeV2Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: A real v3 lane: the v2 body, the outbox delta and its ledger row. */
 function writeV3Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
   writeV2Lane(location);
   const db = new DatabaseSync(location.dbPath);
@@ -1490,7 +1373,6 @@ function writeV3Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: A real v4 lane: the immutable v1-v4 migrations in order, their ledger rows and one issue. */
 function writeV4Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) => void): void {
   writeV1Lane(location);
   const db = new DatabaseSync(location.dbPath);
@@ -1536,7 +1418,6 @@ function writeV6Lane(location: CollaborationLocation, seed?: (db: DatabaseSync) 
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: The v3 lane as a REMOTE cache: `remote` lanes are only ever written by the reviewed bind. */
 function writeV3RemoteLane(location: CollaborationLocation): void {
   writeV3Lane(location);
   const db = new DatabaseSync(location.dbPath);
@@ -1548,7 +1429,6 @@ function writeV3RemoteLane(location: CollaborationLocation): void {
   chmodSync(location.dbPath, 0o600);
 }
 
-/** note: One v4 `issue_moves` half row, exactly as the v4 writers recorded it — no `route` column. */
 function seedV4MoveRow(
   db: DatabaseSync,
   row: Readonly<{
@@ -1578,7 +1458,6 @@ function seedV4MoveRow(
   );
 }
 
-/** note: Two issues with one occurrence: the history the upgrade must preserve. */
 function seedV1History(db: DatabaseSync): void {
   const insert = db.prepare(
     "insert into issues(id, project_id, title, kind, severity, disposition, impact, acceptance, created_at, updated_at, identity_key) " +
@@ -1605,7 +1484,6 @@ function issueRefs(dbPath: string): Array<{ id: string; issue_ref: string }> {
   }
 }
 
-/** note: The lane's retained issue rows, for a refusal that must leave history untouched. */
 function issueCount(dbPath: string): number {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1616,7 +1494,6 @@ function issueCount(dbPath: string): number {
   }
 }
 
-/** note: The applied ladder every current lane carries, derived from this build's migrations. */
 const LADDER_VERSIONS: readonly number[] = COLLABORATION_MIGRATIONS.map((migration) => migration.version);
 const CURRENT_VERSION = COLLABORATION_MIGRATIONS[COLLABORATION_MIGRATIONS.length - 1]!.version;
 
@@ -1631,7 +1508,6 @@ function ledgerVersions(dbPath: string): number[] {
   }
 }
 
-/** note: The recorded ledger exactly as the lane holds it, for no-mutation assertions. */
 function ledgerRows(dbPath: string): Array<{ version: number; name: string; checksum: string }> {
   const db = new DatabaseSync(dbPath);
   try {
@@ -1666,7 +1542,6 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(location.dbPath)).toEqual([1]);
     expect(hasColumn(location.dbPath, "issues", "issue_ref")).toBe(false);
 
-    // invariant: Ordinary reads never migrate an admitted old lane: both name the upgrade.
     await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.upgrade-required" });
     await expect(initializeCollaborationStore(location)).rejects.toMatchObject({
       code: "collaboration.upgrade-required",
@@ -1692,7 +1567,6 @@ describe("collaboration remote schema ladder", () => {
     for (const row of refs) assertIssueRef(row.issue_ref);
     expect(new Set(refs.map((row) => row.issue_ref)).size).toBe(2);
 
-    // invariant: History and the lane's recorded revision survive the rebuild verbatim.
     const history = new DatabaseSync(location.dbPath);
     try {
       expect((history.prepare("select count(*) as n from occurrences").get() as { n: number }).n).toBe(1);
@@ -1702,7 +1576,6 @@ describe("collaboration remote schema ladder", () => {
       history.close();
     }
 
-    // invariant: A committed upgrade replays by revalidating: no second backfill, same refs.
     const replay = await upgradeCollaborationStore(context, "ops-engineer");
     expect(replay).toMatchObject({ fromVersion: LANE_CURRENT_VERSION, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 0 });
     expect(issueRefs(location.dbPath)).toEqual(refs);
@@ -1711,7 +1584,6 @@ describe("collaboration remote schema ladder", () => {
   });
 
   test("a malformed, partial or foreign-scope lane refuses without mutation", async () => {
-    // note: A recorded v1 checksum that is not this build's immutable migration.
     const wrongChecksumRepo = makeRepo("https://github.com/v2-upgrade/wrong-checksum.git");
     const wrongChecksum = locationAt(wrongChecksumRepo);
     writeV1Lane(wrongChecksum, (db) => db.prepare("update schema_version set checksum = ? where version = 1").run("f".repeat(64)));
@@ -1721,7 +1593,6 @@ describe("collaboration remote schema ladder", () => {
     });
     expect(ledgerVersions(wrongChecksum.dbPath)).toEqual([1]);
 
-    // note: A v2 table without its ledger row is a partial apply: refused, never re-applied.
     const partialRepo = makeRepo("https://github.com/v2-upgrade/partial.git");
     const partial = locationAt(partialRepo);
     writeV1Lane(partial, (db) => db.exec("create table remote_bindings(generation integer)"));
@@ -1731,8 +1602,6 @@ describe("collaboration remote schema ladder", () => {
     });
     expect(ledgerVersions(partial.dbPath)).toEqual([1]);
 
-    // note: Half of the issues rebuild (the column already added) is the one shape that would
-    // otherwise re-mint stable references: it refuses instead.
     const halfRepo = makeRepo("https://github.com/v2-upgrade/half.git");
     const half = locationAt(halfRepo);
     writeV1Lane(half, (db) => db.exec("alter table issues add column issue_ref text"));
@@ -1743,7 +1612,6 @@ describe("collaboration remote schema ladder", () => {
     });
     expect(ledgerVersions(half.dbPath)).toEqual([1]);
 
-    // invariant: The upgrade records the operator it attests.
     const anonymous = makeRepo("https://github.com/v2-upgrade/anonymous.git");
     writeV1Lane(locationAt(anonymous));
     activate(locationAt(anonymous).dbPath);
@@ -1796,8 +1664,6 @@ describe("collaboration remote schema ladder", () => {
       }
       const before = ledgerRows(location.dbPath);
 
-      // invariant: Neither admission nor the already-current upgrade replay trusts a
-      // ledger row whose bytes are not this build's compiled migration.
       await expect(readCollaborationAuthority(context)).rejects.toMatchObject({ code: "collaboration.unreadable" });
       await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({ code: "store.corrupt" });
       expect(ledgerRows(location.dbPath)).toEqual(before);
@@ -1805,8 +1671,6 @@ describe("collaboration remote schema ladder", () => {
   });
 
   test("a stale or unbound checkout never migrates a v1 lane it does not own", async () => {
-    // note: A same-repository v1 lane replaced by another generation while this checkout still
-    // records the superseded store: repository and mode alone must not admit the mutation.
     const staleRepo = makeRepo("https://github.com/v2-upgrade/stale-generation.git");
     const staleContext = contextAt(staleRepo);
     const stale = locationAt(staleRepo);
@@ -1822,12 +1686,10 @@ describe("collaboration remote schema ladder", () => {
     await expect(upgradeCollaborationStore(staleContext, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.stale-binding",
     });
-    // invariant: No DDL, no backfill and no receipt landed on the lane this checkout does not own.
     expect(ledgerVersions(stale.dbPath)).toEqual([1]);
     expect(hasColumn(stale.dbPath, "issues", "issue_ref")).toBe(false);
     expect(issueCount(stale.dbPath)).toBe(2);
 
-    // note: An unbound checkout (a replacement clone) reads the lane but never upgrades it.
     const unboundRepo = makeRepo("https://github.com/v2-upgrade/unbound-generation.git");
     const unbound = locationAt(unboundRepo);
     writeV1Lane(unbound, seedV1History);
@@ -1838,7 +1700,6 @@ describe("collaboration remote schema ladder", () => {
     expect(hasColumn(unbound.dbPath, "issues", "issue_ref")).toBe(false);
     expect(issueCount(unbound.dbPath)).toBe(2);
 
-    // invariant: The refusal was ownership, not bytes: the owning checkout still migrates the lane.
     activate(stale.dbPath);
     expect(await upgradeCollaborationStore(staleContext, "ops-engineer")).toMatchObject({
       fromVersion: 1,
@@ -1855,8 +1716,6 @@ describe("collaboration remote schema ladder", () => {
     const location = locationAt(repo);
     writeV1Lane(location, (db) => {
       seedV1History(db);
-      // note: The durable creation receipt of the activation that published this generation,
-      // the same evidence a real `store init` records.
       db.prepare(
         "insert into collaboration_operations(key_space, operation_id, request_hash, result_json, committed_at) " +
           "values ('standalone', ?, ?, ?, ?)",
@@ -1876,8 +1735,6 @@ describe("collaboration remote schema ladder", () => {
       );
     });
 
-    // invariant: Without a binding, the v1 lane is inspection-only: the ordinary open refuses
-    // and the upgrade's ownership gate refuses, so adoption is the supported recovery.
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
       code: "collaboration.upgrade-required",
     });
@@ -1893,7 +1750,6 @@ describe("collaboration remote schema ladder", () => {
       storeId: "v1-store",
       epoch: 1,
     });
-    // invariant: Adoption proved the v1 bytes without migrating them.
     expect(ledgerVersions(location.dbPath)).toEqual([1]);
 
     const upgraded = await upgradeCollaborationStore(context, "ops-engineer");
@@ -1926,11 +1782,8 @@ describe("collaboration remote schema ladder", () => {
     });
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
     expect(tableNames(location.dbPath)).toEqual(COLLABORATION_TABLES);
-    // invariant: The upgraded lane admits as current only when the outbox keys, state
-    // vocabulary and composite binding key match the declared v3 layout.
     expect((await readCollaborationAuthority(context)).schemaVersion).toBe(LANE_CURRENT_VERSION);
 
-    // note: Half of the v3 delta (one outbox table without its ledger row) is a partial apply.
     const partialRepo = makeRepo("https://github.com/v3-upgrade/partial-v3.git");
     const partial = locationAt(partialRepo);
     writeV2Lane(partial, (partialDb) => partialDb.exec("create table remote_outbox(operation_id text primary key)"));
@@ -1968,8 +1821,6 @@ describe("collaboration remote schema ladder", () => {
     const receipt = await upgradeCollaborationStore(context, "ops-engineer");
     expect(receipt).toMatchObject({ fromVersion: 3, toVersion: LANE_CURRENT_VERSION, issuesBackfilled: 0 });
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
-    // invariant: The former date reads as unestimated and the issue keeps its link; the column
-    // really moved, so the old name is gone from the table.
     const db = new DatabaseSync(location.dbPath);
     try {
       expect(db.prepare("select effort_sessions, status from project_milestones where milestone_id = 'm-one'").get())
@@ -2003,7 +1854,6 @@ describe("collaboration remote schema ladder", () => {
     const repo = makeRepo("https://github.com/v4-upgrade/partial-v4.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
-    // note: The crash window: the v5 DDL committed, its ledger row did not.
     writeV3Lane(location, (db) => {
       const move = COLLABORATION_MIGRATIONS[3]!;
       db.exec(move.sql);
@@ -2022,8 +1872,6 @@ describe("collaboration remote schema ladder", () => {
     await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
-    // invariant: The refusal is the partial-apply proof, and nothing was repaired: the ledger and
-    // the altered table keep exactly the crashed shape.
     expect(ledgerRows(location.dbPath)).toEqual(before);
     expect(hasColumn(location.dbPath, "project_milestones", "effort_sessions")).toBe(true);
     expect(hasColumn(location.dbPath, "project_milestones", "target")).toBe(false);
@@ -2261,15 +2109,10 @@ describe("collaboration remote schema ladder", () => {
   });
 
   test("a v3 outbox whose nullable columns drifted refuses the upgrade and its settlement admission", async () => {
-    // note: `execution_key_json` is the ONE outbox column no key-layout check names (it is nullable
-    // and no index covers it), so this drift is admitted by the columns check alone. That is exactly
-    // the case `COLLABORATION_V3_COLUMNS` exists for: every settlement verb selects this column.
     const drift = (db: DatabaseSync): void => {
       db.exec("alter table remote_outbox drop column execution_key_json");
     };
 
-    // note: A LOCAL v3 lane - the shape `store upgrade` advances - built from the released
-    // migration bodies, then drifted on its own outbox columns.
     const repo = makeRepo("https://github.com/v4-upgrade/outbox-drift.git");
     const context = contextAt(repo);
     const location = locationAt(repo);
@@ -2291,8 +2134,6 @@ describe("collaboration remote schema ladder", () => {
     activate(location.dbPath);
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
     const ledgerBefore = ledgerRows(location.dbPath);
-    // invariant: The v4 DDL is applied over a proven v3 shape, so a drifted outbox refuses BEFORE
-    // the ladder and records no migration at all.
     await expect(upgradeCollaborationStore(context, "ops-engineer")).rejects.toMatchObject({
       code: "collaboration.unreadable",
     });
@@ -2300,9 +2141,6 @@ describe("collaboration remote schema ladder", () => {
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
     expect(tableNames(location.dbPath)).not.toContain("issue_moves");
 
-    // invariant: The settlement admission proves the same columns before it serves the generation,
-    // so a drifted cache is a NAMED lane refusal instead of a raw "no such column" out of the
-    // first outbox query.
     const cacheFixture = remoteFixture("remote-v3-drifted-outbox");
     const commit = cacheFixture.publish(cacheFixture.payload());
     const generation = Number(cacheFixture.payload().generation);
@@ -2332,10 +2170,6 @@ describe("collaboration remote schema ladder", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: Remote observation cache: explicit bind, scoped ingest and status
-// ---------------------------------------------------------------------------
-
 const SELECTOR_REF = "refs/heads/mstar-collaboration-authority";
 
 const SELECTED_PROJECT = {
@@ -2355,10 +2189,6 @@ const SECOND_PROJECT = {
   journalIssueId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 } as const;
 
-/**
- * note: One isolated remote fixture: a unique canonical origin (so its lane path is its own),
- * the checkout that resolves it, and the bare origin its selector is published to.
- */
 function remoteFixture(name: string): {
   repoKey: string;
   repo: string;
@@ -2638,7 +2468,6 @@ function cacheRows(dbPath: string): {
   }
 }
 
-/** note: The binding's persisted verification, as status/freshness/ordering read it. */
 function bindingEvidence(dbPath: string): { verified_at: string; verification_json: string; writer_id: string | null } {
   const db = new DatabaseSync(dbPath);
   try {
@@ -2665,7 +2494,6 @@ function bindingEvidence(dbPath: string): { verified_at: string; verification_js
   }
 }
 
-/** note: A bind replacing a cache must advance the verification that cache already records. */
 function checkAfterBinding(dbPath: string, overrides: Partial<ScopeCheck> = {}): ScopeCheck {
   return positiveCheck({
     checkedAt: new Date(Date.parse(bindingEvidence(dbPath).verified_at) + 1).toISOString(),
@@ -2673,7 +2501,6 @@ function checkAfterBinding(dbPath: string, overrides: Partial<ScopeCheck> = {}):
   });
 }
 
-/** note: Rebuild one table from its declared DDL after a textual mutation, so admission sees a damaged layout. */
 function rebuildTable(
   dbPath: string,
   table: string,
@@ -2702,7 +2529,6 @@ describe("remote observation cache", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
 
-    // note: Before any bind the status discloses an unbound checkout and creates nothing.
     expect(await readRemoteStatus(context)).toMatchObject({
       available: false,
       code: "collaboration.stale-binding",
@@ -2745,8 +2571,6 @@ describe("remote observation cache", () => {
     });
     expect(result.asOf).toBe(completeSnapshot(check).asOf);
 
-    // invariant: The cache holds the provider evidence and the identity projection; the local
-    // domain tables (`issues`, `catalog_*`, `project_bindings`) stay untouched.
     const rows = cacheRows(location.dbPath);
     expect(rows.identities).toEqual([
       { provider_issue_id: MSTAR_ISSUE, issue_ref: FORGED_ISSUE_REF },
@@ -2771,8 +2595,6 @@ describe("remote observation cache", () => {
       ],
     });
 
-    // invariant: The local domain entries still refuse a remote selection: the cache is never
-    // read or written as local authority.
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
       code: "collaboration.mode-unavailable",
     });
@@ -2780,16 +2602,12 @@ describe("remote observation cache", () => {
       code: "collaboration.mode-unavailable",
     });
 
-    // invariant: `store init` requires the populated remote binding and never creates a local
-    // authority in its place.
     expect(await ensureCollaborationAuthority(context)).toMatchObject({
       mode: "remote",
       state: "active",
       schemaVersion: LANE_CURRENT_VERSION,
     });
 
-    // invariant: A restored local image never reauthorizes the provider. The receipt and
-    // attestation are placeholders: the route refuses before either is read.
     const unreachableReceipt = {} as RepositoryBackupReceipt;
     const unreachableAttestation = {} as ActivationAttestation;
     await expect(
@@ -2813,8 +2631,6 @@ describe("remote observation cache", () => {
     const check = positiveCheck();
     await ingestRemoteObservation(context, { ...observation(check), selectorCommit: commit, generation: 3 });
 
-    // invariant: A verified snapshot replaces the whole project (never unions) and advances the
-    // revision only at the expected base.
     const second = await ingestRemoteObservation(context, {
       ...observation(check, { expectRevision: 1 }),
       selectorCommit: commit,
@@ -2825,7 +2641,6 @@ describe("remote observation cache", () => {
       ingestRemoteObservation(context, { ...observation(check, { expectRevision: 1 }), selectorCommit: commit, generation: 3 }),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
 
-    // note: A known gap is stored as `partial` with its code; the status never calls it fresh.
     const partial = await ingestRemoteObservation(context, {
       ...observation(check, {
         expectRevision: 2,
@@ -2843,8 +2658,6 @@ describe("remote observation cache", () => {
       projects: [{ completeness: "partial", freshness: "incomplete", code: "remote.comments-truncated" }],
     });
 
-    // invariant: A negative check invalidates the cache and is reported by its own code AFTER
-    // the invalidation committed: no reader can see the old snapshot as current.
     const denied = positiveCheck({
       checkedAt: new Date(Date.now() - 500).toISOString(),
       outcome: { kind: "denied" },
@@ -2860,7 +2673,6 @@ describe("remote observation cache", () => {
       available: false,
       projects: [{ completeness: "unavailable", revision: 4, code: "remote.denied", freshness: "incomplete" }],
     });
-    // note: The active projection is cleared with the invalidation, not merely marked stale.
     expect(cacheRows(location.dbPath).identities).toEqual([]);
     const cleared = new DatabaseSync(location.dbPath);
     try {
@@ -2883,7 +2695,6 @@ describe("remote observation cache", () => {
       checks: [positiveCheck()],
     });
 
-    // note: A successor that does not name the recorded generation is an unfenced predecessor.
     const unfenced = fixture.publish(fixture.payload({ generation: 2, previous: null, cutover: null }));
     await expect(
       bindRemoteAuthority(context, {
@@ -2895,7 +2706,6 @@ describe("remote observation cache", () => {
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(readCollaborationBinding(context)).toMatchObject({ version: 3, generation: 1 });
 
-    // note: A fenced, pending-free cutover naming the predecessor is admitted.
     const second = fixture.publish(
       fixture.payload({
         generation: 2,
@@ -2917,7 +2727,6 @@ describe("remote observation cache", () => {
     });
     expect(rebound.binding).toMatchObject({ version: 3, generation: 2, selectorCommit: second });
 
-    // invariant: The superseded generation is preserved as history, not deleted or re-keyed.
     const db = new DatabaseSync(locationAt(fixture.repo).dbPath);
     try {
       expect((db.prepare("select count(*) as n from remote_bindings").get() as { n: number }).n).toBe(2);
@@ -2930,7 +2739,6 @@ describe("remote observation cache", () => {
       db.close();
     }
 
-    // note: The selector itself refuses a fenced-false transition before any bind sees it.
     const unsafe = fixture.payload({
       generation: 3,
       previous: { selectorCommit: second, generation: 2, mode: "remote" },
@@ -2954,7 +2762,6 @@ describe("remote observation cache", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
 
-    // note: Every selected project needs its own positive check.
     await expect(
       bindRemoteAuthority(context, {
         version: 1,
@@ -2963,7 +2770,6 @@ describe("remote observation cache", () => {
         checks: [positiveCheck()],
       }),
     ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
-    // note: A check for another tenant is not a check for this project.
     await expect(
       bindRemoteAuthority(context, {
         version: 1,
@@ -2979,7 +2785,6 @@ describe("remote observation cache", () => {
         ],
       }),
     ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
-    // note: A negative verification is never a binding.
     await expect(
       bindRemoteAuthority(context, {
         version: 1,
@@ -2990,7 +2795,6 @@ describe("remote observation cache", () => {
     ).rejects.toMatchObject({ code: "remote.revoked" });
     expect(existsSync(location.dbPath)).toBe(false);
 
-    // note: A batch for another selector generation cannot bind this checkout.
     await expect(
       bindRemoteAuthority(context, {
         version: 1,
@@ -3000,7 +2804,6 @@ describe("remote observation cache", () => {
       }),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
 
-    // note: Bind both projects, then observe one with a foreign-scope snapshot and a missing one.
     const bound = await bindRemoteAuthority(context, {
       version: 1,
       selectorCommit: commit,
@@ -3027,7 +2830,6 @@ describe("remote observation cache", () => {
         generation: 3,
       }),
     ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
-    // invariant: A verified check with no snapshot is never recorded as current.
     await expect(
       ingestRemoteObservation(context, {
         ...observation(positiveCheck(), { snapshot: null }),
@@ -3037,7 +2839,6 @@ describe("remote observation cache", () => {
     ).rejects.toMatchObject({ code: "collaboration.observation-incomplete" });
     expect(cacheRows(location.dbPath).observations).toBe(2);
 
-    // invariant: A draining selector is a predecessor to reconcile, never the cache's target.
     const draining = remoteFixture("draining");
     const drainingCommit = draining.publish(
       draining.payload({
@@ -3083,8 +2884,6 @@ describe("remote observation cache", () => {
     });
     expect(verified.writer_id).toBe(SELECTED_PROJECT.writerId);
 
-    // invariant: A revocation tied with the recorded positive check wins the tie: serving stops in
-    // the same millisecond and the binding's evidence becomes the negative check.
     const tiedDenial = positiveCheck({ checkedAt: check.checkedAt, outcome: { kind: "denied" } });
     await expect(
       ingestRemoteObservation(context, {
@@ -3099,8 +2898,6 @@ describe("remote observation cache", () => {
       projects: [{ outcome: "denied", verifiedAt: tiedDenial.checkedAt, completeness: "unavailable" }],
     });
 
-    // invariant: The reverse never holds - a positive tied with that denial restores nothing,
-    // through observe or a bind replay.
     await expect(
       ingestRemoteObservation(context, {
         ...observation(positiveCheck({ checkedAt: tiedDenial.checkedAt }), { expectRevision: 2 }),
@@ -3121,7 +2918,6 @@ describe("remote observation cache", () => {
       projects: [{ completeness: "unavailable", outcome: "denied" }],
     });
 
-    // note: A revocation replaces the binding's evidence, so no reader sees the old verification.
     const denied = positiveCheck({
       checkedAt: new Date(Date.now() - 1_000).toISOString(),
       outcome: { kind: "revoked" },
@@ -3142,7 +2938,6 @@ describe("remote observation cache", () => {
       projects: [{ outcome: "revoked", verifiedAt: denied.checkedAt, completeness: "unavailable" }],
     });
 
-    // invariant: An older positive check cannot restore serving, even with its whole snapshot.
     const older = positiveCheck({ checkedAt: new Date(Date.now() - 5_000).toISOString() });
     await expect(
       ingestRemoteObservation(context, {
@@ -3151,7 +2946,6 @@ describe("remote observation cache", () => {
         generation: 3,
       }),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
-    // invariant: Neither can a positive check tied with the recorded revocation.
     await expect(
       ingestRemoteObservation(context, {
         ...observation(positiveCheck({ checkedAt: denied.checkedAt }), { expectRevision: 2 }),
@@ -3179,7 +2973,6 @@ describe("remote observation cache", () => {
       generation: 3,
     });
 
-    // note: The host last read revision 0; its revocation is admitted anyway and clears the snapshot.
     const denied = positiveCheck({ checkedAt: new Date(Date.now() - 500).toISOString(), outcome: { kind: "denied" } });
     await expect(
       ingestRemoteObservation(context, {
@@ -3199,8 +2992,6 @@ describe("remote observation cache", () => {
     const fixture = remoteFixture("allowlist");
     const commit = fixture.publish(fixture.payload());
     const context = contextAt(fixture.repo);
-    // note: Every submission carries its own host check. Serving is restored after a refusal
-    // only from a strictly newer check, so this fixture advances the instant per submission.
     let clock = Date.now() - 20_000;
     const nextCheck = (): ScopeCheck => {
       clock += 200;
@@ -3227,8 +3018,6 @@ describe("remote observation cache", () => {
     const withoutKind = { ...subject.fields };
     delete withoutKind.kind;
 
-    // invariant: Unknown members, missing required fields, wrong enums, a non-boolean imported flag,
-    // non-allowlisted transition evidence and unstable history never enter the cache.
     for (const snapshot of [
       withSubject({ fields: { ...subject.fields, token: "leak" } }),
       withSubject({ fields: { ...subject.fields, severity: "blocker" } }),
@@ -3266,16 +3055,11 @@ describe("remote observation cache", () => {
         db.close();
       }
     };
-    // note: Non-imported history keeps its explicit flag; the flag is never dropped as unknown.
     expect(storedHistory()).toEqual({
       occurrences: [expect.objectContaining({ imported: false })],
       transitions: [expect.objectContaining({ imported: false, evidence: { references: ["review-fixture"] } })],
     });
 
-    // invariant: Imported history keeps its flag on both collections, and its transition
-    // evidence is the reviewed legacy row's complete portable projection: every business
-    // field survives, including closure evidence, the supersession pointer and the
-    // detail-document reference.
     const importedSubject = {
       ...subject,
       occurrences: [{ ...subject.occurrences[0]!, imported: true }],
@@ -3327,8 +3111,6 @@ describe("remote observation cache", () => {
       ],
     });
 
-    // invariant: An imported field the reviewed representation cannot keep refuses the whole
-    // observation by name (`remote.unsafe-fidelity`) instead of being silently dropped.
     for (const evidence of [
       { id: "R9", title: "Imported finding", token: "leak" },
       { id: "R9", title: "Imported finding", detail_doc: "/home/operator/notes.md" },
@@ -3367,8 +3149,6 @@ describe("remote observation cache", () => {
         }),
       ),
     ).rejects.toThrow(/evidence\.detail_doc/);
-    // invariant: Every unsafe field invalidates the addressed cache instead of leaving the
-    // previous snapshot current; the named refusal is reported only after that write landed.
     const invalidated = await readRemoteStatus(context);
     const invalidatedRevision = invalidated.projects[0]!.revision;
     expect(invalidated).toMatchObject({
@@ -3378,8 +3158,6 @@ describe("remote observation cache", () => {
     expect(invalidatedRevision).toBeGreaterThan(2);
     expect(cacheRows(locationAt(fixture.repo).dbPath).identities).toEqual([]);
 
-    // note: Control - ordinary business prose carrying a URL and a relative reference stays
-    // portable, so the credential/path rule refuses shapes, not business text.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(nextCheck(), {
@@ -3407,8 +3185,6 @@ describe("remote observation cache", () => {
       closureEvidence: "See https://example.test/pull/42 for the fix and PR #42 / commit abc1234",
     });
 
-    // note: Control - the same shapes without a credential label or an absolute root stay
-    // portable: a URL path and a relative reference are accepted.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(nextCheck(), {
@@ -3433,8 +3209,6 @@ describe("remote observation cache", () => {
       }),
     ).toMatchObject({ revision: invalidatedRevision + 2, completeness: "complete" });
 
-    // note: Control - a bare credential word in prose and an ordinary URL stay portable;
-    // only an assigned credential, a credential-bearing URL or a home path refuses.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(nextCheck(), {
@@ -3459,8 +3233,6 @@ describe("remote observation cache", () => {
       }),
     ).toMatchObject({ revision: invalidatedRevision + 3, completeness: "complete" });
 
-    // invariant: A credential label followed by a phrase is business prose, not an
-    // assignment, so the historical note survives the boundary unchanged.
     expect(
       await ingestRemoteObservation(context, {
         ...observation(nextCheck(), {
@@ -3489,7 +3261,6 @@ describe("remote observation cache", () => {
     });
   }, 20_000);
 
-  /** note: Apply one reviewed legacy register import and return the source lane it wrote. */
   async function migratedSource(name: string, entries: Record<string, unknown>[]): Promise<CollaborationLocation> {
     const repo = makeRepo(`https://example.test/fixture/${name}.git`);
     const context = contextAt(repo);
@@ -3500,7 +3271,6 @@ describe("remote observation cache", () => {
     return locationAt(repo);
   }
 
-  /** note: A reviewed legacy register row, in the register's own spelling. */
   const migratedRow = (id: string, overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
     id,
     title: `Imported finding ${id}`,
@@ -3522,7 +3292,6 @@ describe("remote observation cache", () => {
     ...overrides,
   });
 
-  /** note: The one imported transition evidence the migration recorded. */
   function importedEvidence(location: CollaborationLocation): Record<string, unknown> {
     const db = new DatabaseSync(location.dbPath);
     try {
@@ -3542,8 +3311,6 @@ describe("remote observation cache", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
 
-    // note: A real reviewed register import records the whole legacy row as the imported
-    // transition's evidence; every portable business field must survive the boundary.
     const evidence = importedEvidence(await migratedSource("imported-evidence", [migratedRow("R1")]));
 
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
@@ -3575,7 +3342,6 @@ describe("remote observation cache", () => {
     let stored: unknown;
     try {
       const row = db.prepare("select snapshot_json from remote_observations").get() as { snapshot_json: string | null };
-      // note: The cache stores this boundary's own validated snapshot document.
       const snapshot = JSON.parse(String(row.snapshot_json)) as {
         issues: Array<{ mstar: { transitions: Array<{ imported: boolean; evidence: unknown }> } | null }>;
       };
@@ -3583,8 +3349,6 @@ describe("remote observation cache", () => {
     } finally {
       db.close();
     }
-    // invariant: Every portable business field of the migrated row round-trips; no legacy key
-    // spelling or non-portable value reaches the cache.
     expect(stored).toEqual({
       legacyId: "R1",
       title: "Imported finding R1",
@@ -3638,8 +3402,6 @@ describe("remote observation cache", () => {
       generation: 3,
     }).catch((error: unknown) => error);
 
-    // invariant: The unsafe field is named, never dropped, and the addressed cache is left
-    // unavailable instead of continuing to serve the previous revision.
     expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
     expect(String(refusal)).toContain("evidence.detail_doc");
     expect(await readRemoteStatus(context)).toMatchObject({
@@ -3697,8 +3459,6 @@ describe("remote observation cache", () => {
     const refused = ["R5", "R6", "R7"].map(pick);
     expect(portable.kind).toBe("migration");
 
-    // note: Every submission carries its own host check. Serving is restored after a refusal
-    // only from a strictly newer check, so this fixture advances the instant per submission.
     let clock = Date.now() - 20_000;
     const nextCheck = (): ScopeCheck => {
       clock += 200;
@@ -3747,7 +3507,6 @@ describe("remote observation cache", () => {
     try {
       const row = db.prepare("select snapshot_json from remote_observations").get() as { snapshot_json: string | null };
       raw = String(row.snapshot_json);
-      // note: The cache stores this boundary's own validated snapshot document.
       const snapshot = JSON.parse(raw) as {
         issues: Array<{ mstar: { provenance: Array<Record<string, unknown>> } | null }>;
       };
@@ -3755,7 +3514,6 @@ describe("remote observation cache", () => {
     } finally {
       db.close();
     }
-    // invariant: The real row's portable fields survive; its raw legacy JSON and every path never do.
     expect(recorded).toEqual({
       eventId: "55555555-5555-4555-8555-555555555555",
       kind: "migration",
@@ -3790,8 +3548,6 @@ describe("remote observation cache", () => {
     expect(raw).not.toContain("legacyJson");
     expect(raw).not.toContain("Users/operator");
 
-    // invariant: A provenance row whose content is not portable refuses by name and invalidates
-    // the addressed cache, so the previous complete revision is never served behind the refusal.
     const refusal: unknown = await submitProvenance(unsafe, 1).catch((error: unknown) => error);
     expect(refusal).toMatchObject({ code: "remote.unsafe-fidelity" });
     expect(String(refusal)).toContain("legacyJson.detail_doc");
@@ -3811,8 +3567,6 @@ describe("remote observation cache", () => {
     });
     expect(invalidatedRevision).toBeGreaterThan(1);
 
-    // invariant: The same label-plus-phrase note is business prose, so it stays portable and
-    // restores serving at the invalidated base.
     expect(await submitProvenance(prose, invalidatedRevision)).toMatchObject({
       revision: invalidatedRevision + 1,
       completeness: "complete",
@@ -3837,7 +3591,6 @@ describe("remote observation cache", () => {
     await expect(bindRemoteAuthority(context, batch)).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(readCollaborationBinding(context)).toMatchObject({ version: 3, storeId: firstStore });
 
-    // note: A vanished cache is a missing lane, not a replacement: bind initializes it.
     rmSync(location.dbPath);
     const rebound = await bindRemoteAuthority(context, batch);
     expect(rebound.binding).toMatchObject({ version: 3 });
@@ -3852,7 +3605,6 @@ describe("remote observation cache", () => {
     const bind = (check: ScopeCheck) =>
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [check] });
 
-    // invariant: A future or expired positive check bootstraps nothing and creates nothing.
     await expect(
       bind(positiveCheck({ checkedAt: new Date(Date.now() + 60_000).toISOString() })),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
@@ -3862,13 +3614,10 @@ describe("remote observation cache", () => {
     expect(existsSync(location.dbPath)).toBe(false);
 
     await bind(positiveCheck());
-    // invariant: A verification never moves a binding's evidence backwards.
     await expect(
       bind(positiveCheck({ checkedAt: new Date(Date.now() - 5_000).toISOString() })),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
 
-    // invariant: A tied timestamp only replays byte-identical evidence; a conflicting tie can
-    // never replace the recorded check.
     const tiedAt = new Date(Date.now() - 500).toISOString();
     await bind(positiveCheck({ checkedAt: tiedAt }));
     expect(await bind(positiveCheck({ checkedAt: tiedAt }))).toMatchObject({ replayed: true });
@@ -3900,8 +3649,6 @@ describe("remote observation cache", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
 
-    // invariant: A check dated even slightly ahead of this process is refused - there is no
-    // tolerated skew - and no lane is created.
     await expect(
       bindRemoteAuthority(context, {
         version: 1,
@@ -3968,7 +3715,6 @@ describe("remote observation cache", () => {
       db.close();
     }
 
-    // note: A malformed head is still refused.
     await expect(
       ingestRemoteObservation(context, {
         ...observation(check, {
@@ -4051,7 +3797,6 @@ describe("remote observation cache", () => {
   }, 30_000);
 
   test("an ineffective unique index or a split foreign key refuses admission", async () => {
-    // note: Same columns, no uniqueness at all: only the declared predicate can tell them apart.
     const ineffective = remoteFixture("malformed-partial-uniqueness");
     const ineffectiveCommit = ineffective.publish(ineffective.payload());
     const ineffectiveContext = contextAt(ineffective.repo);
@@ -4073,7 +3818,6 @@ describe("remote observation cache", () => {
     }
     await expect(readRemoteStatus(ineffectiveContext)).rejects.toMatchObject({ code: "collaboration.unreadable" });
 
-    // note: Two single-column keys satisfy a flattened comparison but not the required composite.
     const split = remoteFixture("malformed-split-foreign-key");
     const splitCommit = split.publish(split.payload());
     const splitContext = contextAt(split.repo);
@@ -4108,7 +3852,6 @@ describe("remote observation cache", () => {
         ...snapshot,
         project: {
           ...snapshot.project,
-          // invariant: Ingest never requires an admitted snapshot to re-declare its own project row.
           catalogEntities: snapshot.project.catalogEntities.filter(
             (row) => !(row.kind === "project" && row.id === SELECTED_PROJECT.localProjectId),
           ),
@@ -4126,7 +3869,6 @@ describe("remote observation cache", () => {
     expect(read.milestones.map((row) => [row.milestoneId, row.totalIssues])).toEqual([["milestone-1", 1]]);
     expect(read.issues.map((row) => [row.id, row.milestoneId])).toEqual([[FORGED_ISSUE_REF, "milestone-1"]]);
     expect(read.unassignedIssues).toBe(0);
-    // note: The milestone lookup keeps its own refusal for an id the snapshot does not carry.
     expect(() => remoteMilestones(view, SELECTED_PROJECT.localProjectId, "missing-milestone")).toThrow(
       /\[milestone\.not-found\]/,
     );
@@ -4139,11 +3881,6 @@ describe("remote observation cache", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: The reviewed local/mirror -> remote transition and the commit-time fence
-// ---------------------------------------------------------------------------
-
-/** note: A same-repository checkout that starts in local mode and owns a bare origin. */
 function transitionFixture(name: string): {
   repo: string;
   repoKey: string;
@@ -4184,7 +3921,6 @@ function transitionFixture(name: string): {
   };
 }
 
-/** note: A published local lane carrying one issue, with the checkout's v2 binding recorded. */
 async function publishedLocalLane(repo: string): Promise<{ context: StoreContext; location: CollaborationLocation }> {
   const context = contextAt(repo);
   const location = locationAt(repo);
@@ -4203,7 +3939,6 @@ async function publishedLocalLane(repo: string): Promise<{ context: StoreContext
   return { context, location };
 }
 
-/** note: A second checkout of the SAME repository: its own harness, the shared canonical origin. */
 function secondCheckout(origin: string, bare: string, mode: CollaborationMode): string {
   const dir = join(ROOT, `second-checkout-${sequence++}`);
   mkdirSync(dir, { recursive: true });
@@ -4245,11 +3980,9 @@ describe("reviewed authority transition", () => {
     const predecessor = metaRecord(location.dbPath);
     expect(predecessor).toMatchObject({ mode: "local", authority_state: "active" });
 
-    // note: The predecessor generation the successor names, published while this checkout is local.
     const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
     writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
 
-    // invariant: An ACTIVE selector whose cutover is not source-fenced refuses before any byte moves.
     const unfenced = fixture.publish(
       selectorPayload(fixture.repoKey, {
         generation: 2,
@@ -4265,7 +3998,6 @@ describe("reviewed authority transition", () => {
     expect(existsSync(location.dbPath)).toBe(true);
     expect(metaRecord(location.dbPath)).toMatchObject({ mode: "local", store_id: predecessor.store_id });
 
-    // note: The reviewed, fenced successor names that local generation and retires the lane.
     const successor = fixture.publish(
       selectorPayload(fixture.repoKey, {
         generation: 3,
@@ -4288,8 +4020,6 @@ describe("reviewed authority transition", () => {
     });
     if (bound.retiredPredecessor === null) throw new Error("fixture: the transition reported no retired predecessor");
 
-    // invariant: The canonical path is now the verified cache; the predecessor's rows survive as
-    // inaccessible history beside it, under their own local mode.
     expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote", authority_state: "active" });
     const preserved = new DatabaseSync(bound.retiredPredecessor.path);
     try {
@@ -4299,7 +4029,6 @@ describe("reviewed authority transition", () => {
       preserved.close();
     }
 
-    // invariant: The retired generation is never served and a stale local write cannot land.
     await expect(openCollaborationStore(context, "read")).rejects.toMatchObject({
       code: "collaboration.mode-unavailable",
     });
@@ -4315,13 +4044,11 @@ describe("reviewed authority transition", () => {
     await expect(
       withCollaborationWrite(context, (handle) => {
         handle.db.prepare(receiptInsert("draining-gap")).run();
-        // note: The origin starts the reviewed transition while this writer holds the lock.
         fixture.publish(selectorPayload(fixture.repoKey, { generation: 1, phase: "draining" }));
         return "written";
       }),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
 
-    // invariant: The effect rolled back: no receipt landed under the superseded selection.
     const db = new DatabaseSync(location.dbPath);
     try {
       expect(
@@ -4358,7 +4085,6 @@ describe("reviewed authority transition", () => {
       ),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
 
-    // invariant: The staged cache mutation rolled back with the moved selection.
     const db = new DatabaseSync(location.dbPath);
     try {
       expect(
@@ -4374,8 +4100,6 @@ describe("reviewed authority transition", () => {
     const fixture = transitionFixture("unbound-predecessor");
     const { context, location } = await publishedLocalLane(fixture.repo);
     const predecessor = metaRecord(location.dbPath);
-    // note: A fresh clone in the same home resolves the same canonical lane but holds no
-    // binding for it; the reviewed selector is the only lineage evidence it needs.
     rmSync(join(fixture.repo, ".mstar", "collaboration-binding.json"), { force: true });
     const local = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
     writeFileSync(join(fixture.repo, ".mstarc"), "[collaboration]\nmode=remote\n");
@@ -4415,8 +4139,6 @@ describe("reviewed authority transition", () => {
       }),
     );
 
-    // note: A competing publication lands AFTER the bind's reviewed proof and BEFORE its
-    // retirement decision, so the successor the bind checked is no longer the live selection.
     setRemoteBindTransitionGapForTest(() => {
       fixture.publish(
         selectorPayload(fixture.repoKey, {
@@ -4441,8 +4163,6 @@ describe("reviewed authority transition", () => {
       setRemoteBindTransitionGapForTest(undefined);
     }
 
-    // invariant: Drift is observed before the rename, so nothing moved: the canonical path is
-    // still the local predecessor, no retired image exists and no v3 binding was published.
     expect(metaRecord(location.dbPath)).toMatchObject({
       mode: "local",
       store_id: predecessor.store_id,
@@ -4466,7 +4186,6 @@ describe("reviewed authority transition", () => {
       generation: 1,
       checks: [positiveCheck()],
     });
-    // invariant: The published stamp is the lane the transaction actually wrote.
     const lane = metaRecord(location.dbPath);
     expect(bound.binding).toMatchObject({ version: 3, storeId: lane.store_id, epoch: lane.authority_epoch });
 
@@ -4480,7 +4199,6 @@ describe("reviewed authority transition", () => {
     await bindRemoteAuthority(context, { version: 1, selectorCommit: second, generation: 2, checks: [positiveCheck()] });
     expect(readCollaborationBinding(context)).toMatchObject({ generation: 2, selectorCommit: second });
 
-    // note: A slower bind that staged the predecessor publishes nothing over the successor.
     expect(() =>
       writeRemoteCollaborationBinding(context, {
         repoKey: location.repoKey,
@@ -4499,17 +4217,13 @@ describe("reviewed authority transition", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
     await bindRemoteAuthority(context, { version: 1, selectorCommit: first, generation: 1, checks: [positiveCheck()] });
-    // note: The private cache is disposable bytes; its loss never licenses reusing the number.
     rmSync(location.dbPath, { force: true });
-    // note: The same generation republished with a different payload (the marker only makes the
-    // commit distinct); the origin's ref now names a commit this checkout never recorded.
     const other = fixture.publish(fixture.payload({ generation: 1, publishedNote: "same generation, different payload" }));
     expect(other).not.toBe(first);
 
     await expect(
       bindRemoteAuthority(context, { version: 1, selectorCommit: other, generation: 1, checks: [positiveCheck()] }),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
-    // invariant: The refused bind created no lane and left the recorded generation alone.
     expect(existsSync(location.dbPath)).toBe(false);
     expect(readCollaborationBinding(context)).toMatchObject({ generation: 1, selectorCommit: first });
   });
@@ -4517,14 +4231,12 @@ describe("reviewed authority transition", () => {
   test("a local write refuses a different active selector of the same mode", async () => {
     const fixture = transitionFixture("same-mode-drift");
     const { context, location } = await publishedLocalLane(fixture.repo);
-    // note: The initial local selector is ACTIVE; the local admission retains its exact commit.
     const first = fixture.publish(selectorPayload(fixture.repoKey, { generation: 1 }));
     expect(resolveCollaborationLocation(context).selection?.commit).toBe(first);
 
     await expect(
       withCollaborationWrite(context, (handle) => {
         handle.db.prepare(receiptInsert("same-mode-gap")).run();
-        // note: A valid successor of the SAME mode and phase lands while this writer holds the lock.
         fixture.publish(
           selectorPayload(fixture.repoKey, {
             generation: 2,
@@ -4537,8 +4249,6 @@ describe("reviewed authority transition", () => {
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(receipts(location.dbPath)).not.toContain("same-mode-gap");
 
-    // invariant: An ACTIVE selector first published after an admission that proved absence is
-    // the same drift, not a fresh absence the writer may continue under.
     const absence = transitionFixture("same-mode-absence");
     const fresh = await publishedLocalLane(absence.repo);
     await expect(
@@ -4566,8 +4276,6 @@ describe("reviewed authority transition", () => {
         cutover: FENCED,
       }),
     );
-    // note: A second checkout of the same repository resolves the SAME canonical store path
-    // but keeps its own harness root, so a harness-scoped lock would not exclude it.
     const otherContext = contextAt(secondCheckout(fixture.origin, fixture.bare, "remote"));
     let competing: unknown;
     setLocalPredecessorPublicationGapForTest(async () => {
@@ -4594,8 +4302,6 @@ describe("reviewed authority transition", () => {
       setLocalPredecessorPublicationGapForTest(undefined);
     }
 
-    // invariant: The second checkout was excluded by the SHARED lane lock, and the one archive
-    // that exists carries the predecessor's history, not the competing cache.
     expect(competing).toMatchObject({ code: "collaboration.cutover-conflict" });
     const retired = localPredecessorRetiredPath(location, {
       storeId: predecessor.store_id,
@@ -4625,8 +4331,6 @@ describe("reviewed authority transition", () => {
       storeId: predecessor.store_id,
       epoch: predecessor.authority_epoch,
     });
-    // note: A competing checkout completes its retirement AFTER this one's last inode check;
-    // only the create-if-absent publication decides which image survives.
     setLocalPredecessorPublicationGapForTest(() => {
       writeFileSync(retired, "competing archive\n", { mode: 0o600 });
     });
@@ -4646,7 +4350,6 @@ describe("reviewed authority transition", () => {
       setLocalPredecessorPublicationGapForTest(undefined);
     }
 
-    // invariant: Neither the archive nor the canonical predecessor was overwritten.
     expect(readFileSync(retired, "utf8")).toBe("competing archive\n");
     expect(metaRecord(location.dbPath)).toMatchObject({ mode: "local", store_id: predecessor.store_id });
     expect(readCollaborationBinding(context)).toMatchObject({ version: 2, mode: "local" });
@@ -4689,7 +4392,6 @@ describe("reviewed authority transition", () => {
       setRemoteBindingPublicationGapForTest(undefined);
     }
 
-    // invariant: The second publisher was excluded, so the first publication stands.
     expect(competing).toMatchObject({ code: "collaboration.cutover-conflict" });
     expect(readCollaborationBinding(context)).toMatchObject({
       version: 3,
@@ -4731,8 +4433,6 @@ describe("reviewed authority transition", () => {
       setRemoteBindingPublicationGapForTest(undefined);
     }
 
-    // invariant: Generation 4's cache rows committed and no checkout binding was published;
-    // the checkout still records generation 3 while the committed 4 is the reviewed predecessor.
     expect(readCollaborationBinding(context)).toMatchObject({ version: 3, generation: 3, selectorCommit: first });
 
     const recovered = await bindRemoteAuthority(context, {
@@ -4750,11 +4450,6 @@ describe("reviewed authority transition", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: v3 outbox intents: durable prepare, identical replay and named refusals
-// ---------------------------------------------------------------------------
-
-/** note: The frozen binding of the fixture's selected project at one selector commit. */
 function intentBindingFor(commit: string): Record<string, unknown> {
   return {
     generation: 3,
@@ -4769,7 +4464,6 @@ function intentBindingFor(commit: string): Record<string, unknown> {
   };
 }
 
-/** note: The complete normalized project document a project event freezes (no head, no binding). */
 function completeProjectSubject(): Record<string, unknown> {
   const project = completeSnapshot().project;
   return {
@@ -4780,7 +4474,6 @@ function completeProjectSubject(): Record<string, unknown> {
   };
 }
 
-/** note: The complete normalized issue subject a replacement freezes (no head, no issueRef). */
 function completeIssueSubject(): Record<string, unknown> {
   const issue = completeSnapshot().issues[0]!.mstar!;
   return {
@@ -4793,7 +4486,6 @@ function completeIssueSubject(): Record<string, unknown> {
   };
 }
 
-/** note: One journal project-replace intent: the smallest complete frozen request. */
 function intentRequest(
   fixture: { repoKey: string },
   commit: string,
@@ -4816,7 +4508,6 @@ function intentRequest(
   };
 }
 
-/** note: The stored intents, for replay no-mutation and durability assertions. */
 function outboxRows(dbPath: string): Array<{
   operation_id: string;
   request_hash: string;
@@ -4853,7 +4544,6 @@ function outboxRows(dbPath: string): Array<{
   }
 }
 
-/** note: The recorded receipt rows exactly as the lane holds them; the append-only evidence behind a state. */
 function outboxReceipts(dbPath: string): Array<{
   operation_id: string;
   receipt_hash: string;
@@ -4905,14 +4595,11 @@ describe("remote outbox intents", () => {
     });
     expect(first.requestHash).toMatch(/^[0-9a-f]{64}$/);
 
-    // invariant: The intent is committed before it is reported, with the exact frozen
-    // request and no send permit (no attempt id).
     const [stored] = outboxRows(location.dbPath);
     expect(stored).toMatchObject({ operation_id: operationId, state: "enqueued", attempt_id: null });
     expect(stored!.request_hash).toBe(first.requestHash);
     expect(JSON.parse(stored!.request_json)).toEqual(request);
 
-    // invariant: A semantically identical prepare returns the stored state and never re-inserts.
     const replay = await prepareRemoteIntent(context, request);
     expect(replay).toMatchObject({ state: "enqueued", replayed: true, requestHash: first.requestHash });
     expect(outboxRows(location.dbPath)).toHaveLength(1);
@@ -4931,14 +4618,12 @@ describe("remote outbox intents", () => {
       },
     ]);
 
-    // invariant: The same id under a different frozen request refuses and leaves the intent intact.
     await expect(
       prepareRemoteIntent(
         context,
         intentRequest(fixture, commit, operationId, { expectedHeads: ["b".repeat(64)] }),
       ),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: A request that does not address the checked binding refuses before any insert.
     await expect(
       prepareRemoteIntent(
         context,
@@ -4951,7 +4636,6 @@ describe("remote outbox intents", () => {
   });
 
   test("an absent, older or incomplete outbox never accepts an intent", async () => {
-    // note: No remote lane exists at all: the prepare refuses and creates nothing.
     const absent = remoteFixture("outbox-absent");
     const absentCommit = absent.publish(absent.payload());
     const absentLocation = locationAt(absent.repo);
@@ -4963,7 +4647,6 @@ describe("remote outbox intents", () => {
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
     expect(existsSync(absentLocation.dbPath)).toBe(false);
 
-    // note: A bound v3 lane whose outbox tables were removed is a damaged current lane.
     const dropped = remoteFixture("outbox-dropped");
     const commit = dropped.publish(dropped.payload());
     const context = contextAt(dropped.repo);
@@ -4980,7 +4663,6 @@ describe("remote outbox intents", () => {
     await expect(
       prepareRemoteIntent(context, intentRequest(dropped, commit, "00000000-0000-4000-8000-0000000000b2")),
     ).rejects.toMatchObject({ code: "collaboration.unreadable" });
-    // invariant: The refusal created no table, lane or intent.
     expect(tableNames(dbPath)).toEqual(before);
   });
 
@@ -5010,13 +4692,10 @@ describe("remote outbox intents", () => {
     });
 
     const refusals = [
-      // note: A partial project document is not the complete normalized subject.
       change("00000000-0000-4000-8000-0000000000c1", { kind: "project-replace", project: { projectId: SELECTED_PROJECT.localProjectId } }, SELECTED_PROJECT.journalIssueId),
-      // note: Credential-shaped and unrelated keys never reach the stored request.
       change("00000000-0000-4000-8000-0000000000c2", { kind: "project-replace", project: { ...project, token: "sk-live-1234" } }, SELECTED_PROJECT.journalIssueId),
       change("00000000-0000-4000-8000-0000000000c3", { kind: "project-replace", project: { ...project, headers: { authorization: "Bearer x" } } }, SELECTED_PROJECT.journalIssueId),
       change("00000000-0000-4000-8000-0000000000c4", { kind: "project-replace", project: { ...project, binding: {} } }, SELECTED_PROJECT.journalIssueId),
-      // note: An empty or partial issue subject (and its derived head) is never frozen.
       change("00000000-0000-4000-8000-0000000000c5", issueChange({}), MSTAR_ISSUE),
       change("00000000-0000-4000-8000-0000000000c6", issueChange({ ...completeIssueSubject(), head: ["a".repeat(64)] }), MSTAR_ISSUE),
       change(
@@ -5028,15 +4707,10 @@ describe("remote outbox intents", () => {
     for (const request of refusals) {
       await expect(prepareRemoteIntent(context, request)).rejects.toMatchObject({ code: "remote.input-invalid" });
     }
-    // invariant: Every refusal happened before persistence.
     expect(outboxRows(location.dbPath)).toEqual([]);
   });
 
 test("a frozen pre-upgrade request that carried a milestone target settles as unestimated", async () => {
-    // invariant: A frozen request outlives the contract that froze it. The predecessor froze each
-    // milestone with a calendar `target`; a date is not a count of sessions, so the stored row must
-    // settle as unestimated instead of refusing every settlement verb as input-invalid. The rewrite
-    // is visible: the row reads as normalized-from-legacy, never as a current contract row.
     const fixture = remoteFixture("outbox-frozen-target");
     const commit = fixture.publish(fixture.payload());
     const context = contextAt(fixture.repo);
@@ -5044,7 +4718,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [positiveCheck()] });
     const operationId = "00000000-0000-4000-8000-0000000000f1";
     await prepareRemoteIntent(context, intentRequest(fixture, commit, operationId));
-    // invariant: A CURRENT row reads untouched - no normalization is reported for it.
     expect((await readRemoteIntent(context, operationId)).normalizedFromLegacy).toBe(false);
     const db = new DatabaseSync(location.dbPath);
     try {
@@ -5072,9 +4745,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
       state: "abandoned",
     });
 
-    // invariant: A row that MIXES the pre-upgrade and current shapes - some milestones carrying
-    // `target`, or one carrying both members - is damage no writer produced: it refuses as
-    // unreadable instead of being laundered through the legacy rewrite.
     const mixed = "00000000-0000-4000-8000-0000000000f3";
     await prepareRemoteIntent(context, intentRequest(fixture, commit, mixed));
     const mixedDb = new DatabaseSync(location.dbPath);
@@ -5085,8 +4755,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
       const body = JSON.parse(row.request_json) as {
         event: { change: { project: { milestones: Array<Record<string, unknown>> } } };
       };
-      // note: ONE row carrying both the retired `target` and the current `effortSessions`:
-      // no writer ever produced that shape, uniform or current.
       body.event.change.project.milestones[0]!.target = "2026-12-01";
       mixedDb.prepare("update remote_outbox set request_json = ? where operation_id = ?").run(JSON.stringify(body), mixed);
     } finally {
@@ -5094,8 +4762,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     }
     await expect(readRemoteIntent(context, mixed)).rejects.toMatchObject({ code: "collaboration.unreadable" });
 
-    // invariant: The legacy reading is the STORED path's alone: a new submission carrying the
-    // retired member is still refused at the boundary.
     const milestone = (completeProjectSubject().milestones as Array<Record<string, unknown>>)[0]!;
     const fresh = "00000000-0000-4000-8000-0000000000f2";
     await expect(
@@ -5142,8 +4808,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
       });
     const occurrence = (completeIssueSubject().occurrences as Record<string, unknown>[])[0]!;
 
-    // invariant: The shape is complete; only the issue domain's dedup rule (issue.ts
-    // occurrenceColumns via requireSemanticKey) refuses a guessed root-cause/acceptance key.
     const guessed = [
       { rootCauseKey: "?" },
       { rootCauseKey: "Unknown" },
@@ -5158,7 +4822,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
       expect(outboxRows(location.dbPath)).toEqual([]);
     }
 
-    // invariant: The same complete subject with domain keys still enqueues normally.
     const accepted = await prepareRemoteIntent(context, replacement("00000000-0000-4000-8000-0000000000ef", [occurrence]));
     expect(accepted).toMatchObject({ state: "enqueued", target: MSTAR_ISSUE });
   });
@@ -5182,13 +4845,11 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
         target: MSTAR_ISSUE,
       });
 
-    // invariant: `[]` is genesis or adoption only; a replacement without a replaced head refuses.
     await expect(
       prepareRemoteIntent(context, replacement("00000000-0000-4000-8000-0000000000d1", [])),
     ).rejects.toMatchObject({ code: "remote.input-invalid", message: expect.stringContaining("replaced head") });
     expect(outboxRows(location.dbPath)).toEqual([]);
 
-    // invariant: With its replaced head the same shape is a normal enqueued replacement.
     const accepted = await prepareRemoteIntent(
       context,
       replacement("00000000-0000-4000-8000-0000000000d2", ["a".repeat(64)]),
@@ -5200,10 +4861,6 @@ test("a frozen pre-upgrade request that carried a milestone target settles as un
     ]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// note: v3 outbox lifecycle: one permit, exact receipts, conflicts and recovery
-// ---------------------------------------------------------------------------
 
 const OBSERVED_PROJECT_HEAD = "1".repeat(64);
 const OBSERVED_ISSUE_HEAD = "2".repeat(64);
@@ -5223,7 +4880,6 @@ function detailsOf(refusal: { details?: unknown }): Record<string, unknown> {
   return refusal.details as Record<string, unknown>;
 }
 
-/** note: The phases of every recorded reservation for one operation id. */
 async function intentPhases(context: StoreContext, operationId: string): Promise<string[]> {
   const handle = await openStore(context, "read");
   try {
@@ -5241,7 +4897,6 @@ async function intentPhases(context: StoreContext, operationId: string): Promise
   }
 }
 
-/** note: A bound, freshly observed remote cache: the base every dispatch below is proven against. */
 async function outboxCache(name: string): Promise<{
   fixture: ReturnType<typeof remoteFixture>;
   commit: string;
@@ -5258,7 +4913,6 @@ async function outboxCache(name: string): Promise<{
   return { fixture, commit, context, dbPath };
 }
 
-/** note: The exact normalized project event one journal intent freezes. */
 function journalEvent(
   fixture: { repoKey: string },
   operationId: string,
@@ -5274,7 +4928,6 @@ function journalEvent(
   };
 }
 
-/** note: The exact normalized issue replacement one intent freezes. */
 function issueEvent(fixture: { repoKey: string }, operationId: string): RemoteEvent {
   return {
     version: 1,
@@ -5286,7 +4939,6 @@ function issueEvent(fixture: { repoKey: string }, operationId: string): RemoteEv
   };
 }
 
-/** note: One project-journal intent whose frozen base is the observed journal head. */
 function journalIntent(
   fixture: { repoKey: string },
   commit: string,
@@ -5302,7 +4954,6 @@ function journalIntent(
   };
 }
 
-/** note: One issue replacement whose frozen base is the observed issue head. */
 function issueIntent(
   fixture: { repoKey: string },
   commit: string,
@@ -5323,7 +4974,6 @@ function attemptOf(permit: { kind: string; permit?: { attemptId: string } }): st
   return permit.permit.attemptId;
 }
 
-/** note: The two receipt inputs, exactly as the contract closes them. */
 function receiptInput(
   commit: string,
   operationId: string,
@@ -5346,7 +4996,6 @@ function receiptInput(
   };
 }
 
-/** note: The exact frozen event, decoded back as the confirmed receipt must carry it. */
 function confirmedJournal(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     kind: "confirmed",
@@ -5364,7 +5013,6 @@ function confirmedJournal(overrides: Record<string, unknown> = {}): Record<strin
   };
 }
 
-/** note: The competing immutable journal records behind one fork, bound to the journal anchor. */
 function forkRecords(fixture: { repoKey: string }): Array<Record<string, unknown>> {
   return ["00000000-0000-4000-8000-000000000901", "00000000-0000-4000-8000-000000000902"].map((operationId, index) => ({
     identity: { ...providerScope(), issueId: JOURNAL_ANCHOR },
@@ -5406,18 +5054,15 @@ describe("remote outbox lifecycle", () => {
         frozenRequest: { target: JOURNAL_ANCHOR, expectedHeads: [OBSERVED_PROJECT_HEAD] },
       },
     });
-    // invariant: The permit is committed BEFORE it is returned: the row already holds it.
     expect(outboxRows(cache.dbPath).find((row) => row.operation_id === first)).toMatchObject({
       state: "unconfirmed",
       attempt_id: attemptId,
     });
 
-    // invariant: A lost permit response never issues a second permit.
     const replay = await dispatchRemoteIntent(cache.context, first);
     expect(replay).toEqual({ kind: "state", operationId: first, state: "unconfirmed", requestHash: firstIntent.requestHash });
     expect(outboxRows(cache.dbPath).find((row) => row.operation_id === first)?.attempt_id).toBe(attemptId);
 
-    // invariant: Sends are serialized per binding: an unresolved attempt ahead refuses the next.
     await expect(dispatchRemoteIntent(cache.context, second)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       message: expect.stringContaining("unconfirmed"),
@@ -5426,11 +5071,9 @@ describe("remote outbox lifecycle", () => {
       state: "enqueued",
       attempt_id: null,
     });
-    // note: `outbox-show` discloses the frozen request and the attempt, still never a permit.
     const read = await readRemoteIntent(cache.context, first);
     expect(read).toMatchObject({ state: "unconfirmed", attemptId, requestHash: firstIntent.requestHash, receipts: [] });
 
-    // invariant: An unknown id names nothing instead of guessing a row.
     await expect(readRemoteIntent(cache.context, "00000000-0000-4000-8000-0000000001ff")).rejects.toMatchObject({
       code: "remote.intent-not-found",
     });
@@ -5438,9 +5081,6 @@ describe("remote outbox lifecycle", () => {
 
   test("the pending listing reports every unsettled state and never a settled row", async () => {
     const cache = await outboxCache("outbox-pending-states");
-    // note: One live checkout serializes sends, so a single cache cannot reach an unconfirmed row and
-    // a conflict row through the product verbs at the same time. A cache that arrived from another
-    // checkout can hold any combination, and this listing is the read that settlement starts from.
     const ids = [
       "00000000-0000-4000-8000-000000000171",
       "00000000-0000-4000-8000-000000000172",
@@ -5451,8 +5091,6 @@ describe("remote outbox lifecycle", () => {
     for (const operationId of ids) {
       await prepareRemoteIntent(cache.context, issueIntent(cache.fixture, cache.commit, operationId));
     }
-    // note: Abandoning is the public settlement that exists before a dispatch; the remaining states
-    // are the durable column values a move aside or another checkout can leave behind.
     expect((await abandonRemoteIntent(cache.context, { operationId: ids[4], reason: "fixture retires it" })).state).toBe(
       "abandoned",
     );
@@ -5470,15 +5108,11 @@ describe("remote outbox lifecycle", () => {
 
     const listing = await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId);
     expect(listing).toMatchObject({ version: 1, projectId: SELECTED_PROJECT.localProjectId, generation: 3 });
-    // invariant: Every unsettled state is listed in the stable (createdAt, operationId) order, and each
-    // entry carries the state the operator settles it from: an id alone does not say what a row needs.
     expect(listing.intents.map((intent) => [intent.operationId, intent.state, intent.kind, intent.target])).toEqual([
       [ids[0], "enqueued", "issue-replace", MSTAR_ISSUE],
       [ids[1], "unconfirmed", "issue-replace", MSTAR_ISSUE],
       [ids[2], "conflict", "issue-replace", MSTAR_ISSUE],
     ]);
-    // invariant: A settled row is never listed, and the listing is a read: the settled rows keep their
-    // own recorded states, unchanged by being listed.
     const listed = listing.intents.map((intent) => intent.operationId);
     expect(listed).not.toContain(ids[3]);
     expect(listed).not.toContain(ids[4]);
@@ -5493,7 +5127,6 @@ describe("remote outbox lifecycle", () => {
     const permit = await dispatchRemoteIntent(cache.context, operationId);
     const attemptId = attemptOf(permit);
 
-    // invariant: Ambiguity is not evidence: a not-found/ambiguous lookup keeps `unconfirmed`.
     for (const [index, reason] of ["no-response", "not-found", "ambiguous", "provider-unavailable"].entries()) {
       const read = await reconcileRemoteIntent(
         cache.context,
@@ -5504,7 +5137,6 @@ describe("remote outbox lifecycle", () => {
     }
     expect((await readRemoteIntent(cache.context, operationId)).receipts).toHaveLength(4);
 
-    // invariant: Evidence of another attempt or another selector never settles this one.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -5521,7 +5153,6 @@ describe("remote outbox lifecycle", () => {
       ),
     ).rejects.toMatchObject({ code: "collaboration.stale-binding" });
 
-    // invariant: A record that differs from the frozen event is a conflict to review, never a confirmation.
     const frozen = journalEvent(cache.fixture, operationId);
     await expect(
       recordRemoteReceipt(
@@ -5533,7 +5164,6 @@ describe("remote outbox lifecycle", () => {
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     expect(observationCompleteness(cache.dbPath)).toBe("complete");
 
-    // invariant: ONLY the unique exact match confirms, and a confirmed effect invalidates the read base.
     const confirmedInput = receiptInput(cache.commit, operationId, attemptId, intent.requestHash, confirmedJournal({ event: frozen }));
     const confirmed = await recordRemoteReceipt(cache.context, confirmedInput);
     expect(confirmed).toMatchObject({ state: "confirmed", attemptId });
@@ -5541,11 +5171,9 @@ describe("remote outbox lifecycle", () => {
     expect(observationCompleteness(cache.dbPath)).toBe("unavailable");
     expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "confirmed", attempt_id: attemptId });
 
-    // invariant: The same submission replays its evidence instead of recording a second effect.
     const replay = await recordRemoteReceipt(cache.context, confirmedInput);
     expect(replay.state).toBe("confirmed");
     expect(replay.receipts).toHaveLength(5);
-    // invariant: A different receipt of a settled attempt is refused, never re-applied.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -5562,9 +5190,6 @@ describe("remote outbox lifecycle", () => {
     const subject = completeIssueSubject();
     const fields = { ...(subject.fields as Record<string, unknown>), title: 7, revision: -1 };
     const occurrence = (subject.occurrences as Record<string, unknown>[])[0]!;
-    // invariant: TWO malformed history entries — a null row and a row with a bad field — plus the
-    // subject's own field defects are all named by ONE refusal: a malformed entry never truncates
-    // the diagnostics of its siblings.
     const occurrences = [null, { ...occurrence, eventId: "not-a-uuid" }];
     const event = {
       version: 1,
@@ -5575,8 +5200,6 @@ describe("remote outbox lifecycle", () => {
       change: { kind: "issue-replace", issueRef: FORGED_ISSUE_REF, mstar: { ...subject, fields, occurrences } },
     };
 
-    // invariant: ONE structural refusal answers every defect INSIDE the known event arm — both bad
-    // subject fields and BOTH malformed history rows — instead of stopping at the first one.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -5593,8 +5216,6 @@ describe("remote outbox lifecycle", () => {
         /receipt\.outcome\.event\.change\.mstar\.fields\.title[\s\S]*receipt\.outcome\.event\.change\.mstar\.fields\.revision[\s\S]*receipt\.outcome\.event\.change\.mstar\.occurrences\[0\]: must be an object[\s\S]*receipt\.outcome\.event\.change\.mstar\.occurrences\[1\]\.eventId/,
       ),
     });
-    // invariant: The structural refusal happened before any outbox access: the attempt stays
-    // unconfirmed with no recorded evidence row.
     expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "unconfirmed" });
     expect((await readRemoteIntent(cache.context, operationId)).receipts).toHaveLength(0);
   });
@@ -5644,8 +5265,6 @@ describe("remote outbox lifecycle", () => {
     expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "unconfirmed" });
     expect((await readRemoteIntent(cache.context, operationId)).receipts).toHaveLength(0);
 
-    // invariant: A repeat between two PARSED rows is still the repeat it is, reported in the same
-    // aggregate as its sibling defects.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -5664,8 +5283,6 @@ describe("remote outbox lifecycle", () => {
     const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, operationId));
     const subject = completeIssueSubject();
     const transition = (subject.transitions as Array<Record<string, unknown>>)[0]!;
-    // invariant: an imported transition's evidence IS the reviewed legacy register row, which the
-    // runtime requires to carry at least one business field; the empty object proves nothing.
     const transitions = [{ ...transition, imported: true, evidence: {} }];
     const input = receiptInput(cache.commit, operationId, attemptId, intent.requestHash, {
       kind: "confirmed",
@@ -5681,7 +5298,6 @@ describe("remote outbox lifecycle", () => {
       },
     });
 
-    // invariant: the published document and the runtime agree: both refuse the empty imported record.
     const descriptor = remoteReceiptDocumentSchema.safeParse(input);
     expect(descriptor.success).toBe(false);
     expect(JSON.stringify(descriptor.error?.issues)).toContain("evidence");
@@ -5811,7 +5427,6 @@ describe("remote outbox lifecycle", () => {
     const moved = await outboxCache("outbox-base");
     const operationId = "00000000-0000-4000-8000-000000000301";
     await prepareRemoteIntent(moved.context, issueIntent(moved.fixture, moved.commit, operationId));
-    // invariant: The intent was frozen against the head that was observed at prepare time.
     const check = positiveCheck();
     await ingestRemoteObservation(
       moved.context,
@@ -5834,12 +5449,10 @@ describe("remote outbox lifecycle", () => {
     });
     expect(outboxRows(moved.dbPath)[0]).toMatchObject({ operation_id: operationId, state: "enqueued", attempt_id: null });
 
-    // note: A fork is durable evidence: the attempt becomes conflicted, never overwritten.
     const forked = await outboxCache("outbox-conflict");
     const conflicted = "00000000-0000-4000-8000-000000000311";
     const intent = await prepareRemoteIntent(forked.context, journalIntent(forked.fixture, forked.commit, conflicted));
     const attemptId = attemptOf(await dispatchRemoteIntent(forked.context, conflicted));
-    // invariant: A conflict's heads are the content digests of the records it names.
     const competing = forkRecords(forked.fixture);
     const fork = competing.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
     const conflictedRead = await recordRemoteReceipt(
@@ -5852,7 +5465,6 @@ describe("remote outbox lifecycle", () => {
       }),
     );
     expect(conflictedRead.state).toBe("conflict");
-    // invariant: An ambiguous effect is never abandoned as absent.
     await expect(abandonRemoteIntent(forked.context, { operationId: conflicted, reason: "assume unsent" })).rejects.toMatchObject({
       code: "remote.dispatch-refused",
     });
@@ -5860,7 +5472,6 @@ describe("remote outbox lifecycle", () => {
       code: "remote.dispatch-refused",
     });
 
-    // invariant: A resolution cites the COMPLETE recorded fork and keeps the original event intact.
     const resolution = "00000000-0000-4000-8000-000000000312";
     const resolutionEvent = {
       version: 1,
@@ -5889,7 +5500,6 @@ describe("remote outbox lifecycle", () => {
     const original = await readRemoteIntent(forked.context, conflicted);
     expect(original).toMatchObject({ state: "conflict", resolvedBy: resolution });
     expect(original.event).toEqual(journalEvent(forked.fixture, conflicted));
-    // invariant: An identical replay returns the same resolution and inserts nothing.
     const replayed = await prepareRemoteResolution(forked.context, conflicted, {
       operationId: resolution,
       operator: "operator-one",
@@ -5898,7 +5508,6 @@ describe("remote outbox lifecycle", () => {
     });
     expect(replayed).toMatchObject({ state: "enqueued", replayed: true });
     expect(outboxRows(forked.dbPath)).toHaveLength(2);
-    // invariant: A fork observation whose heads are not the recorded fork is never sent.
     await expect(
       dispatchRemoteIntent(forked.context, resolution, forkObservationFor(forked, conflicted, [OBSERVED_PROJECT_HEAD])),
     ).rejects.toMatchObject({
@@ -5906,11 +5515,8 @@ describe("remote outbox lifecycle", () => {
       message: expect.stringContaining("exactly the fork heads"),
     });
 
-    // invariant: A complete host observation that began after the conflict dispatches the reviewed
-    // resolution; the cached snapshot is not its base proof.
     const dispatched = await dispatchRemoteIntent(forked.context, resolution, forkObservationFor(forked, conflicted, fork));
     expect(dispatched.kind).toBe("permit");
-    // invariant: The original conflict stays conflicted; only the resolution advances.
     expect((await readRemoteIntent(forked.context, conflicted)).state).toBe("conflict");
     const confirmed = await recordRemoteReceipt(
       forked.context,
@@ -5971,7 +5577,6 @@ describe("remote outbox lifecycle", () => {
       },
     };
 
-    // invariant: A queued provider write is never business success, and the reservation stays prepared.
     const queued = await refusalOf(() => runCollaborationComposite(cache.context, intent, effects));
     expect(queued.code).toBe("collaboration.operation-partial");
     expect(detailsOf(queued)).toMatchObject({ phase: "prepared", operation_id: "composite-remote-close" });
@@ -5980,7 +5585,6 @@ describe("remote outbox lifecycle", () => {
     expect(outboxRows(cache.dbPath)[0]).toMatchObject({ operation_id: remoteId, state: "enqueued" });
     expect(await intentPhases(cache.context, "composite-remote-close")).toEqual(["prepared"]);
 
-    // note: The provider effect is confirmed against the exact frozen issue event.
     const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, remoteId));
     const frozen = issueEvent(cache.fixture, remoteId);
     const confirmed = await recordRemoteReceipt(
@@ -5994,14 +5598,12 @@ describe("remote outbox lifecycle", () => {
     );
     expect(confirmed.state).toBe("confirmed");
 
-    // invariant: The replay commits ONLY the execution delta of the confirmed effect.
     const completed = await runCollaborationComposite(cache.context, intent, effects);
     expect(completed).toBe("finalized");
     expect(finalizes).toBe(1);
     expect(await intentPhases(cache.context, "composite-remote-close")).toEqual(["confirmed"]);
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
 
-    // invariant: A further replay serves the recorded result and never repeats either half.
     const replay = await runCollaborationComposite(cache.context, intent, effects);
     expect(replay).toBe("finalized");
     expect(finalizes).toBe(1);
@@ -6029,7 +5631,6 @@ describe("remote outbox lifecycle", () => {
       discoveredAt: "2026-11-20T00:00:00.000Z",
     };
 
-    // invariant: A captured finding is one `issue-create` intent, not a local issue row.
     const created = await refusalOf(() =>
       captureIssue(cache.context, capture, { operationId: "00000000-0000-4000-8000-000000000501", actor }),
     );
@@ -6044,8 +5645,6 @@ describe("remote outbox lifecycle", () => {
     expect(createdRequest.event.change.mstar.fields.title).toBe("A captured finding");
     expect(cacheRows(cache.dbPath)).toMatchObject({ localIssues: 0, localCatalog: 0 });
 
-    // invariant: Replaying the same verb with the same id returns the frozen intent (a minted
-    // reference or a recorded time is never re-derived), and a different write under that id refuses.
     const replay = await refusalOf(() =>
       captureIssue(cache.context, capture, { operationId: "00000000-0000-4000-8000-000000000501", actor }),
     );
@@ -6064,7 +5663,6 @@ describe("remote outbox lifecycle", () => {
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
 
-    // invariant: A close appends one transition to the OBSERVED subject, under its observed head.
     const closed = await refusalOf(() =>
       closeIssue(
         cache.context,
@@ -6091,7 +5689,6 @@ describe("remote outbox lifecycle", () => {
       issueRevision: 2,
     });
 
-    // invariant: A milestone write is one project-replace against the observed journal head.
     const milestone = await refusalOf(() =>
       addMilestone(
         cache.context,
@@ -6110,7 +5707,6 @@ describe("remote outbox lifecycle", () => {
       { name: "Second delivery", status: "planned", ordinal: 1, revision: 1 },
     ]);
 
-    // invariant: An unsupported remote rewrite refuses by name instead of fabricating an event.
     await expect(
       moveIssue(
         cache.context,
@@ -6122,7 +5718,6 @@ describe("remote outbox lifecycle", () => {
     expect(outboxRows(cache.dbPath)).toHaveLength(3);
     expect(cacheRows(cache.dbPath)).toMatchObject({ localIssues: 0, localCatalog: 0, localProjectBindings: 0 });
 
-    // invariant: The pending summaries expose what the host sends, without a permit.
     const pending = await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId);
     expect(pending.intents.map((intent) => [intent.kind, intent.target])).toEqual([
       ["issue-create", null],
@@ -6132,12 +5727,6 @@ describe("remote outbox lifecycle", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: Task 2 review fixes: receipt identity, fork recovery, inspection scope,
-// domain checks before freezing, and the confirmed business result.
-// ---------------------------------------------------------------------------
-
-/** note: One capture request the fixture accepts, varying only by title when a case needs another. */
 function fixtureCapture(title = "A captured finding"): Record<string, unknown> {
   return {
     projectId: SELECTED_PROJECT.localProjectId,
@@ -6158,14 +5747,12 @@ function fixtureCapture(title = "A captured finding"): Record<string, unknown> {
   };
 }
 
-/** note: The frozen request of one recorded operation, as the cache stores it. */
 function frozenOperation(dbPath: string, operationId: string): Record<string, unknown> {
   const row = outboxRows(dbPath).find((entry) => entry.operation_id === operationId);
   if (row === undefined) throw new Error(`operation ${operationId} is not recorded`);
   return JSON.parse(row.request_json) as Record<string, unknown>;
 }
 
-/** note: Re-observe the fixture's whole project after a confirmed effect invalidated its base. */
 async function reobserve(cache: { context: StoreContext; commit: string }, expectRevision: number): Promise<void> {
   await ingestRemoteObservation(
     cache.context,
@@ -6173,21 +5760,18 @@ async function reobserve(cache: { context: StoreContext; commit: string }, expec
   );
 }
 
-/** note: An ordinary write's outbox intent is addressed by its own operation id. */
 function outboxIdFor(dbPath: string, operationId: string): string {
   const row = outboxRows(dbPath).find((entry) => entry.operation_id === operationId);
   if (row === undefined) throw new Error(`no outbox intent is recorded for operation ${operationId}`);
   return row.operation_id;
 }
 
-/** note: The outbox state and evidence of one operation. */
 function outboxStateOf(dbPath: string, operationId: string): string {
   const row = outboxRows(dbPath).find((entry) => entry.operation_id === operationId);
   if (row === undefined) throw new Error(`operation ${operationId} is not recorded`);
   return row.state;
 }
 
-/** note: Rewrite the binding's own verification facts, as an expired or revoked check would. */
 function rewriteVerification(dbPath: string, patch: { verifiedAt?: string; outcome?: Record<string, unknown> }): void {
   const db = new DatabaseSync(dbPath);
   try {
@@ -6219,21 +5803,18 @@ describe("remote outbox review fixes", () => {
     );
     expect(first.code).toBe("remote.effect-pending");
 
-    // invariant: Another verb under the same operation id never replays the milestone request.
     await expect(
       removeMilestone(cache.context, project, "milestone-1", {
         operationId: duplicateId,
         expectedStoreRevision: observationRevision(cache.dbPath),
       }),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: A changed payload under the same id never replays the accepted request.
     await expect(
       addMilestone(cache.context, { projectId: project, name: "Another delivery", effortSessions: null, ordinal: 1 }, {
         operationId: duplicateId,
         expectedStoreRevision: observationRevision(cache.dbPath),
       }),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: The identical request still replays its durable state.
     const replay = await refusalOf(() =>
       addMilestone(cache.context, { projectId: project, name: "First delivery", effortSessions: null, ordinal: 1 }, {
         operationId: duplicateId,
@@ -6243,7 +5824,6 @@ describe("remote outbox review fixes", () => {
     expect(replay.code).toBe("remote.effect-pending");
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
 
-    // invariant: A replacement addressed by another provider id never replays this target.
     const closeId = "00000000-0000-4000-8000-000000000602";
     const closed = await refusalOf(() =>
       closeIssue(
@@ -6279,7 +5859,6 @@ describe("remote outbox review fixes", () => {
     const created = "99999999-9999-4999-8999-999999999999";
     const requestHash = outboxRows(cache.dbPath)[0]!.request_hash;
 
-    // invariant: The journal anchor is never the created issue's identity.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -6292,8 +5871,6 @@ describe("remote outbox review fixes", () => {
       ),
     ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
 
-    // invariant: The genesis event lives in the created issue, so a receipt naming another
-    // immutable record attests no single record and never confirms the create.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -6307,7 +5884,6 @@ describe("remote outbox review fixes", () => {
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
     expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({ state: "unconfirmed", receipts: [] });
 
-    // invariant: The NEW issue identity in the selected scope confirms the exact frozen create.
     const confirmed = await recordRemoteReceipt(
       cache.context,
       receiptInput(cache.commit, operationId, attemptId, requestHash, {
@@ -6320,10 +5896,8 @@ describe("remote outbox review fixes", () => {
     expect(confirmed.state).toBe("confirmed");
     expect(confirmed.confirmed?.identity.issueId).toBe(created);
 
-    // invariant: The identical business replay reports its recorded result, not another refusal.
     const replay = await captureIssue(cache.context, capture, { operationId, actor: "project-manager" });
     expect(replay).toMatchObject({ issueId: created, revision: 1, storeRevision: 0, created: true });
-    // invariant: A different capture under that id is still a conflict, never the recorded result.
     await expect(
       captureIssue(cache.context, fixtureCapture("Another finding") as never, { operationId, actor: "project-manager" }),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
@@ -6335,8 +5909,6 @@ describe("remote outbox review fixes", () => {
     const intent = await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
     const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, operationId));
 
-    // invariant: A lookup cannot prove nothing was sent; the reconciliation document has no such arm
-    // at all, so the structural refusal names the receipt that can record it.
     await expect(
       reconcileRemoteIntent(
         cache.context,
@@ -6358,7 +5930,6 @@ describe("remote outbox review fixes", () => {
       "abandoned",
     );
 
-    // note: A complete fork is the only conflict evidence that is recorded at all.
     const forked = await outboxCache("outbox-conflict-terminal");
     const conflictedId = "00000000-0000-4000-8000-000000000622";
     const conflicted = await prepareRemoteIntent(forked.context, issueIntent(forked.fixture, forked.commit, conflictedId));
@@ -6377,7 +5948,6 @@ describe("remote outbox review fixes", () => {
     const heads = records.map((record) => remoteEventHead(record.event as RemoteEvent)).sort();
     const conflictInput = (outcome: Record<string, unknown>): Record<string, unknown> =>
       receiptInput(forked.commit, conflictedId, forkedAttempt, conflicted.requestHash, outcome);
-    // invariant: Partial, foreign and duplicated evidence is refused instead of stored.
     await expect(
       recordRemoteReceipt(forked.context, conflictInput({ kind: "conflict", expectedHeads: [OBSERVED_ISSUE_HEAD], observedHeads: heads, observedRecords: [] })),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
@@ -6403,7 +5973,6 @@ describe("remote outbox review fixes", () => {
       conflictInput({ kind: "conflict", expectedHeads: [OBSERVED_ISSUE_HEAD], observedHeads: heads, observedRecords: records }),
     );
     expect(recorded.state).toBe("conflict");
-    // invariant: The recorded conflict is terminal: a later exact confirmation never rewrites it.
     await expect(
       recordRemoteReceipt(
         forked.context,
@@ -6426,7 +5995,6 @@ describe("remote outbox review fixes", () => {
     expect(full).toMatchObject({ disclosure: "full", target: JOURNAL_ANCHOR });
     expect(full.event).not.toBeNull();
 
-    // invariant: An expired check withholds the frozen request but never the durable state.
     rewriteVerification(cache.dbPath, { verifiedAt: new Date(Date.now() - 10 * 60_000).toISOString() });
     const expired = await readRemoteIntent(cache.context, operationId);
     expect(expired).toMatchObject({
@@ -6440,7 +6008,6 @@ describe("remote outbox review fixes", () => {
     });
     expect(expired.binding.selectorCommit).toBe(cache.commit);
 
-    // invariant: A denied check discloses the same metadata and refuses a business replay.
     rewriteVerification(cache.dbPath, {
       verifiedAt: new Date().toISOString(),
       outcome: { kind: "denied" },
@@ -6472,12 +6039,9 @@ describe("remote outbox review fixes", () => {
       }),
     );
 
-    // invariant: The pinned previous generation stays inspectable while the selector drains.
     const read = await readRemoteIntent(cache.context, operationId);
     expect(read).toMatchObject({ generation: 3, disclosure: "full", state: "unconfirmed", attemptId });
     expect((await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId)).generation).toBe(3);
-    // invariant: Recovery under the previous binding is admitted; a new prepare and a new
-    // receipt (a send settlement, not recovery) are not.
     const reconciled = await reconcileRemoteIntent(
       cache.context,
       receiptInput(cache.commit, operationId, attemptId, intent.requestHash, { kind: "unconfirmed", reason: "no-response" }),
@@ -6497,7 +6061,6 @@ describe("remote outbox review fixes", () => {
   test("a remote close enforces the observed revision and the open transition", async () => {
     const cache = await outboxCache("outbox-close-checks");
     const actor = "project-manager";
-    // invariant: A missing or stale reviewed revision never freezes against the current subject.
     await expect(
       closeIssue(
         cache.context,
@@ -6516,7 +6079,6 @@ describe("remote outbox review fixes", () => {
         { operationId: "00000000-0000-4000-8000-000000000652", actor, expectedRevision: 7 },
       ),
     ).rejects.toMatchObject({ code: "issue.revision-conflict" });
-    // invariant: A referenced canonical issue must be observed, and never the closing issue itself.
     await expect(
       closeIssue(
         cache.context,
@@ -6532,8 +6094,6 @@ describe("remote outbox review fixes", () => {
   test("milestone gates count the scoped snapshot and enforce referenced milestones", async () => {
     const cache = await outboxCache("outbox-milestone-checks");
     const project = SELECTED_PROJECT.localProjectId;
-    // note: The snapshot's issues are scoped to this project, so a milestone's counts must not
-    // compare the provider project id with the local project key (they differ here).
     const observed = completeSnapshot();
     const withMilestoneIssue = {
       ...observed,
@@ -6562,7 +6122,6 @@ describe("remote outbox review fixes", () => {
         expectedStoreRevision: 0,
       }),
     ).rejects.toMatchObject({ code: "milestone.not-empty" });
-    // invariant: Assigning an unknown milestone refuses before anything is frozen.
     await expect(
       assignIssueMilestone(
         cache.context,
@@ -6609,9 +6168,6 @@ describe("remote outbox review fixes", () => {
       reason: "merge the fork",
       event: resolutionEvent,
     });
-    // note: A SECOND, unrelated conflict of the same binding still blocks the resolution: only
-    // the NAMED fork is exempt. The sibling is forced into the durable conflict state here
-    // because serialized sends cannot otherwise reach two conflicts in one binding.
     const otherId = "00000000-0000-4000-8000-000000000683";
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, otherId));
     const db = new DatabaseSync(cache.dbPath);
@@ -6620,7 +6176,6 @@ describe("remote outbox review fixes", () => {
     } finally {
       db.close();
     }
-    // note: The fork observation is complete and newer, so only the unrelated conflict can refuse the repair.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, heads)),
     ).rejects.toMatchObject({
@@ -6630,7 +6185,6 @@ describe("remote outbox review fixes", () => {
   });
 });
 
-/** note: One execution workflow in the remote fixture's own harness root, bound to one coordinator. */
 async function remoteExecutionWorkflow(cache: {
   context: StoreContext;
 }): Promise<{
@@ -6677,7 +6231,6 @@ async function remoteExecutionWorkflow(cache: {
   };
 }
 
-/** note: The complete snapshot whose marked issue carries one scoped plan link. */
 function linkedSnapshot(planId: string): RemoteSnapshot {
   const snapshot = completeSnapshot();
   return {
@@ -6710,7 +6263,6 @@ function linkedSnapshot(planId: string): RemoteSnapshot {
   };
 }
 
-/** note: The linked snapshot plus one issue whose subject already carries `issueRef` (a create's duplicate). */
 function boundReferenceSnapshot(planId: string, issueRef: string, issueId: string): RemoteSnapshot {
   const snapshot = linkedSnapshot(planId);
   return {
@@ -6737,7 +6289,6 @@ function boundReferenceSnapshot(planId: string, issueRef: string, issueId: strin
   };
 }
 
-/** note: Point one plan row's project bucket at a selected project, as a prepared plan carries it. */
 function setPlanProjectBucket(context: StoreContext, planId: string, projectId: string): void {
   const db = new DatabaseSync(storeDbPath(context));
   try {
@@ -6752,7 +6303,6 @@ function setPlanProjectBucket(context: StoreContext, planId: string, projectId: 
   }
 }
 
-/** note: A residual entry the remote fixture accepts. */
 function residualEntry(occurrenceKey: string): ResidualInput {
   return {
     title: `A residual ${occurrenceKey}`,
@@ -6772,7 +6322,6 @@ function residualEntry(occurrenceKey: string): ResidualInput {
   };
 }
 
-/** note: The reservation key the execution store recorded for one composite operation. */
 function compositeKeyOf(context: StoreContext, operationId: string): {
   executionStoreId: string;
   executionEpoch: number;
@@ -6794,19 +6343,16 @@ function compositeKeyOf(context: StoreContext, operationId: string): {
   }
 }
 
-/** note: The frozen event of one recorded outbox operation. */
 function recordedEvent(dbPath: string, operationId: string): RemoteEvent {
   return frozenOperation(dbPath, operationId).event as RemoteEvent;
 }
 
-/** note: The frozen project document of one recorded project event. */
 function recordedProject(dbPath: string, operationId: string): Record<string, unknown> {
   const change = recordedEvent(dbPath, operationId).change;
   if (change.kind !== "project-replace") throw new Error(`operation ${operationId} is not a project event`);
   return change.project;
 }
 
-/** note: Confirm one dispatched intent against the exact frozen effect it carries. */
 async function confirmIntent(
   cache: { context: StoreContext; commit: string; dbPath: string },
   operationId: string,
@@ -6821,8 +6367,6 @@ async function confirmIntent(
     receiptInput(cache.commit, operationId, attemptId, requestHash, {
       kind: "confirmed",
       identity: { ...providerScope(), issueId: identityIssueId },
-      // note: A create's genesis event lives in the created issue, so its immutable record IS that
-      // issue; every other change appends its own comment record.
       recordId: event.change.kind === "issue-create" ? identityIssueId : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeef",
       event,
     }),
@@ -6843,7 +6387,6 @@ describe("remote composite flows", () => {
       session: workflow.session,
     };
 
-    // invariant: A remote residual-add is admitted through the shared reservation frame.
     const queued = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(queued.code).toBe("collaboration.operation-partial");
     expect(detailsOf(queued)).toMatchObject({ phase: "prepared", operation_id: "residual-remote-add" });
@@ -6858,18 +6401,15 @@ describe("remote composite flows", () => {
     );
     expect(await intentPhases(cache.context, "residual-remote-add")).toEqual(["prepared"]);
 
-    // invariant: An identical replay before confirmation re-serves the reservation, never a second intent.
     const replay = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(replay.code).toBe("collaboration.operation-partial");
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
 
-    // invariant: The confirmed effect then commits ONLY the execution delta.
     await confirmIntent(cache, outboxId, "77777777-7777-4777-8777-777777777777");
     const completed = await residualAddExecutionPlan(execution, request);
     expect(completed.operationId).toBe("residual-remote-add");
     expect(await intentPhases(cache.context, "residual-remote-add")).toEqual(["confirmed"]);
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
-    // invariant: A further replay serves the recorded execution result.
     const served = await residualAddExecutionPlan(execution, request);
     expect(served.replayed).toBe(true);
   });
@@ -6886,8 +6426,6 @@ describe("remote composite flows", () => {
         kind: "residual-close" as const,
         issueId: MSTAR_ISSUE,
         disposition: "resolved" as const,
-        // note: The linked snapshot carries TWO plan links (the fixture's own plus this
-        // plan), so the closure declares the whole acceptance verified.
         evidence: { reason: "fixed", scope: "all", references: ["review-fixture"], alignmentRef: "qa-gate:accepted" },
         expectedIssueRevision: 1,
       },
@@ -6895,9 +6433,6 @@ describe("remote composite flows", () => {
       session: workflow.session,
     };
 
-    // invariant: Only a finding linked to THIS plan is closable remotely. The deterministic
-    // refusal freezes no provider intent and DECLINES the reservation (I-001221), so the
-    // same id never resumes it: a linked close runs under a new operation id below.
     const unlinked = await refusalOf(() => residualCloseExecutionPlan(execution, request));
     expect(unlinked.code).toBe("issue.scope-refused");
     expect(unlinked.message).toContain("not linked to plan");
@@ -6942,8 +6477,6 @@ describe("remote composite flows", () => {
         snapshot: linkedSnapshot(workflow.planId),
       }),
     );
-    // invariant: The admitted revision is re-checked against the OBSERVED subject before freezing,
-    // and the deterministic refusal declines its reservation instead of blocking a corrected retry.
     const stale = await refusalOf(() =>
       residualCloseExecutionPlan(
         { harnessDir: cache.context.harnessDir, caller: workflow.caller },
@@ -7018,7 +6551,6 @@ describe("remote composite flows", () => {
         observedRecords: competing,
       }),
     );
-    // note: The reviewed repair of that fork is withdrawn before it ever confirms.
     const resolutionId = "00000000-0000-4000-8000-000000000a03";
     await prepareRemoteResolution(cache.context, outboxId, {
       operationId: resolutionId,
@@ -7029,9 +6561,6 @@ describe("remote composite flows", () => {
     await abandonRemoteIntent(cache.context, { operationId: resolutionId, reason: "reviewed repair withdrawn" });
     expect(outboxStateOf(cache.dbPath, outboxId)).toBe("conflict");
 
-    // invariant: A withdrawn REPAIR leaves outstanding work behind, not a settled chain: the fork it
-    // withdrew from is still repairable, so the reservation stays prepared and the recovery names the
-    // replacement of THAT fork. Declining here would strand a closure that can still land.
     const pending = await refusalOf(() => residualCloseExecutionPlan(execution, request));
     expect(pending.code).toBe("collaboration.operation-partial");
     const recovery = String(detailsOf(pending).recovery);
@@ -7040,8 +6569,6 @@ describe("remote composite flows", () => {
     expect(pending.message).not.toContain("declined");
     expect(await intentPhases(cache.context, "residual-remote-close-abandoned")).toEqual(["prepared"]);
 
-    // invariant: The named route works end to end: a NEW reviewed replacement of the same fork
-    // confirms, and the ORIGINAL operation id finalizes from that successor.
     const successorId = "00000000-0000-4000-8000-000000000a04";
     const successor = await prepareRemoteResolution(cache.context, outboxId, {
       operationId: successorId,
@@ -7119,8 +6646,6 @@ describe("remote composite flows", () => {
         observedRecords: competing,
       }),
     );
-    // invariant: The reviewed replacement KEEPS the original transition and every history row, but
-    // its merged subject carries the reopening branch's CURRENT disposition.
     const resolutionId = "00000000-0000-4000-8000-000000000c03";
     const fields = frozen.change.mstar.fields as Record<string, unknown>;
     await prepareRemoteResolution(cache.context, outboxId, {
@@ -7148,10 +6673,6 @@ describe("remote composite flows", () => {
       }),
     );
 
-    // invariant: The settlement recorded OPEN, so the closure's business outcome never landed: the
-    // plan effect is not acknowledged, the settled replacement is named as durable, and the
-    // correction route re-freezes against the merged head. (A repair that keeps the requested
-    // disposition still finalizes - see the live-repair case above.)
     const declined = await refusalOf(() => residualCloseExecutionPlan(execution, request));
     expect(declined.code).toBe("remote.effect-mismatch");
     expect(declined.message).toContain(resolutionId);
@@ -7163,8 +6684,6 @@ describe("remote composite flows", () => {
       requested_disposition: "resolved",
       confirmed_disposition: "open",
     });
-    // invariant: The open settlement leaves the issue closable, so the recovery is RUNNABLE: the
-    // operator reads the current revision and retries with it under a new operation id.
     const openRecovery = String(detailsOf(declined).recovery);
     expect(openRecovery).toContain(`outbox-show --harness <abs> --operation ${resolutionId}`);
     expect(openRecovery).toContain(`mstar issue show --id ${FORGED_ISSUE_REF}`);
@@ -7225,8 +6744,6 @@ describe("remote composite flows", () => {
         observedRecords: competing,
       }),
     );
-    // note: The reviewed replacement keeps both branches' history, and its merged subject closes the
-    // issue as DUPLICATE instead of the RESOLVED the closure asked for.
     const resolutionId = "00000000-0000-4000-8000-000000000d03";
     const fields = frozen.change.mstar.fields as Record<string, unknown>;
     await prepareRemoteResolution(cache.context, outboxId, {
@@ -7254,10 +6771,6 @@ describe("remote composite flows", () => {
       }),
     );
 
-    // invariant: The settlement recorded ANOTHER TERMINAL decision. Retrying the closure over it can
-    // never succeed (a closure is admitted only from an open issue), so the recovery states that the
-    // confirmed decision stands and names the only route that makes a further closure admissible: the
-    // deliberate reopen, then a re-observation and a retry with the reopened revision.
     const declined = await refusalOf(() => residualCloseExecutionPlan(execution, request));
     expect(declined.code).toBe("remote.effect-mismatch");
     expect(declined.message).toContain(resolutionId);
@@ -7277,8 +6790,6 @@ describe("remote composite flows", () => {
     expect(terminalRecovery).toContain("mstar schema IssueReopen");
     expect(terminalRecovery).toContain("re-observe the project");
     expect(terminalRecovery).toContain("NEW operation id");
-    // invariant: The unreachable advice is gone: a terminal settlement never points at retrying the
-    // closure over the merged decision.
     expect(terminalRecovery).not.toContain("CURRENT revision");
     expect(terminalRecovery).not.toContain("publishes the reviewed disposition");
     expect(await intentPhases(cache.context, "residual-remote-close-terminal")).toEqual(["declined"]);
@@ -7301,13 +6812,9 @@ describe("remote composite flows", () => {
     const key = compositeKeyOf(cache.context, "residual-remote-mixed");
     const idA = remoteCompositeEntryOperationId(key, 0);
     const idB = remoteCompositeEntryOperationId(key, 1);
-    // note: The provider confirmed the FIRST entry and the operator withdrew the second, so the
-    // batch's settled state is mixed before the composite is reissued under its own id.
     await confirmIntent(cache, idA, "77777777-7777-4777-8777-777777777781");
     await abandonRemoteIntent(cache.context, { operationId: idB, reason: "entry withdrawn by review" });
 
-    // invariant: The settled mixed state is never declined as effect-free: the confirmed
-    // component is named in the terminal receipt, and only the incomplete work is recovered.
     const declined = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(declined.code).toBe("remote.effect-abandoned");
     expect(declined.message).toContain(`provider:${idA}`);
@@ -7319,9 +6826,6 @@ describe("remote composite flows", () => {
       confirmed_components: [`provider:${idA}`],
       abandoned_components: [idB],
     });
-    // invariant: The durability fact names WHICH work is durable and which acknowledgement never
-    // applied; the confirmed provider component is never described as an effect that never landed,
-    // and the corrected request contains only the entries that did not settle.
     const mixedRecovery = String(detailsOf(declined).recovery);
     expect(mixedRecovery).not.toContain("effect was never applied");
     expect(mixedRecovery).toContain("the confirmed components named here are durable and are never re-sent");
@@ -7329,10 +6833,6 @@ describe("remote composite flows", () => {
     expect(mixedRecovery).toContain("ONLY the entries that did not settle");
     expect(await intentPhases(cache.context, "residual-remote-mixed")).toEqual(["declined"]);
 
-    // invariant: The recovery route works: the confirmed receipt invalidated the cached base (and
-    // bumped its revision), so the operator re-observes first, exactly as the retained refusals
-    // name; a NEW operation id whose entries name ONLY the missing residual is then admitted and
-    // freezes exactly one new intent (the confirmed one is never re-sent).
     await reobserve(cache, 2);
     const recovered = await refusalOf(() =>
       residualAddExecutionPlan(execution, {
@@ -7397,7 +6897,6 @@ describe("remote composite flows", () => {
         observedRecords: competing,
       }),
     );
-    // note: The reviewed repair of that fork is ENQUEUED but not yet sent.
     const resolutionId = "00000000-0000-4000-8000-000000000b03";
     await prepareRemoteResolution(cache.context, outboxId, {
       operationId: resolutionId,
@@ -7406,8 +6905,6 @@ describe("remote composite flows", () => {
       event: { ...frozen, operationId: resolutionId, parents: heads },
     });
 
-    // invariant: The composite acts on the LIVE leaf: it names the repair to dispatch with its fork
-    // observation, never a second `outbox-resolve` of the fork the live repair already took over.
     const pending = await refusalOf(() => residualCloseExecutionPlan(execution, request));
     expect(pending.code).toBe("collaboration.operation-partial");
     const recovery = String(detailsOf(pending).recovery);
@@ -7415,8 +6912,6 @@ describe("remote composite flows", () => {
     expect(recovery).not.toContain(`outbox-resolve --harness <abs> --operation ${outboxId}`);
     expect(await intentPhases(cache.context, "residual-remote-close-live")).toEqual(["prepared"]);
 
-    // invariant: Dispatching the linked repair with its fork observation and recording its
-    // confirmation lets the SAME operation id finalize from that repair.
     const repairAttempt = attemptOf(
       await dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, outboxId, heads)),
     );
@@ -7452,8 +6947,6 @@ describe("remote composite flows", () => {
     const key = compositeKeyOf(cache.context, "residual-remote-mixed-unreadable");
     const idA = remoteCompositeEntryOperationId(key, 0);
     const idB = remoteCompositeEntryOperationId(key, 1);
-    // note: The FIRST entry is withdrawn and the LATER one confirmed — whose receipt is then lost,
-    // so its state alone is not a readable receipt.
     await abandonRemoteIntent(cache.context, { operationId: idA, reason: "entry withdrawn by review" });
     await confirmIntent(cache, idB, "77777777-7777-4777-8777-777777777782");
     const db = new DatabaseSync(cache.dbPath);
@@ -7463,8 +6956,6 @@ describe("remote composite flows", () => {
       db.close();
     }
 
-    // invariant: EVERY entry is scanned: the earlier abandonment never authorizes an effect-free
-    // decline while a later confirmed component's receipt is unreadable.
     const kept = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(kept.code).toBe("collaboration.operation-partial");
     expect(detailsOf(kept)).toMatchObject({ cause_code: "collaboration.unreadable" });
@@ -7524,8 +7015,6 @@ describe("remote composite flows", () => {
         observedRecords: competing,
       }),
     );
-    // note: The reviewed repair of that fork is sent, and the provider answers with a SECOND fork,
-    // so the chain's LAST leaf is itself an unresolved conflict.
     const repairId = "00000000-0000-4000-8000-000000000d03";
     const repair = await prepareRemoteResolution(cache.context, outboxId, {
       operationId: repairId,
@@ -7554,8 +7043,6 @@ describe("remote composite flows", () => {
       }),
     );
 
-    // invariant: The LAST leaf is the fork a reviewed successor must address: the original already
-    // links to the repair, so a second `outbox-resolve` of the original is refused.
     const pending = await refusalOf(() => residualCloseExecutionPlan(execution, request));
     expect(pending.code).toBe("collaboration.operation-partial");
     const recovery = String(detailsOf(pending).recovery);
@@ -7563,8 +7050,6 @@ describe("remote composite flows", () => {
     expect(recovery).not.toContain(`outbox-resolve --harness <abs> --operation ${outboxId}`);
     expect(await intentPhases(cache.context, "residual-remote-close-leaf")).toEqual(["prepared"]);
 
-    // invariant: The named route is the working one: a successor of the LEAF fork, dispatched with
-    // that leaf's observation and confirmed, settles the whole chain for this reservation.
     const successorId = "00000000-0000-4000-8000-000000000d06";
     const successor = await prepareRemoteResolution(cache.context, repairId, {
       operationId: successorId,
@@ -7602,8 +7087,6 @@ describe("remote composite flows", () => {
       expected: workflow.planToken,
       session: workflow.session,
     };
-    // note: Entry A freezes; in the scope gap before entry B's freeze a competing durable intent
-    // appears at entry B's own operation id, so the batch stops BEHIND a frozen component.
     let scopes = 0;
     setRemoteWriteScopeGapForTest(async () => {
       scopes += 1;
@@ -7627,8 +7110,6 @@ describe("remote composite flows", () => {
           verb: "residual-add",
           request: {
             planId: workflow.planId,
-            // note: A DIFFERENT business request than this batch's entry B, so both attempts meet
-            // the same durable collision instead of replaying the seeded row.
             input: deriveResidualEntries([residualEntry("partial-b-other")], SELECTED_PROJECT.localProjectId)[0],
           },
         },
@@ -7637,7 +7118,6 @@ describe("remote composite flows", () => {
     const partial = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(partial.code).toBe("collaboration.operation-partial");
     const entryA = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, operationId), 0);
-    // invariant: Entry A is durable provider work, but an unconfirmed one claims no confirmation.
     expect(detailsOf(partial)).toMatchObject({
       phase: "prepared",
       confirmed_components: [],
@@ -7650,8 +7130,6 @@ describe("remote composite flows", () => {
     expect(unconfirmedRecovery).not.toContain("Nothing was applied");
     expect(await intentPhases(cache.context, operationId)).toEqual(["prepared"]);
 
-    // invariant: A confirmed component WITH its readable receipt is named durable work that is
-    // never re-sent, never an operation whose effect was not applied.
     await confirmIntent(cache, entryA, "77777777-7777-4777-8777-777777777784");
     const confirmedPartial = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(confirmedPartial.code).toBe("collaboration.operation-partial");
@@ -7664,8 +7142,6 @@ describe("remote composite flows", () => {
     expect(confirmedRecovery).toContain("execution acknowledgement was not applied");
     expect(confirmedRecovery).not.toContain("Nothing was applied");
 
-    // invariant: A `confirmed` state whose receipt cannot be read proves nothing, so the same
-    // refusal stops naming it as a confirmed component.
     const db = new DatabaseSync(cache.dbPath);
     try {
       db.prepare("delete from remote_outbox_receipts where operation_id = ? and outcome = 'confirmed'").run(entryA);
@@ -7681,8 +7157,6 @@ describe("remote composite flows", () => {
   test("a first-entry deterministic refusal declines its reservation so a corrected same-plan retry proceeds", async () => {
     const cache = await outboxCache("composite-entry-zero-decline");
     const workflow = await remoteExecutionWorkflow(cache);
-    // why: The plan bucket names a project the checked selector does not select, so entry zero
-    // refuses deterministically BEFORE any provider intent is frozen.
     setPlanProjectBucket(cache.context, workflow.planId, "project-not-selected");
     const execution = { harnessDir: cache.context.harnessDir, caller: workflow.caller };
     const request = {
@@ -7697,7 +7171,6 @@ describe("remote composite flows", () => {
     expect(outboxRows(cache.dbPath)).toEqual([]);
     expect(await intentPhases(cache.context, "residual-entry-zero")).toEqual(["declined"]);
 
-    // invariant: The corrected request under a new id on the SAME plan proceeds and freezes.
     setPlanProjectBucket(cache.context, workflow.planId, SELECTED_PROJECT.localProjectId);
     const corrected = await refusalOf(() =>
       residualAddExecutionPlan(execution, { ...request, operationId: "residual-entry-zero-corrected" }),
@@ -7727,20 +7200,12 @@ describe("remote composite flows", () => {
       expected: workflow.planToken,
       session: workflow.session,
     };
-    // note: The bounded overlap of two identical same-ID calls: the loser passes replay admission
-    // (no outbox row yet), and the WINNER freezes the entry's intent inside the loser's sampled
-    // gap. The loser's independently built event carries a different request hash, so its freeze
-    // meets `remote.operation-conflict` at entry zero — the one refusal that must NEVER release
-    // the shared reservation, because the winner's outbox row is already durable.
     let overlapped = false;
     setRemoteWriteScopeGapForTest(async () => {
       if (overlapped) return;
       overlapped = true;
       setRemoteWriteScopeGapForTest(undefined);
       const entryId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "residual-remote-overlap"), 0);
-      // note: The winner's event is the SAME create arm, derived reference, execution reservation
-      // and business origin with DIFFERENT subject content — exactly what two independent builds
-      // of one request produce (fresh event material, same admitted identity).
       await prepareRemoteIntent(cache.context, {
         binding: intentBindingFor(cache.commit),
         event: {
@@ -7765,9 +7230,6 @@ describe("remote composite flows", () => {
     });
     const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(overlapped).toBe(true);
-    // invariant: A deterministic refusal is only a decline when it PROVES the failure happened
-    // before any freeze. `remote.operation-conflict` proves the opposite — the operation id
-    // already holds a durable intent — so the reservation stays prepared and resumable.
     expect(refused.code).toBe("collaboration.operation-partial");
     expect(detailsOf(refused)).toMatchObject({ phase: "prepared", operation_id: "residual-remote-overlap" });
     expect(String(detailsOf(refused).recovery)).toContain("SAME");
@@ -7776,8 +7238,6 @@ describe("remote composite flows", () => {
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
     expect(outboxStateOf(cache.dbPath, entryId)).toBe("enqueued");
 
-    // invariant: The reservation is genuinely resumable: settling the winner's intent and
-    // reissuing the SAME operation id finalizes from that intent, never a second freeze.
     await confirmIntent(cache, entryId, "77777777-7777-4777-8777-777777777783");
     const completed = await residualAddExecutionPlan(execution, request);
     expect(completed.operationId).toBe("residual-remote-overlap");
@@ -7797,12 +7257,6 @@ describe("remote composite flows", () => {
       expected: workflow.planToken,
       session: workflow.session,
     };
-    // note: The bounded overlap of the OTHER branch: the loser passes replay admission (no outbox
-    // row yet), and the winner freezes, dispatches and CONFIRMS the same id inside the loser's
-    // replay-admission gap, then a refresh installs the winner's settled outcome. The loser's
-    // create path now refuses deterministically (`remote.scope-mismatch`) from a fresh sample,
-    // before its own outbox transaction — an error that carries no durable-intent tag, so only
-    // a re-read at the freeze/decline boundary can prove the winner's row.
     let overlapped = false;
     setRemoteReplayAdmissionGapForTest(async () => {
       if (overlapped) return;
@@ -7848,15 +7302,11 @@ describe("remote composite flows", () => {
     expect(refused.message).toContain("already holds a durable intent");
     expect(detailsOf(refused)).toMatchObject({ phase: "prepared", operation_id: "decline-proof" });
     expect(String(detailsOf(refused).recovery)).toContain("SAME");
-    // invariant: The reservation is never declined on a refusal that cannot prove absence at the
-    // freeze/decline boundary: the winner's settled intent keeps its reservation prepared.
     expect(await intentPhases(cache.context, "decline-proof")).toEqual(["prepared"]);
     const entryId = remoteCompositeEntryOperationId(compositeKeyOf(cache.context, "decline-proof"), 0);
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
     expect(outboxStateOf(cache.dbPath, entryId)).toBe("confirmed");
 
-    // invariant: The reservation is genuinely resumable: reissuing the SAME operation id replays
-    // the winner's confirmed intent and finalizes the execution delta, never a second freeze.
     const completed = await residualAddExecutionPlan(execution, request);
     expect(completed.operationId).toBe("decline-proof");
     expect(await intentPhases(cache.context, "decline-proof")).toEqual(["confirmed"]);
@@ -7881,8 +7331,6 @@ describe("remote composite flows", () => {
       operationId: "decline-lane-gap",
     };
     const entryId = remoteCompositeEntryOperationId(key, 0);
-    // note: The derived reference is already bound in the observed project, so this attempt refuses
-    // deterministically BEFORE any provider intent is frozen.
     await ingestRemoteObservation(
       cache.context,
       observation(positiveCheck(), {
@@ -7892,9 +7340,6 @@ describe("remote composite flows", () => {
         snapshot: boundReferenceSnapshot(workflow.planId, issueRefForOperation(entryId), "88888888-8888-4888-8888-888888888883"),
       }),
     );
-    // note: The bounded overlap of the empty-check-to-decline gap: a same-id freeze is STARTED
-    // between the fenced lane's absence check and the durable decline. It cannot run until the lane
-    // is released, and must then prove the decline instead of inserting under it.
     let freeze: Promise<unknown> | undefined;
     setCompositeDeclineGapForTest(async () => {
       if (freeze !== undefined) return;
@@ -7923,16 +7368,11 @@ describe("remote composite flows", () => {
         () => "frozen",
         (error: unknown) => error,
       );
-      // note: The attempt is awaited INSIDE the gap: the held lane (and its bounded wait) is what
-      // stops it, so an unsynchronized decline lets it land before the reservation is released.
       await freeze;
     });
     const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(freeze).toBeDefined();
     const frozen = await freeze!;
-    // invariant: The decline won the lane; the freeze that was started in the gap cannot land under
-    // it (it is blocked by the lane, or proves the decline once the lane is released). Either way
-    // no durable intent exists under the released reservation.
     expect(frozen).not.toBe("frozen");
     expect(refused.code).toBe("remote.scope-mismatch");
     expect(await intentPhases(cache.context, "decline-lane-gap")).toEqual(["declined"]);
@@ -7966,9 +7406,6 @@ describe("remote composite flows", () => {
       operationId: "frozen-after-decline",
     };
     const entryId = remoteCompositeEntryOperationId(key, 0);
-    // note: The bounded overlap: the second attempt is already admitted when it reaches its
-    // freeze, and a same-ID sibling declines the reservation inside that gap. The freeze must see
-    // the durable decline in the SAME lane instead of enqueuing an intent it can never finalize.
     let overlapped = false;
     setRemoteReplayAdmissionGapForTest(async () => {
       if (overlapped) return;
@@ -8002,11 +7439,8 @@ describe("remote composite flows", () => {
         cache.context,
         observation(positiveCheck(), { selectorCommit: cache.commit, generation: 3, expectRevision: 2, snapshot: bound }),
       );
-      // note: The sibling's create refuses deterministically against the bound reference and
-      // declines the SHARED reservation (no provider row exists yet).
       const declined = await refusalOf(() => residualAddExecutionPlan(execution, request));
       expect(declined.code).toBe("remote.scope-mismatch");
-      // note: Restoring the unbound base lets this attempt reach its own freeze after the decline.
       await ingestRemoteObservation(
         cache.context,
         observation(positiveCheck(), {
@@ -8019,15 +7453,12 @@ describe("remote composite flows", () => {
     });
     const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(overlapped).toBe(true);
-    // invariant: The freeze proves the reservation's declined phase inside the freeze lane and
-    // refuses; no durable intent is left under the released reservation.
     expect(refused.code).toBe("collaboration.operation-partial");
     expect(detailsOf(refused)).toMatchObject({ phase: "declined", operation_id: "frozen-after-decline" });
     expect(String(detailsOf(refused).recovery)).toContain("SAME --operation id");
     expect(await intentPhases(cache.context, "frozen-after-decline")).toEqual(["declined"]);
     expect(outboxRows(cache.dbPath)).toEqual([]);
 
-    // invariant: A next same-ID attempt replays the recorded decline instead of freezing.
     const replay = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(replay.code).toBe("remote.scope-mismatch");
     expect(await intentPhases(cache.context, "frozen-after-decline")).toEqual(["declined"]);
@@ -8065,8 +7496,6 @@ describe("remote composite flows", () => {
     expect(queued.code).toBe("collaboration.operation-partial");
     const outboxId = remoteCompositeOperationId(compositeKeyOf(cache.context, "residual-frozen-perm"));
 
-    // note: The access check expires while the row is frozen: replaying the verb fails through the
-    // replay disclosure gate, which is an environment state, never a decision about the request.
     const db = new DatabaseSync(cache.dbPath);
     try {
       db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
@@ -8079,8 +7508,6 @@ describe("remote composite flows", () => {
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
     expect(await intentPhases(cache.context, "residual-frozen-perm")).toEqual(["prepared"]);
 
-    // invariant: `remote observe` restores the read permission, and the SAME id resumes: the
-    // settled intent confirms and only the execution delta is committed.
     await ingestRemoteObservation(
       cache.context,
       observation(positiveCheck(), {
@@ -8130,7 +7557,6 @@ describe("remote composite flows", () => {
     };
     const execution = { harnessDir: cache.context.harnessDir, caller };
 
-    // invariant: The reviewed delta is one project-replace intent, not a local catalog write.
     const queued = await refusalOf(() => commitExecutionRegistration(execution, request));
     expect(queued.code).toBe("collaboration.operation-partial");
     expect(detailsOf(queued)).toMatchObject({ phase: "prepared", operation_id: "registration-remote-1" });
@@ -8139,7 +7565,6 @@ describe("remote composite flows", () => {
     expect(recordedProject(cache.dbPath, outboxId).catalogEntities).toContainEqual(
       expect.objectContaining({ kind: "plan", id: planId, lifecycle: "active", revision: 1 }),
     );
-    // note: A second registration of the same document conflicts on the observed duplicate.
     await expect(commitExecutionRegistration(execution, { ...request, operationId: "registration-remote-2", expected: (await readExecutionState(cache.context)).token })).rejects.toMatchObject({
       code: "collaboration.operation-partial",
     });
@@ -8156,14 +7581,11 @@ describe("remote execution-import flow", () => {
     const cache = await outboxCache("composite-import");
     (await initializeStore(cache.context)).close();
     const request = { context: cache.context, operator: "operator-one", operationId: "import-remote-1" };
-    // invariant: The import moves execution state only; its remote collaboration half is the
-    // verified active lane, so it reserves, finalizes and records NO provider intent.
     const result = await importExecutionMinimal(request);
     expect(result.verdict).toBe("upgraded");
     expect(result.imported).toBe(0);
     expect(outboxRows(cache.dbPath)).toEqual([]);
     expect(await intentPhases(cache.context, "import-remote-1")).toEqual(["confirmed"]);
-    // invariant: A replay serves the recorded result without a second reservation.
     const replay = await importExecutionMinimal(request);
     expect(replay).toEqual(result);
     expect(await intentPhases(cache.context, "import-remote-1")).toEqual(["confirmed"]);
@@ -8175,7 +7597,6 @@ describe("remote confirmed business results", () => {
     const cache = await outboxCache("outbox-confirmed-results");
     const project = SELECTED_PROJECT.localProjectId;
 
-    // note: One milestone add, confirmed, then replayed by its own verb.
     const milestoneId = "00000000-0000-4000-8000-000000000a11";
     const milestoneMutation = { operationId: milestoneId, expectedStoreRevision: observationRevision(cache.dbPath) };
     await expect(
@@ -8191,7 +7612,6 @@ describe("remote confirmed business results", () => {
     expect(milestone).toMatchObject({ projectId: project, storeRevision: 0, changed: true });
     expect(milestone.revision).toBe(1);
 
-    // note: A confirmed effect invalidates the read base, so the next write re-observes first.
     await reobserve(cache, 2);
 
     // see packages/engine/src/collaboration-store.test.ts - // note: One milestone update, confirmed, then replayed by its own verb.
@@ -8207,7 +7627,6 @@ describe("remote confirmed business results", () => {
 
     await reobserve(cache, 4);
 
-    // note: One portable catalog registration, confirmed, then replayed by its own verb.
     const catalogId = "00000000-0000-4000-8000-000000000a13";
     const entity = {
       kind: "document" as const,
@@ -8231,13 +7650,6 @@ describe("remote confirmed business results", () => {
   });
 });
 
-// ---------------------------------------------------------------------------
-// note: Task 2 re-review: fork recovery ordering and freshness, digest-bound
-// conflict evidence, business-verb replay identity, occurrence idempotency,
-// multi-entry composites and the recorded milestone result.
-// ---------------------------------------------------------------------------
-
-/** note: The observation revision the fixture cache currently holds. */
 function observationRevision(dbPath: string): number {
   const db = new DatabaseSync(dbPath);
   try {
@@ -8251,7 +7663,6 @@ function observationRevision(dbPath: string): number {
   }
 }
 
-/** note: The durable time the fixture's conflict evidence was recorded. */
 function conflictRecordedAt(dbPath: string, operationId: string): string {
   const db = new DatabaseSync(dbPath);
   try {
@@ -8268,7 +7679,6 @@ function conflictRecordedAt(dbPath: string, operationId: string): string {
   }
 }
 
-/** note: The immutable records the fixture's conflict evidence bound to each fork digest. */
 function recordedConflictRecords(
   dbPath: string,
   operationId: string,
@@ -8295,7 +7705,6 @@ function recordedConflictRecords(
   }
 }
 
-/** note: The host-attested fork observation a reviewed resolution is dispatched with. */
 function forkObservationFor(
   cache: { commit: string; dbPath: string },
   conflictOperationId: string,
@@ -8309,7 +7718,6 @@ function forkObservationFor(
     generation: 3,
     projectId: SELECTED_PROJECT.localProjectId,
     conflictOperationId,
-    // note: Strictly after the conflict evidence, as a traversal started after it would be.
     asOf: new Date(Date.parse(conflictRecordedAt(cache.dbPath, conflictOperationId)) + 1_000).toISOString(),
     coverage: "complete",
     heads: [...heads].sort().map((head, index) => {
@@ -8324,7 +7732,6 @@ function forkObservationFor(
   } as ForkObservation;
 }
 
-/** note: The competing journal records behind one fork, with the digest each one's head carries. */
 function journalFork(fixture: { repoKey: string }): { heads: string[]; records: Array<Record<string, unknown>> } {
   const records = ["00000000-0000-4000-8000-0000000009d1", "00000000-0000-4000-8000-0000000009d2"].map(
     (operationId, index) => ({
@@ -8336,7 +7743,6 @@ function journalFork(fixture: { repoKey: string }): { heads: string[]; records: 
   return { records, heads: records.map((record) => remoteEventHead(record.event as RemoteEvent)).sort() };
 }
 
-/** note: One conflicted journal intent together with the fork evidence it recorded. */
 async function conflictedJournal(
   cache: { fixture: { repoKey: string }; commit: string; context: StoreContext; dbPath: string },
   operationId: string,
@@ -8356,7 +7762,6 @@ async function conflictedJournal(
   return { ...fork, requestHash: intent.requestHash };
 }
 
-/** note: Re-observe the fixture project with its journal head replaced by the named heads. */
 async function observeHead(
   cache: { context: StoreContext; commit: string; dbPath: string },
   head: readonly string[],
@@ -8378,7 +7783,6 @@ describe("remote outbox re-review", () => {
     const cache = await outboxCache("outbox-resolve-order");
     const conflictedId = "00000000-0000-4000-8000-000000000711";
     const fork = await conflictedJournal(cache, conflictedId);
-    // note: The ordinary intent is enqueued BEFORE the repair, which strict FIFO would deadlock.
     const queuedId = "00000000-0000-4000-8000-000000000712";
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, queuedId));
     const resolutionId = "00000000-0000-4000-8000-000000000713";
@@ -8388,8 +7792,6 @@ describe("remote outbox re-review", () => {
       reason: "merge the fork",
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
-    // invariant: The intent ahead of the repair is stale, which is never a reason to hold the repair;
-    // until that repair is confirmed, the recorded conflict keeps blocking ordinary sends.
     await expect(dispatchRemoteIntent(cache.context, queuedId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
@@ -8407,14 +7809,11 @@ describe("remote outbox re-review", () => {
         event: recordedEvent(cache.dbPath, resolutionId),
       }),
     );
-    // invariant: The original stays conflicted, yet it no longer blocks an unrelated send once the
-    // stale intent ahead of the repair is explicitly abandoned.
     expect(await readRemoteIntent(cache.context, conflictedId)).toMatchObject({
       state: "conflict",
       resolvedBy: resolutionId,
     });
     await abandonRemoteIntent(cache.context, { operationId: queuedId, reason: "superseded by the reviewed resolution" });
-    // note: The merge writes one new head; the fork's competing heads are no longer current.
     const nextHead = [remoteEventHead(recordedEvent(cache.dbPath, resolutionId))];
     await observeHead(cache, nextHead);
     const nextId = "00000000-0000-4000-8000-000000000714";
@@ -8440,13 +7839,10 @@ describe("remote outbox re-review", () => {
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
     const complete = forkObservationFor(cache, conflictedId, fork.heads);
-    // invariant: The recorded fork evidence alone never sends: the host must observe it.
     await expect(dispatchRemoteIntent(cache.context, resolutionId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       message: expect.stringContaining("no ForkObservation"),
     });
-    // invariant: A traversal that began at or before the conflict evidence proves nothing, however
-    // exactly its heads match. This is the stale matching snapshot the old cache rule admitted.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, {
         ...complete,
@@ -8456,14 +7852,12 @@ describe("remote outbox re-review", () => {
       code: "remote.dispatch-refused",
       message: expect.stringContaining("at or before the conflict evidence"),
     });
-    // invariant: A partial traversal is not fork evidence, even when its heads match.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, { ...complete, coverage: "partial" }),
     ).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       message: expect.stringContaining("complete traversal"),
     });
-    // invariant: One immutable record id never stands for two heads.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, {
         ...complete,
@@ -8476,7 +7870,6 @@ describe("remote outbox re-review", () => {
       code: "remote.dispatch-refused",
       message: expect.stringContaining("record id"),
     });
-    // invariant: Heads that are not the recorded fork digests never issue a permit.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, {
         ...complete,
@@ -8486,7 +7879,6 @@ describe("remote outbox re-review", () => {
       code: "remote.dispatch-refused",
       message: expect.stringContaining("exactly the fork heads"),
     });
-    // invariant: None of those refusals consumed the intent, and complete fresh evidence sends once.
     expect(outboxStateOf(cache.dbPath, resolutionId)).toBe("enqueued");
     expect(await dispatchRemoteIntent(cache.context, resolutionId, complete)).toMatchObject({
       kind: "permit",
@@ -8513,21 +7905,17 @@ describe("remote outbox re-review", () => {
       reason: "merge the fork",
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
-    // invariant: A merely enqueued resolution leaves its conflict blocking every ordinary send.
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
-    // invariant: Only the repair's own dispatch is exempt from that conflict.
     expect(
       (await dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, fork.heads))).kind,
     ).toBe("permit");
-    // invariant: While the repair is in flight, the recorded conflict still blocks ordinary sends.
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
-    // invariant: Confirming the repair is what opens the queue; the send still needs a current base.
     const read = await readRemoteIntent(cache.context, resolutionId);
     await recordRemoteReceipt(
       cache.context,
@@ -8538,15 +7926,11 @@ describe("remote outbox re-review", () => {
         event: recordedEvent(cache.dbPath, resolutionId),
       }),
     );
-    // invariant: A confirmed repair with a refresh still showing the competing heads is not a
-    // merge, so the recorded conflict keeps blocking ordinary sends.
     await observeHead(cache, fork.heads);
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
-    // invariant: The merged observation carries one new head, so the queue opens; the intent
-    // frozen on the fork's competing heads is stale and never receives a permit.
     const mergedHead = [remoteEventHead(recordedEvent(cache.dbPath, resolutionId))];
     await observeHead(cache, mergedHead);
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
@@ -8623,7 +8007,6 @@ describe("remote outbox re-review", () => {
       event: { ...issueEvent(cache.fixture, resolutionId), parents: heads },
     });
     const complete = forkObservationFor(cache, conflictedId, heads);
-    // invariant: Matching digests under other immutable records never prove the recorded fork.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, {
         ...complete,
@@ -8636,7 +8019,6 @@ describe("remote outbox re-review", () => {
       code: "remote.dispatch-refused",
       message: expect.stringContaining("immutable record"),
     });
-    // invariant: The same record under another portable issue is a fork of another issue.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, {
         ...complete,
@@ -8646,7 +8028,6 @@ describe("remote outbox re-review", () => {
       code: "remote.dispatch-refused",
       message: expect.stringContaining("portable issue"),
     });
-    // invariant: Neither refusal consumed the one permit; the exact recorded records send once.
     expect(outboxStateOf(cache.dbPath, resolutionId)).toBe("enqueued");
     expect((await dispatchRemoteIntent(cache.context, resolutionId, complete)).kind).toBe("permit");
   }, 30_000);
@@ -8663,15 +8044,12 @@ describe("remote outbox re-review", () => {
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
     const evidence = forkObservationFor(cache, conflictedId, fork.heads);
-    // invariant: Matching fork heads at the pre-conflict time are exactly the stale snapshot that
-    // must not send; the same heads observed after the conflict are what admit it.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, {
         ...evidence,
         asOf: new Date(Date.parse(conflictRecordedAt(cache.dbPath, conflictedId)) - 1_000).toISOString(),
       }),
     ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
-    // invariant: The permit binds the observation's generation, revision and traversal start.
     expect(await dispatchRemoteIntent(cache.context, resolutionId, evidence)).toMatchObject({
       kind: "permit",
       permit: {
@@ -8694,7 +8072,6 @@ describe("remote outbox re-review", () => {
         expectedStoreRevision: observationRevision(cache.dbPath),
       }),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
-    // invariant: The identical guard replays the frozen intent instead of freezing another.
     await expect(
       updateMilestone(cache.context, project, "milestone-1", { name: "First delivery" }, {
         operationId: milestoneOperation,
@@ -8702,7 +8079,6 @@ describe("remote outbox re-review", () => {
       }),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
-    // invariant: A changed expected store revision is a different request under the same id.
     await expect(
       updateMilestone(cache.context, project, "milestone-1", { name: "First delivery" }, {
         operationId: milestoneOperation,
@@ -8730,7 +8106,6 @@ describe("remote outbox re-review", () => {
         expectedRevision: 1,
       }),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
-    // invariant: A changed expected issue revision is a different request under the same id.
     await expect(
       appendOccurrence(cache.context, FORGED_ISSUE_REF, occurrence, {
         operationId: occurrenceOperation,
@@ -8748,7 +8123,6 @@ describe("remote outbox re-review", () => {
     const fork = journalFork(cache.fixture);
     const conflictReceipt = (outcome: Record<string, unknown>): Record<string, unknown> =>
       receiptInput(cache.commit, conflictedId, attemptId, intent.requestHash, { kind: "conflict", ...outcome });
-    // invariant: Heads that do not digest the records they name are refused.
     await expect(
       recordRemoteReceipt(
         cache.context,
@@ -8759,7 +8133,6 @@ describe("remote outbox re-review", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: One immutable record never stands for two heads.
     const reused = [fork.records[0]!, { ...fork.records[1]!, recordId: fork.records[0]!.recordId }];
     await expect(
       recordRemoteReceipt(
@@ -8771,7 +8144,6 @@ describe("remote outbox re-review", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: A record of another scope is never accepted as this fork.
     const foreign = [{ ...fork.records[0]!, identity: { ...providerScope(), issueId: MSTAR_ISSUE } }, fork.records[1]!];
     await expect(
       recordRemoteReceipt(
@@ -8783,7 +8155,6 @@ describe("remote outbox re-review", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "remote.scope-mismatch" });
-    // invariant: A refused record settles nothing.
     expect(await readRemoteIntent(cache.context, conflictedId)).toMatchObject({ state: "unconfirmed", receipts: [] });
   });
 
@@ -8796,7 +8167,6 @@ describe("remote outbox re-review", () => {
       updateMilestone(cache.context, project, "milestone-1", { name: "First delivery" }, mutation),
     ).rejects.toMatchObject({ code: "remote.effect-pending" });
     await confirmIntent(cache, outboxIdFor(cache.dbPath, operationId), JOURNAL_ANCHOR);
-    // invariant: A no-op update reports the RECORDED result: no change, its own revision.
     expect(await updateMilestone(cache.context, project, "milestone-1", { name: "First delivery" }, mutation)).toEqual({
       projectId: project,
       milestoneId: "milestone-1",
@@ -8804,12 +8174,9 @@ describe("remote outbox re-review", () => {
       storeRevision: 0,
       changed: false,
     });
-    // invariant: Another payload under the same id is a conflict, not a replay.
     await expect(
       updateMilestone(cache.context, project, "milestone-1", { name: "Renamed" }, mutation),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: Another VERB under the same id never replays, even though the observed document
-    // already satisfies what its old final-document predicate looked for.
     await expect(removeMilestone(cache.context, project, "milestone-1", mutation)).rejects.toMatchObject({
       code: "remote.operation-conflict",
     });
@@ -8831,7 +8198,6 @@ describe("remote outbox re-review", () => {
       storeRevision: 0,
       changed: true,
     });
-    // invariant: The confirmed document really dropped the row.
     expect(recordedProject(cache.dbPath, outboxIdFor(cache.dbPath, operationId)).milestones).toEqual([]);
   });
 
@@ -8849,8 +8215,6 @@ describe("remote outbox re-review", () => {
       evidence: ["review-fixture"],
       discoveredAt: "2026-11-20T00:00:00.000Z",
     };
-    // invariant: The observed authority already carries this observation: nothing is frozen, and
-    // the established receipt names the occurrence's own frozen identity.
     expect(
       await appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, {
         operationId: "00000000-0000-4000-8000-000000000761",
@@ -8865,8 +8229,6 @@ describe("remote outbox re-review", () => {
       created: false,
     });
     expect(outboxRows(cache.dbPath).map((row) => row.state)).toEqual(["abandoned"]);
-    // invariant: The concurrency guard runs before the no-change answer: a stale or missing
-    // revision never receives the established success.
     await expect(
       appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, {
         operationId: "00000000-0000-4000-8000-000000000764",
@@ -8880,7 +8242,6 @@ describe("remote outbox re-review", () => {
         actor,
       }),
     ).rejects.toMatchObject({ code: "issue.revision-conflict" });
-    // invariant: The same key with another observation is a conflict, never a second history row.
     await expect(
       appendOccurrence(
         cache.context,
@@ -8890,7 +8251,6 @@ describe("remote outbox re-review", () => {
       ),
     ).rejects.toMatchObject({ code: "issue.occurrence-conflict" });
     expect(outboxRows(cache.dbPath).map((row) => row.state)).toEqual(["abandoned"]);
-    // invariant: A new observation of the same issue still freezes exactly one intent.
     await expect(
       appendOccurrence(
         cache.context,
@@ -8916,9 +8276,6 @@ describe("remote outbox re-review", () => {
       evidence: ["review-fixture"],
       discoveredAt: "2026-11-20T00:00:00.000Z",
     };
-    // note: The observed history also carries an imported occurrence whose dedup key was never
-    // resolved. It is provider evidence an observation serves, but it is never replacement content:
-    // freezing it would persist a dedup the issue domain refuses.
     const check = positiveCheck();
     const base = completeSnapshot(check);
     const native = base.issues[0]!;
@@ -8956,8 +8313,6 @@ describe("remote outbox re-review", () => {
       created: false,
     };
     expect(await appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, mutation)).toEqual(receipt);
-    // invariant: The claim records the replay identity and the receipt, never the observed subject
-    // as a provider event: the history it carries is not replacement content.
     const [claimed] = outboxRows(cache.dbPath);
     const claim = JSON.parse(String(claimed?.request_json)) as Record<string, unknown>;
     expect(claim).not.toHaveProperty("event");
@@ -8968,8 +8323,6 @@ describe("remote outbox re-review", () => {
       target: MSTAR_ISSUE,
       result: { noChange: receipt },
     });
-    // invariant: The SAME request under the SAME id replays the recorded receipt, and a different
-    // payload under that id still refuses.
     expect(await appendOccurrence(cache.context, FORGED_ISSUE_REF, observedOccurrence, mutation)).toEqual(receipt);
     await expect(
       appendOccurrence(
@@ -8979,8 +8332,6 @@ describe("remote outbox re-review", () => {
         mutation,
       ),
     ).rejects.toMatchObject({ code: "remote.operation-conflict" });
-    // invariant: Inspection and the pending list stay readable: the claim is a durable abandoned row
-    // with its identity disclosed, never an unreadable frozen request.
     expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
       state: "abandoned",
       disclosure: "full",
@@ -8991,8 +8342,6 @@ describe("remote outbox re-review", () => {
       receipts: [],
     });
     expect((await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId)).intents).toEqual([]);
-    // invariant: A claim was never dispatched, so no lifecycle verb acts on it: each names the claim
-    // instead of reporting the row unreadable.
     await expect(dispatchRemoteIntent(cache.context, operationId)).rejects.toMatchObject({ code: "remote.dispatch-refused" });
     await expect(abandonRemoteIntent(cache.context, { operationId, reason: "retire the claim" })).rejects.toMatchObject({
       code: "remote.dispatch-refused",
@@ -9016,12 +8365,9 @@ describe("remote outbox re-review", () => {
     const key = { executionStoreId: workflow.storeId, executionEpoch: workflow.epoch, operationId };
     const firstEntry = remoteCompositeEntryOperationId(key, 0);
     const secondEntry = remoteCompositeEntryOperationId(key, 1);
-    // note: The second entry's provider id is already taken by another request, so preparing it
-    // fails AFTER the first entry is durable.
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, secondEntry));
     const refused = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(refused.code).toBe("collaboration.operation-partial");
-    // invariant: The refusal names the durable entry instead of claiming nothing was frozen.
     expect(detailsOf(refused)).toMatchObject({
       phase: "prepared",
       frozen_components: [firstEntry],
@@ -9029,7 +8375,6 @@ describe("remote outbox re-review", () => {
       cause_code: "remote.operation-conflict",
     });
     expect(outboxStateOf(cache.dbPath, firstEntry)).toBe("enqueued");
-    // invariant: The retry reuses the durable entry instead of minting a second identity.
     const retried = await refusalOf(() => residualAddExecutionPlan(execution, request));
     expect(detailsOf(retried).frozen_components).toEqual([firstEntry]);
     expect(outboxRows(cache.dbPath)).toHaveLength(2);
@@ -9071,10 +8416,8 @@ describe("remote outbox re-review", () => {
         await prepareRemoteIntent(context, issueIntent(cache.fixture, cache.commit, second)),
       ],
     };
-    // invariant: A pending entry is reported with every durable component, never as "none".
     const queued = await refusalOf(() => runCollaborationComposite(cache.context, intent, effects));
     expect(detailsOf(queued)).toMatchObject({ frozen_components: [first, second], confirmed_components: [] });
-    // note: Both provider effects confirm, the second after the base moved; then ONE finalization.
     await confirmIntent(cache, first, MSTAR_ISSUE);
     await reobserve(cache, observationRevision(cache.dbPath));
     await confirmIntent(cache, second, MSTAR_ISSUE);
@@ -9090,13 +8433,6 @@ describe("remote outbox re-review", () => {
   }, 30_000);
 });
 
-// ---------------------------------------------------------------------------
-// note: Plan-2 QC fix wave: abandoned-resolution recovery, same-subject merges,
-// admitted-lane disclosure, two-clock freshness, adoption replay, composite
-// acknowledgement framing, the observed-base guard and lookup availability.
-// ---------------------------------------------------------------------------
-
-/** note: A raw event the contract's own validators judge; a fixture, not a typed producer. */
 function shapedEvent(
   cache: { fixture: { repoKey: string } },
   operationId: string,
@@ -9125,11 +8461,8 @@ describe("remote outbox qc fixes", () => {
       reason: "merge the fork",
       event: journalEvent(cache.fixture, resolutionId, fork.heads),
     });
-    // note: The reviewed repair is fully dispatchable while the scope is verified.
     expect(await readRemoteIntent(cache.context, resolutionId)).toMatchObject({ disclosure: "full" });
 
-    // note: The host's check verifies, but its snapshot carries a portable field the cache
-    // cannot keep, so the decoder refuses the observation by name and invalidates the cache.
     const check = positiveCheck();
     const base = completeSnapshot(check);
     const subject = base.issues[0]!.mstar!;
@@ -9155,8 +8488,6 @@ describe("remote outbox qc fixes", () => {
     }).catch((error: unknown) => error);
     expect(unsafe).toMatchObject({ code: "remote.unsafe-fidelity" });
 
-    // invariant: The invalidation and the writer revocation are one transaction, so the
-    // otherwise valid fork evidence never yields a permit and frozen content is withheld.
     await expect(
       dispatchRemoteIntent(cache.context, resolutionId, forkObservationFor(cache, conflictedId, fork.heads)),
     ).rejects.toMatchObject({ code: "remote.dispatch-refused" });
@@ -9168,7 +8499,6 @@ describe("remote outbox qc fixes", () => {
     const commit = fixture.publish(fixture.payload());
     const context = contextAt(fixture.repo);
     const dbPath = locationAt(fixture.repo).dbPath;
-    // note: One host instant carries both the bind and the observation refused for it.
     const check = positiveCheck({ checkedAt: new Date(Date.now() - 2_000).toISOString() });
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [check] });
     const base = completeSnapshot(check);
@@ -9192,8 +8522,6 @@ describe("remote outbox qc fixes", () => {
     }).catch((error: unknown) => error);
     expect(refused).toMatchObject({ code: "remote.unsafe-fidelity" });
 
-    // invariant: The decoder refused that snapshot at the instant the bind recorded, so a bind
-    // carrying the same positive check may not overwrite the recorded negative outcome.
     await expect(
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation: 3, checks: [check] }),
     ).rejects.toMatchObject({ code: "collaboration.observation-stale" });
@@ -9202,8 +8530,6 @@ describe("remote outbox qc fixes", () => {
     expect(JSON.parse(evidence.verification_json)).toMatchObject({ outcome: { kind: "unsafe-fidelity" } });
     expect(evidence.writer_id).toBeNull();
 
-    // invariant: The exception belongs to the refusal branch alone: a decodable positive
-    // observation resubmitted at the refused instant is stale and re-authorizes nothing.
     await expect(
       ingestRemoteObservation(context, {
         ...observation(check, { selectorCommit: commit, generation: 3, expectRevision: 1 }),
@@ -9218,8 +8544,6 @@ describe("remote outbox qc fixes", () => {
       projects: [{ revision: 1, completeness: "unavailable", code: "remote.unsafe-fidelity" }],
     });
 
-    // invariant: The observation itself may replay exactly that refused submission at the same
-    // instant, and the replay records the refusal again instead of restoring the binding.
     const replay = await ingestRemoteObservation(context, {
       ...observation(check, { selectorCommit: commit, generation: 3, expectRevision: 1 }),
       snapshot: unsafeSnapshot,
@@ -9244,8 +8568,6 @@ describe("remote outbox qc fixes", () => {
     const withdrawn = await abandonRemoteIntent(cache.context, { operationId: firstId, reason: "reviewed repair withdrawn" });
     expect(withdrawn).toMatchObject({ state: "abandoned", resolves: conflictedId });
 
-    // invariant: The withdrawn repair stays for audit, and a NEW reviewed replacement takes the
-    // fork over instead of being refused forever by the dead pointer.
     const secondId = "00000000-0000-4000-8000-000000000803";
     expect(
       await prepareRemoteResolution(cache.context, conflictedId, {
@@ -9255,7 +8577,6 @@ describe("remote outbox qc fixes", () => {
         event: journalEvent(cache.fixture, secondId, fork.heads),
       }),
     ).toMatchObject({ operationId: secondId, state: "enqueued" });
-    // invariant: The withdrawn repair keeps its durable row, its `resolves` edge and its content.
     expect(await readRemoteIntent(cache.context, firstId)).toMatchObject({
       state: "abandoned",
       resolves: conflictedId,
@@ -9264,7 +8585,6 @@ describe("remote outbox qc fixes", () => {
     });
     expect(await readRemoteIntent(cache.context, conflictedId)).toMatchObject({ state: "conflict", resolvedBy: secondId });
 
-    // invariant: Ordinary sends stay closed until the replacement itself is confirmed.
     const ordinaryId = "00000000-0000-4000-8000-000000000804";
     await prepareRemoteIntent(
       cache.context,
@@ -9290,15 +8610,11 @@ describe("remote outbox qc fixes", () => {
         event: recordedEvent(cache.dbPath, secondId),
       }),
     );
-    // invariant: Confirmation alone reopens nothing: a refresh still carrying the competing heads
-    // leaves the walked fork unmerged and the queue closed.
     await observeHead(cache, fork.heads);
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
-    // invariant: The merged observation carries one new head; the queue opens and the stale intent
-    // frozen on the fork heads is refused by its own base check.
     const mergedHead = [remoteEventHead(recordedEvent(cache.dbPath, secondId))];
     await observeHead(cache, mergedHead);
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
@@ -9329,8 +8645,6 @@ describe("remote outbox qc fixes", () => {
       event: journalEvent(cache.fixture, repairId, fork.heads),
     });
     const attemptId = attemptOf(await dispatchRemoteIntent(cache.context, repairId, forkObservationFor(cache, conflictedId, fork.heads)));
-    // note: The repair itself encounters a second fork; its own repair must not be blocked by the
-    // ancestor conflict, whose live resolution chain now names both.
     const second = journalFork(cache.fixture);
     await recordRemoteReceipt(
       cache.context,
@@ -9348,7 +8662,6 @@ describe("remote outbox qc fixes", () => {
       reason: "merge the second fork",
       event: journalEvent(cache.fixture, successorId, second.heads),
     });
-    // note: An ordinary intent frozen on the second fork's base waits for the whole chain.
     const ordinaryId = "00000000-0000-4000-8000-000000000814";
     await prepareRemoteIntent(
       cache.context,
@@ -9357,7 +8670,6 @@ describe("remote outbox qc fixes", () => {
         expectedHeads: second.heads,
       }),
     );
-    // invariant: Before the terminal repair confirms, the original conflict still closes the queue.
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
@@ -9374,15 +8686,11 @@ describe("remote outbox qc fixes", () => {
         event: journalEvent(cache.fixture, successorId, second.heads),
       }),
     );
-    // invariant: A confirmed terminal repair settles the LIVE `resolved_by` chain, but a refresh
-    // still carrying the competing heads is not a merge: the ancestor conflict keeps blocking.
     await observeHead(cache, second.heads);
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       details: expect.objectContaining({ ahead: conflictedId, aheadState: "conflict" }),
     });
-    // invariant: The merged observation carries the terminal repair's one head; the queue opens,
-    // and an intent frozen on the fork heads is refused by its own base check.
     const mergedHead = [remoteEventHead(recordedEvent(cache.dbPath, successorId))];
     await observeHead(cache, mergedHead);
     await expect(dispatchRemoteIntent(cache.context, ordinaryId)).rejects.toMatchObject({
@@ -9441,23 +8749,17 @@ describe("remote outbox qc fixes", () => {
         }),
       );
 
-    // invariant: A -> B(conflict) -> C(enqueued): the refusal names C's concrete id and its
-    // dispatch step, never a resolve of B or of A (the parent this command addressed).
     const taken = await attemptResolve();
     expect(taken.code).toBe("remote.operation-conflict");
     expect(taken.message).toContain(`outbox-dispatch --harness <abs> --operation ${leafId} --input`);
     expect(taken.message).not.toContain(`outbox-resolve --harness <abs> --operation ${repairId}`);
     expect(taken.message).not.toContain(`outbox-resolve --harness <abs> --operation ${conflictedId}`);
 
-    // invariant: With the leaf abandoned, its PARENT B is the actionable row: the refusal names
-    // B with the resolve step and never names the withdrawn leaf.
     await abandonRemoteIntent(cache.context, { operationId: leafId, reason: "withdrawn review" });
     const afterAbandon = await attemptResolve();
     expect(afterAbandon.message).toContain(`outbox-resolve --harness <abs> --operation ${repairId} --input`);
     expect(afterAbandon.message).not.toContain(`--operation ${leafId}`);
 
-    // invariant: A confirmed leaf settles the whole chain: the conflict rows are settled and the
-    // pending listing never shows them.
     const settledId = "00000000-0000-4000-8000-000000000865";
     const settled = await prepareRemoteResolution(cache.context, repairId, {
       operationId: settledId,
@@ -9505,8 +8807,6 @@ describe("remote outbox qc fixes", () => {
       );
     const severLink = (resolvedBy: string): void => {
       const db = new DatabaseSync(cache.dbPath);
-      // why: the damaged link is exactly a foreign-key violation, so the probe writes it with the
-      // check disabled the way a corrupted cache would have gotten there.
       db.exec("pragma foreign_keys = off");
       try {
         db.prepare("update remote_outbox set resolved_by = ? where operation_id = ?").run(resolvedBy, conflictedId);
@@ -9515,14 +8815,12 @@ describe("remote outbox qc fixes", () => {
       }
     };
 
-    // invariant: A missing link cannot name a row; the rebuild route is the only named recovery.
     severLink("00000000-0000-4000-8000-0000000008ff");
     const missing = await attemptResolve();
     expect(missing.code).toBe("remote.operation-conflict");
     expect(missing.message).toContain("damaged");
     expect(missing.message).toContain("cache rebuild");
 
-    // invariant: A cycle is the same damaged route, never an invented step.
     severLink(conflictedId);
     const cycle = await attemptResolve();
     expect(cycle.message).toContain("damaged");
@@ -9558,7 +8856,6 @@ describe("remote outbox qc fixes", () => {
       event: shapedEvent(cache, operationId, heads, change),
     });
 
-    // invariant: A create/adopt is another write, never the repair of this issue fork.
     await expect(
       prepareRemoteResolution(
         cache.context,
@@ -9570,7 +8867,6 @@ describe("remote outbox qc fixes", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "remote.input-invalid" });
-    // invariant: A replacement never re-keys the portable identity it resolves.
     await expect(
       prepareRemoteResolution(
         cache.context,
@@ -9582,7 +8878,6 @@ describe("remote outbox qc fixes", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "remote.input-invalid" });
-    // invariant: A merge that drops a branch's rows loses the history an operator reviewed.
     await expect(
       prepareRemoteResolution(
         cache.context,
@@ -9595,7 +8890,6 @@ describe("remote outbox qc fixes", () => {
       ),
     ).rejects.toMatchObject({ code: "remote.operation-conflict", message: expect.stringContaining("occurrences") });
     expect(outboxRows(cache.dbPath)).toHaveLength(1);
-    // invariant: The same subject with every branch's history enqueues one reviewed repair.
     expect(
       await prepareRemoteResolution(
         cache.context,
@@ -9622,7 +8916,6 @@ describe("remote outbox qc fixes", () => {
 
     const second = "00000000-0000-4000-8000-000000000842";
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, second));
-    // note: A PUBLIC denial: the ingest clears the binding's writer in place, as a real revocation does.
     await expect(
       ingestRemoteObservation(cache.context, {
         ...observation(positiveCheck({ checkedAt: new Date().toISOString(), outcome: { kind: "denied" } }), {
@@ -9634,8 +8927,6 @@ describe("remote outbox qc fixes", () => {
       }),
     ).rejects.toMatchObject({ code: "remote.denied" });
     expect(bindingEvidence(cache.dbPath).writer_id).toBeNull();
-    // invariant: A denial withholds the payload, never the row: inspection answers metadata instead
-    // of refusing, so an operator can still see the state and recover it.
     expect(await readRemoteIntent(cache.context, second)).toMatchObject({
       disclosure: "metadata",
       state: "enqueued",
@@ -9643,8 +8934,6 @@ describe("remote outbox qc fixes", () => {
       target: null,
       result: null,
     });
-    // invariant: A recorded denial never withholds the abandonment, but the retained business
-    // payload never comes back through the command's response either.
     expect(await abandonRemoteIntent(cache.context, { operationId: second, reason: "withdrawn after denial" })).toMatchObject({
       disclosure: "metadata",
       state: "abandoned",
@@ -9652,7 +8941,6 @@ describe("remote outbox qc fixes", () => {
       event: null,
       result: null,
     });
-    // invariant: The repeat refusal redacts the retained reason exactly as the response does.
     const repeat = await refusalOf(() => abandonRemoteIntent(cache.context, { operationId: second, reason: "withdrawn again" }));
     expect(repeat.code).toBe("remote.dispatch-refused");
     expect(repeat.message).toContain("already abandoned");
@@ -9682,8 +8970,6 @@ describe("remote outbox qc fixes", () => {
     );
     await bindRemoteAuthority(cache.context, { version: 1, selectorCommit: successor, generation: 4, checks: [positiveCheck()] });
 
-    // invariant: The predecessor's own still-current access check no longer authorizes disclosure:
-    // the admitted selector does, and the row belongs to the generation it superseded.
     expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
       generation: 3,
       disclosure: "metadata",
@@ -9691,7 +8977,6 @@ describe("remote outbox qc fixes", () => {
       target: null,
       receipts: [],
     });
-    // invariant: No recovery verb rewrites a predecessor row in the admitted lane.
     await expect(abandonRemoteIntent(cache.context, { operationId, reason: "withdrawn" })).rejects.toMatchObject({
       code: "collaboration.stale-binding",
     });
@@ -9729,8 +9014,6 @@ describe("remote outbox qc fixes", () => {
     const operationId = "00000000-0000-4000-8000-000000000891";
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
     const committed = cache.commit;
-    // note: The successor becomes live AND bound BETWEEN the inspection's single sample and the
-    // cache open, so the open admits a lane the checkout no longer records.
     let sampled = false;
     setRemoteIntentSampleGapForTest(async () => {
       if (sampled) return;
@@ -9751,8 +9034,6 @@ describe("remote outbox qc fixes", () => {
       await bindRemoteAuthority(cache.context, { version: 1, selectorCommit: successor, generation: 4, checks: [positiveCheck()] });
     });
     try {
-      // invariant: Disclosure follows the ONE pair the open admitted. A successor bound between that
-      // sample and the open leaves the predecessor row inspectable, never its frozen payload.
       expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
         generation: 3,
         disclosure: "metadata",
@@ -9771,8 +9052,6 @@ describe("remote outbox qc fixes", () => {
     const operationId = "00000000-0000-4000-8000-000000000892";
     await prepareRemoteIntent(cache.context, journalIntent(cache.fixture, cache.commit, operationId));
     const committed = cache.commit;
-    // note: The successor reaches the origin BETWEEN the inspection's single sample and the cache
-    // open, but this checkout has not bound it yet, so only the live ref can tell.
     let sampled = false;
     setRemoteIntentSampleGapForTest(() => {
       if (sampled) return;
@@ -9792,9 +9071,6 @@ describe("remote outbox qc fixes", () => {
       );
     });
     try {
-      // invariant: The live selector is re-proved at the disclosure boundary. A published successor
-      // the checkout has not bound yet is not the pair the row was authorized under, so the row
-      // stays inspectable and its frozen content is withheld.
       expect(await readRemoteIntent(cache.context, operationId)).toMatchObject({
         generation: 3,
         disclosure: "metadata",
@@ -9812,18 +9088,13 @@ describe("remote outbox qc fixes", () => {
     const cache = await outboxCache("outbox-conflict-counts");
     const conflictedId = "00000000-0000-4000-8000-000000000861";
     const fork = await conflictedJournal(cache, conflictedId);
-    // invariant: The durable fork invalidates the snapshot in the receipt transaction, so a
-    // required rollup refuses instead of answering from a nominally complete base.
     await expect(
       (async () => remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId))(),
     ).rejects.toMatchObject({ code: "remote.unavailable" });
-    // invariant: Q1: a refresh of the SAME competing heads proves the rows, never that the fork
-    // settled; counts stay closed until the live resolution chain confirms a terminal repair.
     await observeHead(cache, fork.heads);
     await expect(
       (async () => remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId))(),
     ).rejects.toMatchObject({ code: "remote.unavailable", message: expect.stringContaining("remote.effect-conflict") });
-    // note: Only a confirmed terminal repair on the merged observation reopens them.
     const resolutionId = "00000000-0000-4000-8000-000000000862";
     const resolution = await prepareRemoteResolution(cache.context, conflictedId, {
       operationId: resolutionId,
@@ -9843,13 +9114,10 @@ describe("remote outbox qc fixes", () => {
         event: journalEvent(cache.fixture, resolutionId, fork.heads),
       }),
     );
-    // invariant: A confirmed repair is not a merge: a refresh that still carries the competing
-    // heads proves the rows, never the fork, so counts stay closed.
     await observeHead(cache, fork.heads);
     await expect(
       (async () => remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId))(),
     ).rejects.toMatchObject({ code: "remote.unavailable", message: expect.stringContaining("remote.effect-conflict") });
-    // invariant: One current head that is none of the competing heads is the merge proof; counts reopen.
     await observeHead(cache, [remoteEventHead(recordedEvent(cache.dbPath, resolutionId))]);
     expect(remoteMilestones(await openRemoteReadView(cache.context), SELECTED_PROJECT.localProjectId).milestones).toHaveLength(1);
   }, 30_000);
@@ -9867,7 +9135,6 @@ describe("remote outbox qc fixes", () => {
       snapshot: { ...completeSnapshot(), asOf: new Date(Date.now() - 10 * 60_000).toISOString() },
     });
 
-    // invariant: A current access check over a traversal that began outside the window is not a base.
     await expect(dispatchRemoteIntent(cache.context, operationId)).rejects.toMatchObject({
       code: "remote.dispatch-refused",
       message: expect.stringContaining("freshness window"),
@@ -9885,7 +9152,6 @@ describe("remote outbox qc fixes", () => {
     const cache = await outboxCache("outbox-adopt-replay");
     const operationId = "00000000-0000-4000-8000-000000000881";
     const capture = fixtureCapture("Adopted remote finding");
-    // note: An adoption derives the project and title from the verified native issue.
     delete capture.projectId;
     delete capture.title;
     const adoption = { version: 1, kind: "new" as const, capture };
@@ -9911,8 +9177,6 @@ describe("remote outbox qc fixes", () => {
       }),
     );
 
-    // note: The provider now shows the marker the adoption wrote; the confirmation also
-    // invalidated the read base, so a retried verb first meets a refreshed observation.
     const marked = completeSnapshot();
     await ingestRemoteObservation(cache.context, {
       ...observation(positiveCheck(), {
@@ -9930,8 +9194,6 @@ describe("remote outbox qc fixes", () => {
       },
     });
 
-    // invariant: The identical adoption replays its recorded operation instead of addressing the
-    // issue its own first freeze marked.
     expect(await prepareRemoteAdoption(cache.context, request)).toMatchObject({
       operationId,
       state: "confirmed",
@@ -9973,14 +9235,12 @@ describe("remote outbox qc fixes", () => {
       remote: async (context: StoreContext) =>
         prepareRemoteIntent(context, issueIntent(cache.fixture, cache.commit, operationId)),
     };
-    // invariant: The execution failure never hides the durable provider effect or its replay path.
     const refused = await refusalOf(() => runCollaborationComposite(cache.context, intent, effects));
     expect(refused.code).toBe("collaboration.operation-partial");
     expect(detailsOf(refused)).toMatchObject({
       phase: "collaboration-confirmed",
       confirmed_components: [`provider:${operationId}`],
     });
-    // invariant: The retry acknowledges only the execution delta; the provider permit is not reissued.
     expect(
       await runCollaborationComposite(cache.context, intent, { ...effects, finalize: (_tx, receipt) => receipt.facts }),
     ).toContain(operationId);
@@ -9991,8 +9251,6 @@ describe("remote outbox qc fixes", () => {
     const cache = await outboxCache("outbox-milestone-base");
     const observed = observationRevision(cache.dbPath);
     await reobserve(cache, observed);
-    // invariant: The caller's observed base is proved inside the freeze transaction, so a moved
-    // base refuses instead of silently superseding the newer document.
     const stale = await refusalOf(() =>
       addMilestone(
         cache.context,
@@ -10001,13 +9259,10 @@ describe("remote outbox qc fixes", () => {
       ),
     );
     expect(stale.code).toBe("milestone.revision-conflict");
-    // invariant: The recovery names the observation revision this write was judged against, the
-    // command that reads the current one, and the flag it belongs in - not the local store's listing.
     expect(String(stale.message)).toContain("mstar store collaboration remote status --harness <abs>");
     expect(String(stale.message)).toContain(`--project ${SELECTED_PROJECT.localProjectId}`);
     expect(String(stale.message)).toContain("--expect-store");
     expect(outboxRows(cache.dbPath)).toEqual([]);
-    // invariant: The reviewed, current base still freezes exactly one intent.
     await expect(
       addMilestone(
         cache.context,
@@ -10044,7 +9299,6 @@ describe("remote outbox qc fixes", () => {
         { operationId, actor: "project-manager", expectedRevision: 1 },
       );
 
-    // invariant: The second project holds no observation, so its state is unknown, never empty.
     await expect(close("00000000-0000-4000-8000-0000000008b1")).rejects.toMatchObject({ code: "remote.unavailable" });
     await ingestRemoteObservation(
       context,
@@ -10054,22 +9308,10 @@ describe("remote outbox qc fixes", () => {
         snapshot: { ...completeSnapshot(secondCheck), issues: [] },
       }),
     );
-    // invariant: With every candidate complete and current, the same lookup is a proven miss.
     await expect(close("00000000-0000-4000-8000-0000000008b2")).rejects.toMatchObject({ code: "issue.not-found" });
   }, 30_000);
 });
 
-// ---------------------------------------------------------------------------
-// note: A pre-v3 remote cache is derived observation state: the reviewed bind replaces it
-// ---------------------------------------------------------------------------
-
-// note: writeV3Lane / writeV3RemoteLane are defined once near the ladder fixtures above.
-
-/**
- * note: Rewrite the live cache back to its v3 generation while keeping its whole outbox ledger and
- * binding rows. This is the shape the replacement floor must handle: a v3 cache whose settled
- * evidence a prepared composite still needs.
- */
 function downgradeToV3(location: CollaborationLocation): void {
   const rows = outboxRows(location.dbPath).map((row) => ({ ...row }));
   const receipts = outboxReceipts(location.dbPath).map((row) => ({ ...row }));
@@ -10088,13 +9330,10 @@ function downgradeToV3(location: CollaborationLocation): void {
   } finally {
     db.close();
   }
-  // note: A fresh generation is built, so the previous image and its sidecars go first.
   for (const suffix of ["", "-journal", "-wal", "-shm"]) rmSync(`${location.dbPath}${suffix}`, { force: true });
   writeV3Lane(location);
   const seeded = new DatabaseSync(location.dbPath);
   try {
-    // note: The replacement proves the lane is this checkout's own generation, so the downgrade
-    // restores the very mode and store identity the checkout bound to.
     seeded
       .prepare(
         "update collaboration_meta set mode = ?, store_id = ?, authority_epoch = ?, authority_state = 'active' where id = 1",
@@ -10116,8 +9355,6 @@ function downgradeToV3(location: CollaborationLocation): void {
         binding.verified_at,
         binding.verification_json,
       );
-    // note: A fork and its repair cite each other in either row order, so the fixture defers those
-    // foreign keys to the end of its own copy transaction, exactly as a real replacement does.
     seeded.exec("begin immediate");
     seeded.exec("pragma defer_foreign_keys = ON");
     const insertIntent = seeded.prepare(
@@ -10166,12 +9403,6 @@ const ROADMAP_TABLE_DDL = `create table project_roadmaps(
   foreign key (project_kind, project_id) references catalog_entities(kind, id)
 );`;
 
-/**
- * note: Rewind the live cache's version ledger to v5, keeping every table row - outbox, receipts,
- * bindings and the move ledger - exactly as the v6 writers left it. The replacement decision reads
- * its generation from this ledger, so this is the pre-v6 shape a bind must replace without losing
- * the switched move rows.
- */
 function downgradeToV5(location: CollaborationLocation): void {
   const db = new DatabaseSync(location.dbPath);
   try {
@@ -10184,12 +9415,6 @@ function downgradeToV5(location: CollaborationLocation): void {
   }
 }
 
-/**
- * note: Rewind the live cache's version ledger to v4 AND its move ledger to the v4 shape: the
- * route column is dropped, so the rows are exactly the pre-route halves a v4 writer recorded.
- * The replacement decision reads its generation from this ledger, so this is the pre-v5 shape
- * a bind must carry WITHOUT leaving the successor's column default on the rows.
- */
 function downgradeToV4(location: CollaborationLocation): void {
   const db = new DatabaseSync(location.dbPath);
   try {
@@ -10203,7 +9428,6 @@ function downgradeToV4(location: CollaborationLocation): void {
   }
 }
 
-/** note: The route one ledger half recorded, read straight from the lane. */
 function routeOfRow(dbPath: string, operationId: string, role: "source" | "destination"): unknown {
   const db = new DatabaseSync(dbPath);
   try {
@@ -10213,10 +9437,6 @@ function routeOfRow(dbPath: string, operationId: string, role: "source" | "desti
   }
 }
 
-/**
- * note: Confirm one seeded v3 outbox row in place: a receipt row plus the `confirmed` state, exactly
- * the shape a real send leaves. Used where the lane was rewritten to v3 and its ids must stay.
- */
 function confirmSeededIntent(
   dbPath: string,
   operationId: string,
@@ -10275,7 +9495,6 @@ function confirmSeededIntent(
   }
 }
 
-/** note: A real pre-v3 REMOTE cache: `remote` exists only since v2, so this is the oldest remote shape. */
 function writeV2RemoteLane(location: CollaborationLocation): void {
   writeV2Lane(location);
   const db = new DatabaseSync(location.dbPath);
@@ -10288,7 +9507,6 @@ function writeV2RemoteLane(location: CollaborationLocation): void {
 }
 
 describe("remote move fence", () => {
-  /** note: One blocking source row in the remote cache, the fence every provider write must meet. */
   async function stagedMoveRow(context: StoreContext, issueRef: string, operationId: string): Promise<void> {
     await withRemoteCacheWrite(context, (handle) => {
       recordIssueMove(handle.db, {
@@ -10319,9 +9537,6 @@ describe("remote move fence", () => {
     const cache = await outboxCache("fence-provider-id");
     const actor = "project-manager";
     await stagedMoveRow(cache.context, FORGED_ISSUE_REF, "fence-provider-id");
-    // invariant: The write below addresses the record by its PROVIDER id, so the replay identity carries
-    // no reference to compare. The fence resolves the reference from the OBSERVED subject instead, which
-    // is the only address both shapes share: a provider-id write cannot slip past it.
     await expect(
       appendOccurrence(
         cache.context,
@@ -10343,13 +9558,10 @@ describe("remote move fence", () => {
       code: "issue.move-in-progress",
       details: expect.objectContaining({ issue_ref: FORGED_ISSUE_REF, operation_id: "fence-provider-id", phase: "staged" }),
     });
-    // invariant: Nothing was enqueued: the refusal is the fence, not a frozen intent that failed later.
     expect(outboxRows(cache.dbPath)).toEqual([]);
   }, 30_000);
 
   test("remote-to-remote is decided by the destination lane's recorded mode, not by a file's presence", async () => {
-    // invariant: A destination addressed by `repoKey` resolves the SAME database path in every mode, so
-    // "the file exists" says nothing about which mode that lane records. The refusal must read the mode.
     const cache = await outboxCache("fence-destination-mode");
     const localKey = `github.com/remote-fixture/move-destination-${sequence++}`;
     const localLane = collaborationLocationOfRepoKey(localKey, "local");
@@ -10363,14 +9575,10 @@ describe("remote move fence", () => {
       destinationProject: "fixture-project",
       reason: "move to a local lane",
     };
-    // invariant: An existing LOCAL destination lane is not a remote one, so the first step stages and
-    // emits its request document instead of being refused as remote-to-remote.
     const staged = await moveAcrossByDocument(cache.context, request, null);
     expect(staged).toMatchObject({ phase: "staged", side: "source", destinationAuthority: localKey });
     expect(staged.document).toMatchObject({ phase: "request", destinationAuthority: localKey });
 
-    // note: The same destination key now RECORDS remote collaboration, which is the only fact that
-    // makes the pair remote-to-remote; the refusal names it.
     const remoteKey = `github.com/remote-fixture/move-remote-destination-${sequence++}`;
     const remoteLane = collaborationLocationOfRepoKey(remoteKey, "remote");
     mkdirSync(join(remoteLane.dbPath, ".."), { recursive: true, mode: 0o700 });
@@ -10385,8 +9593,6 @@ describe("remote move fence", () => {
   test("the fence is read inside the freeze transaction, not before it", async () => {
     const cache = await outboxCache("fence-inside-freeze");
     const actor = "project-manager";
-    // note: The move is staged in the seam between the write's observation and its freeze, exactly the
-    // window a fence checked outside the transaction cannot see.
     let staged = false;
     setRemoteWriteScopeGapForTest(async () => {
       if (staged) return;
@@ -10417,9 +9623,6 @@ describe("remote move fence", () => {
 });
 
 describe("remote move conflict settlement", () => {
-  // note: The reviewed-fork fixture for one move tombstone: the tombstone intent is frozen, sent,
-  // answered with a competing fork and left `conflict`, then `outbox-resolve` freezes the reviewed
-  // repair linked through `resolved_by`.
   async function conflictedTombstone(cache: { commit: string; context: StoreContext; dbPath: string }, operationId: string): Promise<{
     heads: string[];
     tombstoneId: string;
@@ -10448,11 +9651,6 @@ describe("remote move conflict settlement", () => {
     return { heads, tombstoneId };
   }
 
-  /**
-   * note: One exchange whose tombstone fork a reviewed repair settles, so the switch document the
-   * source emits is the repaired subject. The repair transform receives the frozen subject and
-   * returns the confirmed one, which is how each carry test states exactly one difference.
-   */
   async function switchThroughRepair(
     name: string,
     operationId: string,
@@ -10479,7 +9677,6 @@ describe("remote move conflict settlement", () => {
     const staged = await moveAcrossByDocument(cache.context, request, null);
     const destinationStaged = await moveAcrossByDocument(destinationContext, request, staged.document!);
     const stagedDoc = destinationStaged.document!;
-    // note: The first switch enqueues the tombstone; the fork below replaces it with a reviewed repair.
     await moveAcrossByDocument(cache.context, request, stagedDoc).then(
       () => null,
       (error: unknown) => error,
@@ -10511,9 +9708,6 @@ describe("remote move conflict settlement", () => {
   }
 
   test("a repair that interleaves its rows still switches: the carried copy is a set-preserving extension", async () => {
-    // invariant: Finding 6. A reviewed repair may place its rows before the staged history, because
-    // the confirmed event is an extension of the record, not of a list position. The handoff gate
-    // proves every staged row SURVIVES — order is not part of that proof.
     const prepended = {
       eventId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaab1",
       occurrenceKey: "occ-prepended",
@@ -10536,8 +9730,6 @@ describe("remote move conflict settlement", () => {
     expect(switched.phase).toBe("switched");
     const carried = JSON.parse(switched.document!.payloadJson) as { occurrences: Array<{ occurrence_key: string }> };
     expect(carried.occurrences.map((row) => row.occurrence_key)).toEqual(["occ-prepended", "occurrence-one"]);
-    // invariant: the DESTINATION accepts the interleaved copy and admits both rows — the gate every
-    // handoff crosses after a repair, not just the document the source emitted.
     const admitted = await moveAcrossByDocument(destinationContext, request, switched.document!);
     expect(admitted.phase).toBe("switched");
     const admittedDb = new DatabaseSync(resolveCollaborationLocation(destinationContext).dbPath);
@@ -10551,9 +9743,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("a remote bind replacement carries the switched move ledger, and the admission handoff still completes", async () => {
-    // invariant: Review wave 3, item 1. `replaceDerivedLane` carried the settled outbox ledger but
-    // not `issue_moves`, so a bind that replaced the cache erased the switched source row - the only
-    // record the final admission handoff settles against.
     const { switched, destinationContext, request, cache } = await switchThroughRepair(
       "move-carry-replace",
       "00000000-0000-4000-8000-000000000b41",
@@ -10572,8 +9761,6 @@ describe("remote move conflict settlement", () => {
     const before = moveRows(location.dbPath);
     expect(before.length).toBeGreaterThan(0);
     expect(before.some((row) => (row as { phase: string }).phase === "switched")).toBe(true);
-    // note: the downgrade rewinds the version ledger only: the replacement reads its decision from
-    // that ledger, the meta identity and the settled outbox probe, never from a v6-only DDL.
     downgradeToV5(location);
     const bound = await bindRemoteAuthority(cache.context, {
       version: 1,
@@ -10583,9 +9770,7 @@ describe("remote move conflict settlement", () => {
     });
     expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
-    // invariant: every move row came through field by field, not as a count.
     expect(moveRows(location.dbPath)).toEqual(before);
-    // invariant: the destination's admission handoff is the step the dropped row used to refuse.
     const admitted = await moveAcrossByDocument(destinationContext, request, switched.document!);
     expect(admitted.phase).toBe("switched");
     const published = await moveAcrossByDocument(cache.context, request, admitted.document!);
@@ -10593,10 +9778,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("a staged move with no outbox intent survives the replacement field-identically", async () => {
-    // invariant: Review finding — a remote source records its staged move BEFORE any outbox intent
-    // exists, so a legitimate pre-v6 cache can hold a move row and zero intents. The replacement must
-    // invoke the carrier when EITHER collection has rows; the move-only cache is the shape an
-    // intents-only guard drops.
     const cache = await outboxCache("move-carry-no-intents");
     const operationId = "00000000-0000-4000-8000-000000000b51";
     const staged = await moveAcrossByDocument(cache.context, {
@@ -10629,15 +9810,10 @@ describe("remote move conflict settlement", () => {
     });
     expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
-    // invariant: the move row came through field by field, even though not one intent row exists.
     expect(rows(location.dbPath)).toEqual(before);
   }, 30_000);
 
   test("a v4 remote predecessor's carried source row is labelled remote-unknown, so its discard releases", async () => {
-    // invariant: Review finding — a pre-v5 predecessor has no `route` column, so the carried row
-    // must be labelled by the generation's own v5 rule from the row's role and the PREDECESSOR's
-    // mode, never by the successor's column default. A remote source half labelled the default
-    // `local-local` would read as one-checkout-local and the discard would refuse to release it.
     const cache = await outboxCache("move-carry-v4-remote");
     const operationId = "00000000-0000-4000-8000-000000000b61";
     const request = {
@@ -10662,12 +9838,8 @@ describe("remote move conflict settlement", () => {
     });
     expect(bound).toMatchObject({ generation: Number(cache.fixture.payload().generation) });
     expect(ledgerVersions(location.dbPath)).toEqual(LANE_LEDGER_VERSIONS);
-    // invariant: the carried source row is the exchange half the predecessor's OWN remote mode
-    // names — never the one-checkout default the successor's column would have minted.
     expect(routeOfRow(location.dbPath, operationId, "source")).toBe("remote-unknown");
 
-    // invariant: the label is the discard's own admission check: the move releases its half
-    // instead of refusing as a one-checkout move it never was.
     const released = await discardAcrossAuthorities(cache.context, request);
     expect(released.phase).toBe("discarded");
     const db = new DatabaseSync(location.dbPath);
@@ -10681,11 +9853,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("the carry rule labels a local-mode predecessor's source half local-remote", () => {
-    // invariant: The carrier reads the PREDECESSOR's own mode rather than assuming 'remote'.
-    // The replacement probe admits only a lane whose metadata mode equals the checkout's remote
-    // selection, so the local branch never fires in the remote bind flow - it is the rule's
-    // correctness property, verified here against the same function the carrier invokes, and it
-    // is exactly the derivation the v5 ladder SQL applies to an in-place lane of that mode.
     expect(unroutedMoveHalfRoute("source", "local")).toBe("local-remote");
     expect(unroutedMoveHalfRoute("source", "mirror")).toBe("local-remote");
     expect(unroutedMoveHalfRoute("source", "remote")).toBe("remote-unknown");
@@ -10694,8 +9861,6 @@ describe("remote move conflict settlement", () => {
   });
 
   test("a predecessor whose ledger already records the route column is carried unchanged", async () => {
-    // invariant: A v5-or-later predecessor declares the column, so the carry copies it
-    // positionally and NEVER recomputes it — the relabel is the pre-route generation's alone.
     const cache = await outboxCache("move-carry-v5-routed");
     const operationId = "00000000-0000-4000-8000-000000000b62";
     const staged = await moveAcrossByDocument(cache.context, {
@@ -10709,8 +9874,6 @@ describe("remote move conflict settlement", () => {
     expect(staged.phase).toBe("staged");
     const location = locationAt(cache.fixture.repo);
     expect(routeOfRow(location.dbPath, operationId, "source")).toBe("remote-unknown");
-    // note: a one-checkout `local-local` label is the one value the pre-route rule can never
-    // derive for a remote-mode source row, so its survival proves no recomputation ran.
     const db = new DatabaseSync(location.dbPath);
     try {
       db.prepare("update issue_moves set route = 'local-local' where operation_id = ?").run(operationId);
@@ -10730,8 +9893,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("a move ledger that changes after the carried snapshot refuses the replacement and survives on the predecessor", async () => {
-    // invariant: the re-read comparison must cover the move ledger like the outbox: a row that
-    // advanced while the successor was staged aborts the swap instead of silently dropping it.
     const { switched, cache } = await switchThroughRepair(
       "move-carry-replace-guard",
       "00000000-0000-4000-8000-000000000b42",
@@ -10768,7 +9929,6 @@ describe("remote move conflict settlement", () => {
     }
     expect(mutated).toBe("committed");
     expect(refused.code).toBe("collaboration.upgrade-required");
-    // invariant: the predecessor kept its name, its v5 ledger and every move row.
     expect(ledgerVersions(location.dbPath)).toEqual(COLLABORATION_MIGRATIONS.slice(0, 5).map(({ version }) => version));
     const db = new DatabaseSync(location.dbPath);
     try {
@@ -10779,9 +9939,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("a repair's field edits cross into the admitted subject, and its tombstone write never does", async () => {
-    // invariant: Finding 7. The confirmed subject's FIELDS are the record's current truth, so a
-    // reviewed edit reaches the destination; the tombstone's own `obsolete`/closed write belongs to
-    // the provider record leaving this authority and must not become the member's state.
     const { switched } = await switchThroughRepair("move-carry-fields", "00000000-0000-4000-8000-000000000b21", (mstar) => ({
       ...mstar,
       fields: {
@@ -10800,9 +9957,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("an imported legacy record on a repaired row crosses to the destination", async () => {
-    // invariant: Finding 8. A confirmed provider subject carries the imported row's PARSED legacy
-    // record, not the observed JSON text; reading only `legacyJson` dropped the imported document on
-    // every repaired move, stranding a record whose provenance the destination then never held.
     const { switched } = await switchThroughRepair("move-carry-legacy", "00000000-0000-4000-8000-000000000b31", (mstar) => ({
       ...mstar,
       provenance: [
@@ -10827,12 +9981,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("a repaired tombstone closes the move and blocks discard, carrying the reviewed history", async () => {
-    // invariant: Critical 2 (review wave 3) — a conflict is terminal for its own ROW only. Once a
-    // reviewed repair confirms the same tombstone under a different operation id, the move completes
-    // its switch through the `resolved_by` chain, and the discard refuses: the provider record is
-    // already closing, so abandoning the move would strand it.
-    // invariant: Critical 1 (review wave 4) — the subject the switch carries is the CONFIRMED one,
-    // not the pre-conflict freeze: the repair's rows reach the destination copy it admits.
     const cache = await outboxCache("move-repair-obsolete");
     const operationId = "00000000-0000-4000-8000-000000000941";
     const destinationKey = `github.com/remote-fixture/move-destination-${sequence++}`;
@@ -10844,16 +9992,12 @@ describe("remote move conflict settlement", () => {
       destinationProject: "fixture-project",
       reason: "move to a local lane",
     };
-    // note: A real local destination checkout bound to the same key, so the exchange halves meet
-    // over the documents rather than a faked ledger row.
     const destinationContext = contextAt(makeRepo(`https://${destinationKey}.git`));
     await initializeCollaborationStore(resolveCollaborationLocation(destinationContext));
     activate(resolveCollaborationLocation(destinationContext).dbPath);
     const staged = await moveAcrossByDocument(cache.context, request, null);
     const doc = staged.document;
     expect(doc).not.toBeNull();
-    // note: The destination half of the staged exchange: its row and `staged` document are written
-    // in ITS lane from the real request document.
     const destinationStaged = await moveAcrossByDocument(destinationContext, request, staged.document!);
     expect(destinationStaged.phase).toBe("verified");
     const stagedDoc = destinationStaged.document;
@@ -10869,9 +10013,6 @@ describe("remote move conflict settlement", () => {
     const frozen = recordedEvent(cache.dbPath, tombstoneId);
     if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
     const repairId = "00000000-0000-4000-8000-000000000942";
-    // note: The reviewed resolution carries the record plus the rows the reviewer kept: one extra
-    // occurrence and one extra provenance row over the freeze, so the carried copy is provably the
-    // repair's subject rather than the request's.
     const repairMstar = {
       ...(frozen.change.mstar as Record<string, unknown>),
       occurrences: [
@@ -10929,13 +10070,9 @@ describe("remote move conflict settlement", () => {
       }),
     );
 
-    // invariant: The repaired confirmation IS the tombstone this move needed: the same exchange
-    // advances the source row to `switched` and emits the switch document under the repair's id.
     const switched = await moveAcrossByDocument(cache.context, request, stagedDoc!);
     expect(switched.phase).toBe("switched");
     expect(switched.pendingOperationId).toBe(repairId);
-    // invariant: The switch document carries the CONFIRMED subject — the repair's added rows are in
-    // its payload and counts, so the digest legitimately outgrew the staged freeze.
     const switchDoc = switched.document;
     expect(switchDoc?.phase).toBe("switch");
     expect(switchDoc?.payloadDigest).not.toBe(stagedDoc!.payloadDigest);
@@ -10955,8 +10092,6 @@ describe("remote move conflict settlement", () => {
     );
     expect(refused?.code).toBe("collaboration.move-phase-invalid");
 
-    // invariant: The destination's admission is the end of the chain the finding tested: the copy it
-    // admits is the confirmed one, so the repaired rows land in the local lane with the record.
     const admitted = await moveAcrossByDocument(destinationContext, request, switchDoc!);
     expect(admitted.phase).toBe("switched");
     expect(admitted.document?.phase).toBe("admission");
@@ -10976,15 +10111,10 @@ describe("remote move conflict settlement", () => {
     } finally {
       destinationDb.close();
     }
-    // invariant: The admission handoff completes the move on the source half too.
     const published = await moveAcrossByDocument(cache.context, request, admitted.document!);
     expect(published.phase).toBe("published");
   }, 30_000);
   test("an enqueued repair names the fork-evidence route, not the original's dispatch", async () => {
-    // invariant: Critical 3 (review wave 4) — once `outbox-resolve` enqueued a repair for the
-    // conflicted tombstone, the live leaf IS that repair: an ordinary dispatch refuses it because a
-    // reviewed resolution must carry the host's fork observation through `--input`. The refusal's
-    // recovery must name that route, and the original's abandon+dispatch text must never appear.
     const cache = await outboxCache("move-repair-pending");
     const operationId = "00000000-0000-4000-8000-000000000946";
     const request = {
@@ -11012,9 +10142,6 @@ describe("remote move conflict settlement", () => {
       event: { ...frozen, operationId: repairId, parents: heads },
     });
 
-    // invariant: The repair is enqueued but never dispatched, so the chain's live leaf is the
-    // repair itself: the refusal's recovery names the fork-evidence route an enqueued resolution
-    // takes, never the original intent's dispatch-without-input route.
     const pending = await moveAcrossByDocument(cache.context, request, { ...staged.document!, phase: "staged" }).then(
       () => null,
       (error: unknown) => error as { code?: string; details?: Record<string, unknown> },
@@ -11031,9 +10158,6 @@ describe("remote move conflict settlement", () => {
 
 
   test("a reviewed repair that keeps the record open lets the discard and never switches", async () => {
-    // invariant: Critical 2 (review wave 3) — the chain's terminal repair confirmed a DIFFERENT
-    // event that left the record live: the provider record stays authoritative here, so abandoning
-    // the move loses nothing and the exchange must not claim a tombstone that never landed.
     const cache = await outboxCache("move-repair-open");
     const operationId = "00000000-0000-4000-8000-000000000943";
     const request = {
@@ -11057,8 +10181,6 @@ describe("remote move conflict settlement", () => {
 
     const { heads, tombstoneId } = await conflictedTombstone(cache, operationId);
     const frozen = recordedEvent(cache.dbPath, tombstoneId);
-    // note: The reviewed resolution keeps the record authoritative: same carried history, but the
-    // disposition the reviewer confirmed is `open`, not the move's `obsolete`.
     const repairId = "00000000-0000-4000-8000-000000000944";
     if (frozen.change.kind !== "issue-replace") throw new Error("the fixture expected the tombstone to freeze an issue-replace");
     const frozenMstar = frozen.change.mstar;
@@ -11088,16 +10210,12 @@ describe("remote move conflict settlement", () => {
       }),
     );
 
-    // invariant: The repaired confirmation did not tombstone the record, so the exchange refuses
-    // the switch as the mismatch it is instead of claiming a tombstone that never landed.
     const mismatched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
       () => null,
       (error: unknown) => error as { code?: string },
     );
     expect(mismatched?.code).toBe("remote.effect-mismatch");
 
-    // invariant: The record never left this authority, so the discard completes instead of
-    // stranding it, and a reissued exchange refuses the switch instead of inventing a tombstone.
     const discarded = await discardAcrossAuthorities(cache.context, request);
     expect(discarded.phase).toBe("discarded");
     const switched = await moveAcrossByDocument(cache.context, request, { ...doc!, phase: "staged" }).then(
@@ -11108,9 +10226,6 @@ describe("remote move conflict settlement", () => {
   }, 30_000);
 
   test("a successor generation carrying the same revision sum inside the stage window refuses as stale", async () => {
-    // invariant: Critical 3 (review wave 3) — the sampled revision sum alone cannot name the
-    // observation the copy was frozen from: a rollover landing between the read and the freeze can
-    // carry the same sum under a successor generation, and only the pinned generation refuses it.
     const cache = await outboxCache("move-same-sum-rollover");
     const operationId = "00000000-0000-4000-8000-000000000945";
     const request = {
@@ -11131,8 +10246,6 @@ describe("remote move conflict settlement", () => {
       if (point !== "stage" || rolled) return;
       rolled = true;
       setMoveGapForTest(undefined);
-      // note: The successor lineage is genuine: the publish names the bound generation as its
-      // previous, so the rebind admits it and the new generation holds the same observation sum.
       const second = cache.fixture.publish(
         cache.fixture.payload({ generation: 4, previous: { selectorCommit: cache.commit, generation: 3, mode: "remote" }, cutover: FENCED }),
       );
@@ -11144,7 +10257,6 @@ describe("remote move conflict settlement", () => {
       (error: unknown) => error as { code?: string },
     );
     expect(refused?.code).toBe("collaboration.observation-stale");
-    // invariant: The refusal staged nothing: the move has no row to resume under this operation id.
     const db = new DatabaseSync(cache.dbPath);
     try {
       expect(db.prepare("select count(*) as n from issue_moves where operation_id = ?").get(operationId)).toEqual({ n: 0 });
@@ -11155,12 +10267,9 @@ describe("remote move conflict settlement", () => {
 });
 
 describe("pre-v3 remote cache recovery", () => {
-  // note: The predecessor ledger is this fixture's own input; the destination ledger is the WHOLE
-  // migration registry, so adding an intermediate migration never reddens these cases or hides one.
   const PREDECESSOR_VERSIONS = COLLABORATION_MIGRATIONS.slice(0, 2).map(({ version }) => version);
   const REGISTRY_VERSIONS = COLLABORATION_MIGRATIONS.map(({ version }) => version);
 
-  /** note: The generation the predecessor cache itself records, read from its own meta row. */
   function recordedGeneration(location: CollaborationLocation): { storeId: string; epoch: number } {
     const meta = metaRecord(location.dbPath);
     return { storeId: meta.store_id, epoch: meta.authority_epoch };
@@ -11174,15 +10283,9 @@ describe("pre-v3 remote cache recovery", () => {
     const location = locationAt(fixture.repo);
     writeV2RemoteLane(location);
     expect(ledgerVersions(location.dbPath)).toEqual(PREDECESSOR_VERSIONS);
-    // note: The checkout records the generation this pre-v3 cache belongs to, exactly as an earlier
-    // bind of that release left it. Its store identity must survive the replacement.
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
 
-    // invariant: An ordinary admitted read refuses, and it names the REACHABLE recovery — the
-    // reviewed bind, never a local `store upgrade` that produces no remote receipt. The command it
-    // names is runnable as printed: absolute harness, a document input, the verified batch, and
-    // the published document shape.
     const stale = await refusalOf(() => readRemoteCacheAuthority(context));
     expect(stale.code).toBe("collaboration.upgrade-required");
     expect(stale.message).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
@@ -11194,8 +10297,6 @@ describe("pre-v3 remote cache recovery", () => {
       generation,
       checks: [positiveCheck()],
     });
-    // invariant: The replacement kept the recorded store identity, so the checkout binding still
-    // names the cache the bind published.
     expect(bound).toMatchObject({ version: 1, generation, binding: { mode: "remote", ...recorded } });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(metaRecord(location.dbPath)).toMatchObject({
@@ -11216,8 +10317,6 @@ describe("pre-v3 remote cache recovery", () => {
     writeV2RemoteLane(location);
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
-    // note: The successor is fully staged and the predecessor preserved when this fails; the one
-    // atomic rename has not run, so the canonical name must still hold the predecessor.
     setRemoteCacheReplacementPublishGapForTest(() => {
       throw new Error("injected publication failure");
     });
@@ -11229,8 +10328,6 @@ describe("pre-v3 remote cache recovery", () => {
     } finally {
       setRemoteCacheReplacementPublishGapForTest(undefined);
     }
-    // invariant: The canonical name is never absent after an interrupted publication, and the
-    // previous cache and its ledger are exactly as the failed bind found them.
     expect(existsSync(location.dbPath)).toBe(true);
     expect(ledgerVersions(location.dbPath)).toEqual(PREDECESSOR_VERSIONS);
     expect(metaRecord(location.dbPath)).toMatchObject({
@@ -11238,7 +10335,6 @@ describe("pre-v3 remote cache recovery", () => {
       store_id: recorded.storeId,
       authority_epoch: recorded.epoch,
     });
-    // invariant: The documented recovery still completes on the same bytes afterwards.
     const bound = await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
@@ -11251,8 +10347,6 @@ describe("pre-v3 remote cache recovery", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
     writeV2RemoteLane(location);
-    // note: Same store, another epoch: these bytes belong to a generation this checkout never
-    // recorded, so they are refused before the canonical name is released.
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, {
       repoKey: fixture.repoKey,
@@ -11278,9 +10372,6 @@ describe("pre-v3 remote cache recovery", () => {
     writeV2RemoteLane(location);
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
-    // note: A competing bind publishes the current cache — and a real writer freezes one of its
-    // outbox rows — between this attempt's replacement decision and its critical section. One check
-    // serves every attempt, so each later bind is the identical replay a re-bind admits.
     const check = positiveCheck();
     const frozenId = "00000000-0000-4000-8000-0000000009f1";
     let competing = false;
@@ -11305,14 +10396,10 @@ describe("pre-v3 remote cache recovery", () => {
         generation,
         checks: [check],
       });
-      // invariant: The stale attempt found the advanced lane inside its critical section and
-      // continued it instead of replacing it.
       expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
     } finally {
       setRemoteCacheReplacementGapForTest(undefined);
     }
-    // invariant: The current cache, its identity and the frozen outbox row all survive the stale
-    // attempt: a replaced-derived-lane decision never authorizes destroying v3 work.
     expect(competitor).toBeDefined();
     expect(metaRecord(location.dbPath)).toMatchObject({
       store_id: competitor!.storeId,
@@ -11333,14 +10420,10 @@ describe("pre-v3 remote cache recovery", () => {
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
 
-    // invariant: The ordinary read refuses and names the reviewed bind — a remote cache is never
-    // upgraded in place, even when this build's migration follows its own.
     const stale = await refusalOf(() => readRemoteCacheAuthority(context));
     expect(stale.code).toBe("collaboration.upgrade-required");
     expect(stale.message).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
 
-    // invariant: The predecessor is preserved beside the lane as a `.replaced-` hard link in the
-    // window before the one atomic rename publishes the successor.
     let preservedDuringPublish = false;
     setRemoteCacheReplacementPublishGapForTest(() => {
       preservedDuringPublish = readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"));
@@ -11352,7 +10435,6 @@ describe("pre-v3 remote cache recovery", () => {
       setRemoteCacheReplacementPublishGapForTest(undefined);
     }
     expect(preservedDuringPublish).toBe(true);
-    // invariant: The replacement kept the recorded store identity and lands at the current schema.
     expect(bound).toMatchObject({ version: 1, generation, binding: { mode: "remote", ...recorded } });
     expect(metaRecord(location.dbPath)).toMatchObject({ mode: "remote", store_id: recorded.storeId, authority_state: "active" });
     expect((await readRemoteCacheAuthority(context)).schemaVersion).toBe(CURRENT_VERSION);
@@ -11376,7 +10458,6 @@ describe("pre-v3 remote cache recovery", () => {
           "'2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z');",
       );
     });
-    // note: The seeded bytes become a REMOTE cache the same way writeV3RemoteLane does.
     const modeDb = new DatabaseSync(location.dbPath);
     try {
       modeDb.prepare("update collaboration_meta set mode = 'remote' where id = 1").run();
@@ -11390,24 +10471,18 @@ describe("pre-v3 remote cache recovery", () => {
     const refused = await refusalOf(() =>
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
-    // invariant: The refusal names the intent, its age order and the exact outbox recovery route.
     expect(refused.code).toBe("remote.effect-pending");
     expect(refused.message).toContain(frozenId);
     expect(refused.message).toContain("unconfirmed");
-    // note: The recovery must be executable for THIS state: an `unconfirmed` row is invisible to
-    // `outbox-pending`, so the first step names `outbox-show` and its settlement verbs.
     expect(refused.message).toContain("outbox-show");
     expect(refused.message).toContain("outbox-reconcile");
     expect(refused.message).toContain("outbox-receipt");
-    // invariant: Nothing was replaced: the ledger, the identity and the intent itself are exactly
-    // as the refused bind found them, and no `.replaced-` copy was staged.
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
     expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
     expect(outboxRows(location.dbPath)).toContainEqual(expect.objectContaining({ operation_id: frozenId, state: "unconfirmed" }));
     expect(readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"))).toBe(false);
   }, 30_000);
 
-  /** note: Seed one synthetic outbox row into a REMOTE v3 lane: enough for the guard's refusal texts. */
   function seedRemoteV3Intent(
     location: CollaborationLocation,
     operationId: string,
@@ -11437,7 +10512,6 @@ describe("pre-v3 remote cache recovery", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
     const frozenId = "00000000-0000-4000-8000-0000000009f3";
-    // note: The frozen request is a real one, so the settlement verbs can read and abandon it.
     const request = intentRequest(fixture, commit, frozenId);
     writeV3RemoteLane(location);
     const db = new DatabaseSync(location.dbPath);
@@ -11465,8 +10539,6 @@ describe("pre-v3 remote cache recovery", () => {
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
 
-    // invariant: The bind refuses with the executable recovery: the oldest operation id and the
-    // listing/dispatch route an enqueued row can actually start from.
     const refused = await refusalOf(() =>
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
@@ -11476,15 +10548,11 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("outbox-dispatch");
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
 
-    // invariant: The recovery the refusal names RUNS on the below-current cache: the listing sees
-    // the row, and the public abandonment settles it.
     const pending = await readPendingIntents(context, SELECTED_PROJECT.localProjectId);
     expect(pending.intents.map((intent) => intent.operationId)).toEqual([frozenId]);
     const abandoned = await abandonRemoteIntent(context, { operationId: frozenId, reason: "settled on the refused cache" });
     expect(abandoned).toMatchObject({ operationId: frozenId, state: "abandoned" });
 
-    // invariant: The recovery admission widened nothing: the ordinary write lane still refuses the
-    // below-current cache with its unchanged text, and a domain table is never served.
     const business = await refusalOf(() => withRemoteCacheWrite(context, () => undefined));
     expect(business.code).toBe("collaboration.upgrade-required");
     expect(business.message).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
@@ -11496,8 +10564,6 @@ describe("pre-v3 remote cache recovery", () => {
       recovery.close();
     }
 
-    // invariant: With every intent settled, the ordinary bind replaces the cache and keeps the
-    // store identity - the exit the guard promises.
     const bound = await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     expect(bound).toMatchObject({ version: 1, generation, binding: { mode: "remote", ...recorded } });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
@@ -11524,8 +10590,6 @@ describe("pre-v3 remote cache recovery", () => {
       const refused = await refusalOf(() =>
         bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
       );
-      // invariant: The named first step is the verb that settles THIS state, and it is always
-      // introduced by a listing/show command that can find the row.
       expect(refused.code).toBe("remote.effect-pending");
       expect(refused.message).toContain(frozenId);
       expect(refused.message).toContain(step);
@@ -11542,7 +10606,6 @@ describe("pre-v3 remote cache recovery", () => {
     writeV3RemoteLane(location);
     const db = new DatabaseSync(location.dbPath);
     try {
-      // note: The conflict row is OLDER, so its route is the named first step.
       db.exec(
         "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
           "provider_project_id, journal_issue_id, verified_at, verification_json) values (1, 'seed-project', " +
@@ -11563,8 +10626,6 @@ describe("pre-v3 remote cache recovery", () => {
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
     expect(refused.code).toBe("remote.effect-pending");
-    // invariant: Both states are named, each with its OWN oldest operation id and the first step
-    // executable for THAT state - a later row is never invisible behind the oldest one.
     expect(refused.message).toContain("00000000-0000-4000-8000-0000000009e1");
     expect(refused.message).toContain("00000000-0000-4000-8000-0000000009e2");
     expect(refused.message).toContain("state conflict: oldest operation 00000000-0000-4000-8000-0000000009e1");
@@ -11581,8 +10642,6 @@ describe("pre-v3 remote cache recovery", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
     writeV3RemoteLane(location);
-    // note: Damage one column the declared inventory requires: the exact-inventory proof of the
-    // recovery admission must refuse these bytes, not serve them.
     const db = new DatabaseSync(location.dbPath);
     try {
       db.exec("create table issues_broken as select * from issues");
@@ -11594,22 +10653,14 @@ describe("pre-v3 remote cache recovery", () => {
     }
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
-    // invariant: The recovery open refuses the exact-inventory proof by name...
     const refused = await refusalOf(() => openRemoteCacheRecovery(context, "read"));
     expect(refused.code).toBe("collaboration.unreadable");
-    // invariant: ...and that refused open mutates nothing: the ledger, identity and damaged bytes
-    // are exactly as found, with no staging beside the lane.
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
     expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
     expect(existsSync(location.dbPath)).toBe(true);
     expect(readdirSync(dirname(location.dbPath)).some((name) => name.startsWith(".replaced-"))).toBe(false);
   }, 30_000);
 
-  /**
-   * note: A v3 REMOTE cache seeded with one real conflicted journal intent: a verified binding,
-   * a dispatched attempt and fork evidence recorded through the public receipt verb, so the
-   * settlement verbs can read, resolve, dispatch and confirm on it exactly as on a live cache.
-   */
   function seedConflictedV3Cache(
     name: string,
     conflictId: string,
@@ -11666,8 +10717,6 @@ describe("pre-v3 remote cache recovery", () => {
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
     const fork = journalFork(fixture);
-    // invariant: The conflict state and its recorded fork are exactly what a live conflict carries,
-    // because the evidence is recorded through the same public receipt verb an operator uses.
     return recordRemoteReceipt(
       context,
       receiptInput(commit, conflictId, attempt, requestHash, {
@@ -11691,14 +10740,11 @@ describe("pre-v3 remote cache recovery", () => {
         checks: [checkAfterBinding(cache.location.dbPath)],
       });
 
-    // invariant: The conflict blocks the replacement and names its own route.
     const refused = await refusalOf(bind);
     expect(refused.code).toBe("remote.effect-pending");
     expect(refused.message).toContain(conflictId);
     expect(refused.message).toContain("outbox-resolve");
 
-    // invariant: The reviewed resolution runs on the refused cache; the parent stays conflicted
-    // with the repair linked, and the bind is still refused while the repair is enqueued.
     const resolutionEvent = journalEvent({ repoKey: cache.repoKey }, repairId, cache.fork.heads);
     const prepared = await prepareRemoteResolution(cache.context, conflictId, {
       operationId: repairId,
@@ -11711,8 +10757,6 @@ describe("pre-v3 remote cache recovery", () => {
     const refusedAgain = await refusalOf(bind);
     expect(refusedAgain.code).toBe("remote.effect-pending");
 
-    // invariant: The repair is dispatched and confirmed through the public verbs on the same
-    // refused cache; the parent keeps its conflict history untouched.
     const dispatched = await dispatchRemoteIntent(
       cache.context,
       repairId,
@@ -11732,8 +10776,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(confirmed).toMatchObject({ operationId: repairId, state: "confirmed" });
     expect((await readRemoteIntent(cache.context, conflictId)).state).toBe("conflict");
 
-    // invariant: With the repair chain settled, the SAME bind replaces the cache and keeps the
-    // store identity - the exit the settle rule promises.
     const recorded = recordedGeneration(cache.location);
     const bound = await bind();
     expect(bound).toMatchObject({ version: 1, generation: cache.generation, binding: { mode: "remote", ...recorded } });
@@ -11752,12 +10794,9 @@ describe("pre-v3 remote cache recovery", () => {
       reason: "merge the fork",
       event: resolutionEvent,
     });
-    // note: The review is withdrawn: the repair is abandoned before dispatch.
     const abandoned = await abandonRemoteIntent(cache.context, { operationId: repairId, reason: "review withdrawn" });
     expect(abandoned).toMatchObject({ operationId: repairId, state: "abandoned" });
 
-    // invariant: An abandoned repair is no settlement: the parent conflict still blocks the bind
-    // and names its own route, so no abandoned child can satisfy the settle rule.
     const refused = await refusalOf(() =>
       bindRemoteAuthority(cache.context, {
         version: 1,
@@ -11798,17 +10837,11 @@ describe("pre-v3 remote cache recovery", () => {
         event: resolutionEvent,
       }),
     );
-    // invariant: The parent keeps the conflict state it arrived with and only its repair chain
-    // settles it, so the listing excludes the row through the settle rule, never a state rewrite.
     expect(await readRemoteIntent(cache.context, conflictId)).toMatchObject({
       state: "conflict",
       resolvedBy: repairId,
     });
-    // invariant: The listing and the guard settle by ONE rule: this parent is not awaiting
-    // settlement, and reporting it would route the operator to a refusing `outbox-resolve`.
     expect((await readPendingIntents(cache.context, SELECTED_PROJECT.localProjectId)).intents).toEqual([]);
-    // note: The guard admits the replacement of the same bytes, which is the agreement the listing
-    // above rests on; the listing is asserted first because the bind replaces this cache.
     const bound = await bindRemoteAuthority(cache.context, {
       version: 1,
       selectorCommit: cache.commit,
@@ -11827,8 +10860,6 @@ describe("pre-v3 remote cache recovery", () => {
       event: journalEvent({ repoKey: withdrawn.repoKey }, withdrawnRepair, withdrawn.fork.heads),
     });
     await abandonRemoteIntent(withdrawn.context, { operationId: withdrawnRepair, reason: "review withdrawn" });
-    // invariant: A withdrawn repair settles nothing, so the parent stays listed: the exclusion is
-    // the settle rule, never a blanket "carries a resolvedBy" filter.
     const listed = (await readPendingIntents(withdrawn.context, SELECTED_PROJECT.localProjectId)).intents;
     expect(listed.map((intent) => [intent.operationId, intent.state])).toEqual([[withdrawnConflict, "conflict"]]);
   }, 30_000);
@@ -11837,9 +10868,6 @@ describe("pre-v3 remote cache recovery", () => {
     const conflictId = "00000000-0000-4000-8000-000000000a10";
     const repairId = "00000000-0000-4000-8000-000000000a11";
     const cache = await seedConflictedV3Cache("remote-v3-conflict-unproven-repair", conflictId);
-    // note: The carried successor keeps the predecessor's recorded verification, so the bind's check
-    // must be dated AFTER it; the default positive check is one second in the past and can predate a
-    // seed bind that ran within the same second.
     const bind = () =>
       bindRemoteAuthority(cache.context, {
         version: 1,
@@ -11860,8 +10888,6 @@ describe("pre-v3 remote cache recovery", () => {
       forkObservationFor({ commit: cache.commit, dbPath: cache.location.dbPath }, conflictId, cache.fork.heads),
     );
     const repair = await readRemoteIntent(cache.context, repairId);
-    // note: The state column alone claims a confirmation: the receipt that would prove it was never
-    // recorded, which is the damaged-cache shape a bind must not trust.
     const db = new DatabaseSync(cache.location.dbPath);
     try {
       db.prepare("update remote_outbox set state = 'confirmed' where operation_id = ?").run(repairId);
@@ -11874,8 +10900,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("holds no recorded confirmed receipt");
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
 
-    // invariant: The recorded receipt is the exit, so the public receipt verb still records it on a
-    // row whose state claims the confirmation - otherwise that cache could never settle.
     const confirmed = await recordRemoteReceipt(
       cache.context,
       receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
@@ -11918,9 +10942,6 @@ describe("pre-v3 remote cache recovery", () => {
     );
     const repair = await readRemoteIntent(cache.context, repairId);
     const repairFork = journalFork({ repoKey: cache.repoKey });
-    // note: The fork evidence is recorded through the public receipt verb while the repair is
-    // live; the state column is tampered to confirmed afterwards, which is the damaged-cache
-    // shape the reopening must not let a matching confirmation launder into a settled parent.
     const conflicted = await recordRemoteReceipt(
       cache.context,
       receiptInput(cache.commit, repairId, attemptOf(dispatched), repair.requestHash, {
@@ -11950,8 +10971,6 @@ describe("pre-v3 remote cache recovery", () => {
     );
     expect(refused.code).toBe("remote.dispatch-refused");
     expect(refused.message).toContain("already holds a recorded conflict receipt");
-    // invariant: The row is not state 'conflict', so outbox-resolve would refuse it too: the only
-    // live route is the ordinary bootstrap rebuild, naming every bound checkout, not just this one.
     expect(refused.message).not.toContain("outbox-resolve");
     expect(refused.message).toContain("recorded state contradicts its recorded evidence");
     expect(refused.message).toContain("rebuild the derived cache through the ordinary bootstrap");
@@ -11963,8 +10982,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(refused.message).toContain("fresh reviewed remote bind");
     expect(refused.message).toContain("the pending intent's record is not preserved by the rebuild itself");
     expect(refused.message).toContain("the retained copy preserves it, and an operator can inspect it later");
-    // invariant: The destructive order cannot come back: the route settles the cache's OTHER
-    // intents, retains the bytes as evidence, proves the rebind, and only then removes the name.
     const route = [
       "settle every other unsettled intent",
       "keep the cache file as evidence",
@@ -11974,7 +10991,6 @@ describe("pre-v3 remote cache recovery", () => {
     ].map((step) => refused.message.indexOf(step));
     for (const at of route) expect(at).toBeGreaterThan(-1);
     expect([...route].sort((left, right) => left - right)).toEqual(route);
-    // invariant: The parent conflict stays unsettled: no laundered confirmation unblocked it.
     const stillRefused = await refusalOf(bind);
     expect(stillRefused.code).toBe("remote.effect-pending");
     expect(stillRefused.message).toContain(conflictId);
@@ -11986,8 +11002,6 @@ describe("pre-v3 remote cache recovery", () => {
     const cache = await seedConflictedV3Cache("remote-v3-conflict-foreign-generation", conflictId);
     const db = new DatabaseSync(cache.location.dbPath);
     try {
-      // note: A structurally valid link: the row exists, is confirmed, points back at the parent
-      // through resolves and its foreign keys resolve - only its generation is another one.
       db.prepare(
         "insert into remote_bindings(generation, project_key, selector_commit, provider, workspace_id, team_id, " +
           "provider_project_id, journal_issue_id, verified_at, verification_json) values (?, ?, 'seed-commit', " +
@@ -12004,10 +11018,6 @@ describe("pre-v3 remote cache recovery", () => {
       db.close();
     }
 
-    // invariant: The parent is not settled by another generation link: the bind still refuses
-    // and nothing is replaced. A link this scope cannot honor is named as DAMAGED, and the route
-    // for an absent repair (outbox-resolve) is never offered for it: a resolve refuses while that
-    // link stands.
     const refused = await refusalOf(() =>
       bindRemoteAuthority(cache.context, {
         version: 1,
@@ -12029,8 +11039,6 @@ describe("pre-v3 remote cache recovery", () => {
     const cache = await seedConflictedV3Cache("remote-v3-conflict-missing-backlink", conflictId);
     const db = new DatabaseSync(cache.location.dbPath);
     try {
-      // note: Same generation and project, confirmed, but no reverse pointer at the parent: the
-      // id is the only thing that names this conflict, so it is not its repair.
       db.prepare(
         "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, " +
           "created_at, updated_at) values (?, ?, ?, 'seed-hash', '{}', 'confirmed', " +
@@ -12051,8 +11059,6 @@ describe("pre-v3 remote cache recovery", () => {
     );
     expect(refused.code).toBe("remote.effect-pending");
     expect(refused.message).toContain(conflictId);
-    // invariant: A confirmed state whose link this scope cannot honor is damaged, never absent:
-    // the resolve route refuses while the link stands, so it is not offered.
     expect(refused.message).toContain("Its recorded resolvedBy link is damaged");
     expect(refused.message).not.toContain("outbox-resolve");
     expect(ledgerVersions(cache.location.dbPath)).toEqual(REGISTRY_VERSIONS.slice(0, 3));
@@ -12067,8 +11073,6 @@ describe("pre-v3 remote cache recovery", () => {
     seedRemoteV3Intent(location, "00000000-0000-4000-8000-0000000009fe", "enqueued");
     const db = new DatabaseSync(location.dbPath);
     try {
-      // note: A foreign cache may carry a trigger that writes a domain table from an outbox
-      // write; the surface is installed only over bytes that cannot do that.
       db.exec(
         "create trigger outbox_mirror after insert on remote_outbox begin " +
           "update issues set revision = revision; end;",
@@ -12091,8 +11095,6 @@ describe("pre-v3 remote cache recovery", () => {
     const context = contextAt(fixture.repo);
     const location = locationAt(fixture.repo);
     const frozenId = "00000000-0000-4000-8000-000000000a01";
-    // note: A real frozen request, so the public settlement verb is decided by the write lane alone,
-    // not by a payload failure.
     const request = intentRequest(fixture, commit, frozenId);
     writeV3RemoteLane(location);
     const db = new DatabaseSync(location.dbPath);
@@ -12114,11 +11116,6 @@ describe("pre-v3 remote cache recovery", () => {
         "insert into remote_outbox(operation_id, generation, project_key, request_hash, request_json, state, created_at, updated_at) " +
           "values (?, ?, ?, 'seed-hash', ?, 'enqueued', '2026-11-21T00:00:00.000Z', '2026-11-21T00:00:00.000Z')",
       ).run(frozenId, generation, SELECTED_PROJECT.localProjectId, JSON.stringify(request));
-      // note: The trigger fires on the settlement write this case performs (an abandon is an update).
-      // The accepted limitation: the write lane is guarded statement by statement plus the version
-      // inventory, never schema-object by schema-object, because proving that here would leave a
-      // foreign cache like this one with no exit - every settlement refuses while the bind refuses
-      // to replace the still-unsettled cache.
       db.exec(
         "create trigger outbox_mirror after update on remote_outbox begin " +
           "update issues set revision = revision; end;",
@@ -12129,9 +11126,6 @@ describe("pre-v3 remote cache recovery", () => {
     const recorded = recordedGeneration(location);
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
 
-    // invariant: The settlement write IS admitted on such bytes. A write-side schema proof would
-    // make every settlement verb refuse while the bind refuses to replace the unsettled cache, a
-    // block with no supported exit; the trigger case is covered through the READ open instead.
     const abandoned = await abandonRemoteIntent(context, { operationId: frozenId, reason: "settle it" });
     expect(abandoned).toMatchObject({ operationId: frozenId, state: "abandoned" });
     expect(outboxRows(location.dbPath)).toContainEqual(
@@ -12151,8 +11145,6 @@ describe("pre-v3 remote cache recovery", () => {
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
     const recovery = await openRemoteCacheRecovery(context, "read");
     try {
-      // invariant: A legitimate outbox statement calling replace(...) runs; only a replace
-      // statement form is refused.
       expect(recovery.db.prepare("select replace('a-b', '-', '_') as v from remote_outbox").get()).toMatchObject({
         v: "a_b",
       });
@@ -12196,35 +11188,21 @@ describe("pre-v3 remote cache recovery", () => {
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
     expect(refused.code).toBe("remote.effect-pending");
-    // note: A reconcile is copy-pasteable with its full command prefix.
     expect(refused.message).toContain("mstar store collaboration remote outbox-reconcile --harness <abs> --input <file|->");
-    // note: An enqueued reviewed resolution is dispatched WITH its fork observation input.
     expect(refused.message).toContain("outbox-dispatch --harness <abs> --operation <uuid> --input <file|->");
-    // note: A resolve only enqueues; dispatch and a confirming receipt follow. This conflict carries
-    // no live repair, so no withdraw route is named for a repair here.
     expect(refused.message).toContain("outbox-resolve --harness <abs> --operation <conflicted-uuid> --input <file>");
     expect(refused.message).toContain("only enqueues the repair");
     expect(refused.message).toContain("record its confirming receipt");
     expect(refused.message).toContain("It carries no live repair");
-    // invariant: Dispatch blocking is scoped, not age-ordered: the same generation and project, and
-    // only a CONFLICT ancestor of a reviewed repair is exempt - an unconfirmed ancestor still blocks.
     expect(refused.message).toContain("dispatch blocking is scoped to the same generation and project");
     expect(refused.message).toContain("CONFLICT ancestor only (an unconfirmed ancestor still blocks)");
-    // note: An unsent enqueued row names its shortest honest exit; nothing names an abandon for a
-    // conflict row.
     expect(refused.message).toContain("outbox-abandon --harness <abs> --operation <uuid> --reason <text>");
     expect(refused.message).not.toContain("--operation <repair-uuid> --reason <text>");
-    // note: No age-order promise: every listed state must be settled, and a blocked dispatch
-    // names the intent that blocks it.
     expect(refused.message).not.toContain("oldest operation first");
     expect(refused.message).toContain("Settle every state");
     expect(refused.message).toContain("blocked dispatch names the intent");
   }, 30_000);
 
-  /**
-   * note: One v3 remote cache holding a conflicted intent and, in the state given, the repair its
-   * own `resolved_by` names: the shape an operator meets after `outbox-resolve`.
-   */
   function seedConflictRepair(
     location: CollaborationLocation,
     conflictId: string,
@@ -12249,8 +11227,6 @@ describe("pre-v3 remote cache recovery", () => {
           "update remote_outbox set resolved_by = '" + repairId + "' where operation_id = '" + conflictId + "';",
       );
       if (options.conflictReceipt === true) {
-        // note: The recorded conflict receipt beside the tampered confirmed state is the shape the
-        // laundering guard refuses a confirmation onto; the hint must not route back to it.
         db.prepare(
           "insert into remote_outbox_receipts(operation_id, receipt_hash, source, outcome, evidence_json, recorded_at) " +
             "values (?, 'seed-receipt-hash', 'receipt', 'conflict', '{}', '2026-11-21T00:00:00.000Z')",
@@ -12270,8 +11246,6 @@ describe("pre-v3 remote cache recovery", () => {
       absentInConflictLine?: string[];
     }> = [
       {
-        // note: An enqueued repair may be withdrawn, or dispatched with the fork observation its
-        // review requires.
         repairState: "enqueued",
         exact: [
           "its repair is enqueued, so follow the repair its resolvedBy names with `mstar store collaboration remote " +
@@ -12282,8 +11256,6 @@ describe("pre-v3 remote cache recovery", () => {
         ],
       },
       {
-        // note: The not-sent proof is the ORIGINAL dispatching host's own receipt, and only that
-        // receipt records one: a reconcile accepts no not-sent outcome, so it is never named here.
         repairState: "unconfirmed",
         exact: [
           "its repair is unconfirmed, so follow the repair its resolvedBy names with `mstar store collaboration " +
@@ -12297,9 +11269,6 @@ describe("pre-v3 remote cache recovery", () => {
         absentInConflictLine: ["outbox-reconcile"],
       },
       {
-        // note: The repair row is itself a conflict, so outbox-resolve accepts IT; resolving the
-        // parent would refuse while this repair is linked, and no abandon applies to a conflict row.
-        // The parent settles only once the chain reaches a confirmed repair.
         repairState: "conflict",
         exact: [
           "its repair is itself a conflict row, so prepare the reviewed replacement of THAT repair row with " +
@@ -12312,8 +11281,6 @@ describe("pre-v3 remote cache recovery", () => {
         absentInConflictLine: ["--operation <repair-uuid> --reason <text>", "outbox-abandon", "--operation <conflicted-uuid>"],
       },
       {
-        // invariant: A link this scope cannot honor is named as DAMAGED, never as an absent repair: a
-        // resolve refuses while that link stands, so the outbox-resolve route is not offered for it.
         repairState: "enqueued",
         damaged: true,
         exact: [
@@ -12329,9 +11296,6 @@ describe("pre-v3 remote cache recovery", () => {
         absentInConflictLine: ["outbox-resolve", "outbox-reconcile", "fresh reviewed bind once the checked selector", "stop this checkout", "remove the cache file"],
       },
       {
-        // invariant: A confirmed repair holding only a conflict receipt is the laundering shape the
-        // guard refuses a receipt onto: the hint names the rebuild route (every bound checkout),
-        // never a confirmation receipt or outbox-resolve.
         repairState: "confirmed",
         conflictReceipt: true,
         exact: [
@@ -12360,8 +11324,6 @@ describe("pre-v3 remote cache recovery", () => {
       const repairId = "00000000-0000-4000-8000-000000000c0" + String(index);
       seedConflictRepair(location, conflictId, repairId, entry.repairState, { conflictReceipt: entry.conflictReceipt === true });
       if (entry.damaged === true) {
-        // note: Same generation and project, but no reverse resolves pointer: the link is broken,
-        // and the linked row's own live state must never be routed as this conflict's repair.
         const db = new DatabaseSync(location.dbPath);
         try {
           db.prepare("update remote_outbox set resolves = null where operation_id = ?").run(repairId);
@@ -12396,14 +11358,9 @@ describe("pre-v3 remote cache recovery", () => {
     writeRemoteCollaborationBinding(context, { repoKey: fixture.repoKey, selectorCommit: commit, generation, ...recorded });
     const recovery = await openRemoteCacheRecovery(context, "read");
     try {
-      // invariant: A domain table named in ANY casing is refused, not just the exact spelling.
       expect(() => recovery.db.prepare("select count(*) as n from ISSUES").get()).toThrow(/"issues"/);
-      // invariant: A statement naming no surface table - unclassifiable against the allowlist -
-      // is refused rather than let through.
       expect(() => recovery.db.prepare("select count(*) as n from sqlite_master").get()).toThrow(/recovery-surface/);
-      // invariant: A statement form that could escape the surface is refused even over a surface table.
       expect(() => recovery.db.prepare("pragma table_info(remote_outbox)").get()).toThrow(/pragma/);
-      // invariant: A legitimate outbox statement still runs.
       expect(recovery.db.prepare("select count(*) as n from remote_outbox").get()).toMatchObject({ n: 1 });
     } finally {
       recovery.close();
@@ -12411,9 +11368,6 @@ describe("pre-v3 remote cache recovery", () => {
   }, 30_000);
 
   test("a settled outbox ledger with a prepared composite survives the replacement and finalizes without a second send", async () => {
-    // invariant: A confirmed intent is settled, so the bind replaces the cache - but the receipt it
-    // carries is exactly what the prepared execution composite reads to finalize. Dropping the
-    // ledger would leave the composite with no proof of the provider effect it already caused.
     const fixture = remoteFixture("remote-v3-composite-carry");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -12422,9 +11376,6 @@ describe("pre-v3 remote cache recovery", () => {
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
 
-    // note: A prepared composite reserves its intent in the execution store, freezes one provider
-    // intent under that same reservation, and confirms it - the state a crash before finalization
-    // leaves behind.
     (await initializeStore(context)).close();
     const state = await readExecutionState(context);
     const key = { executionStoreId: state.storeId, executionEpoch: state.epoch, operationId: "composite-carry" };
@@ -12456,8 +11407,6 @@ describe("pre-v3 remote cache recovery", () => {
       generation,
     });
 
-    // note: Back to the v3 generation with that confirmed ledger in place, which is the shape a
-    // replacement must carry rather than discard.
     downgradeToV3(location);
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
     expect(outboxRows(location.dbPath)).toContainEqual(
@@ -12474,8 +11423,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
 
-    // invariant: The confirmed row AND its receipt survive the replacement, so the successor still
-    // proves the provider effect; losing either leaves the composite unable to finalize safely.
     expect(outboxRows(location.dbPath)).toContainEqual(
       expect.objectContaining({ operation_id: providerId, state: "confirmed", attempt_id: attemptId }),
     );
@@ -12484,8 +11431,6 @@ describe("pre-v3 remote cache recovery", () => {
     ]);
     expect(await readRemoteIntent(context, providerId)).toMatchObject({ state: "confirmed", attemptId });
 
-    // invariant: Finalizing after the bind replays the SAME confirmed effect and never issues a
-    // second provider event: prepare finds the carried intent instead of freezing a new one.
     const finalized = await runCollaborationComposite(context, intent, {
       apply: () => {
         throw new Error("a remote composite never writes the local collaboration lane");
@@ -12496,15 +11441,11 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(finalized).toContain(providerId);
     expect(await intentPhases(context, key.operationId)).toEqual(["confirmed"]);
-    // invariant: Still exactly one intent and one receipt: the effect was READ, never re-sent.
     expect(outboxRows(location.dbPath)).toHaveLength(1);
     expect(outboxReceipts(location.dbPath)).toHaveLength(1);
   }, 30_000);
 
   test("a repaired conflict clears the replacement gate only once its repair is settled", async () => {
-    // invariant: `outbox-resolve` records the repair as a SEPARATE intent linked by `resolved_by`
-    // and the original stays `conflict` for as long as it exists, so a raw-state count can never
-    // reach zero. Only the repair chain's settlement releases the cache - and not one step earlier.
     const fixture = remoteFixture("remote-v3-repaired-conflict");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -12513,7 +11454,6 @@ describe("pre-v3 remote cache recovery", () => {
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
 
-    // note: A real conflicted fork: prepared, dispatched, and settled with the competing heads.
     const conflictedId = "00000000-0000-4000-8000-0000000007f1";
     const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
     const fork = journalFork(fixture);
@@ -12535,7 +11475,6 @@ describe("pre-v3 remote cache recovery", () => {
     });
     const repairHash = outboxRows(location.dbPath).find((row) => row.operation_id === repairId)!.request_hash;
 
-    // note: The v3 generation carries both rows, and the repair is still only enqueued.
     downgradeToV3(location);
     const recorded = recordedGeneration(location);
     expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
@@ -12543,15 +11482,12 @@ describe("pre-v3 remote cache recovery", () => {
       [repairId, "enqueued"],
     ]);
 
-    // invariant: A live repair is an outstanding send, so the fork it repairs still holds the cache.
     const pending = await refusalOf(() =>
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
     expect(pending.code).toBe("remote.effect-pending");
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
 
-    // invariant: Confirming the repair settles the fork; the bind now replaces the cache, and the
-    // settled chain is carried so the original row and its repair stay inspectable.
     confirmSeededIntent(location.dbPath, repairId, {
       attemptId: "00000000-0000-4000-8000-0000000007f3",
       requestHash: repairHash,
@@ -12574,10 +11510,6 @@ describe("pre-v3 remote cache recovery", () => {
   }, 30_000);
 
   test("a withdrawn repair leaves its fork unsettled, so the replacement still refuses", async () => {
-    // invariant: A repair is a REVIEWED RESOLUTION, not a settlement of its own: only a confirmed
-    // repair settles the fork it replaced. Withdrawing the repair (abandoning it) leaves the
-    // original conflict exactly as unsettled as before, and another resolution may still follow -
-    // so the replacement gate stays closed instead of publishing a v3 cache whose fork never merged.
     const fixture = remoteFixture("remote-v3-withdrawn-repair");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -12586,7 +11518,6 @@ describe("pre-v3 remote cache recovery", () => {
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
 
-    // note: A real conflicted fork with a reviewed repair prepared over it.
     const conflictedId = "00000000-0000-4000-8000-000000000801";
     const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
     const fork = journalFork(fixture);
@@ -12607,11 +11538,9 @@ describe("pre-v3 remote cache recovery", () => {
       event: journalEvent(fixture, repairId, fork.heads),
     });
 
-    // note: Back to the v3 generation, which is the shape the replacement floor covers.
     downgradeToV3(location);
     const recorded = recordedGeneration(location);
 
-    // invariant: The repair is withdrawn through the real outbox verb on those same bytes.
     const withdrawn = await abandonRemoteIntent(context, { operationId: repairId, reason: "reviewed repair withdrawn" });
     expect(withdrawn).toMatchObject({ state: "abandoned" });
     expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
@@ -12619,8 +11548,6 @@ describe("pre-v3 remote cache recovery", () => {
       [repairId, "abandoned"],
     ]);
 
-    // invariant: No repair ever merged the fork, so the replacement is refused by route and the v3
-    // bytes - the only record of the fork and of the withdrawal - stay exactly in place.
     const refused = await refusalOf(() =>
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
@@ -12632,12 +11559,6 @@ describe("pre-v3 remote cache recovery", () => {
   }, 30_000);
 
   test("a settlement write inside the replacement window is refused, never dropped by the rename", async () => {
-    // invariant: The final probe, the ledger comparison and the rename are one exclusive writer
-    // scope shared with `withRemoteCacheWrite`. A cooperative settlement write that begins inside
-    // that window cannot commit behind the comparison, so the successor never omits evidence that
-    // reached the predecessor: either the write is refused and the carried ledger is complete, or it
-    // committed before the window and the replacement refuses instead. Losing a committed receipt is
-    // the failure this asserts against.
     const fixture = remoteFixture("remote-v3-concurrent-settlement");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -12646,9 +11567,6 @@ describe("pre-v3 remote cache recovery", () => {
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
 
-    // note: A conflicted fork whose repair IS confirmed: settled, so the replacement is admitted,
-    // and the conflicted row still accepts appended evidence - exactly the case a receipt landing
-    // inside the replacement window could hide.
     const conflictedId = "00000000-0000-4000-8000-000000000811";
     const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
     const attemptId = attemptOf(await dispatchRemoteIntent(context, conflictedId));
@@ -12681,7 +11599,6 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(outboxReceipts(location.dbPath)).toHaveLength(2);
 
-    // note: A real settlement write arrives exactly between the comparison and the rename.
     let settlement = "unknown";
     setRemoteCacheReplacementCommitGapForTest(() => {
       return recordRemoteReceipt(context, {
@@ -12712,15 +11629,10 @@ describe("pre-v3 remote cache recovery", () => {
       setRemoteCacheReplacementCommitGapForTest(undefined);
     }
 
-    // invariant: The window excludes the settlement writer entirely: it is either refused by the
-    // held lane (`store.busy`) - and then nothing was lost, because it never committed - or it
-    // committed BEFORE the comparison, which then refuses the replacement instead. Neither branch
-    // may end with a committed receipt that the successor omits.
     expect(settlement).toBe("store.busy");
     const successorReceipts = outboxReceipts(location.dbPath);
     expect(successorReceipts).toHaveLength(2);
     expect(successorReceipts.some((row) => row.outcome === "not-sent")).toBe(false);
-    // invariant: The replacement completed over the complete ledger, keeping the recorded identity.
     expect(bound).toMatchObject({ generation, binding: { mode: "remote", ...recorded } });
     expect(ledgerVersions(location.dbPath)).toEqual(REGISTRY_VERSIONS);
     expect(outboxRows(location.dbPath).map((row) => [row.operation_id, row.state])).toEqual([
@@ -12730,10 +11642,6 @@ describe("pre-v3 remote cache recovery", () => {
   }, 30_000);
 
   test("a receipt committed after the carried snapshot but before the guard lock refuses the replacement and survives", async () => {
-    // invariant: The settled-ledger snapshot is taken BEFORE the guard takes the write lock, so a
-    // receipt that commits in between reaches the predecessor and is carried by no snapshot. Only
-    // the guard's re-read comparison keeps it from being dropped: the replacement must refuse and
-    // leave the predecessor - with that receipt - named.
     const fixture = remoteFixture("remote-v3-pre-window-receipt");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -12742,8 +11650,6 @@ describe("pre-v3 remote cache recovery", () => {
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     await ingestRemoteObservation(context, observation(positiveCheck(), { selectorCommit: commit, generation }));
 
-    // note: A conflicted fork whose repair IS confirmed: settled, so the replacement is admitted,
-    // and the conflicted row still accepts appended evidence - the receipt that lands in the gap.
     const conflictedId = "00000000-0000-4000-8000-000000000821";
     const conflicted = await prepareRemoteIntent(context, journalIntent(fixture, commit, conflictedId));
     const attemptId = attemptOf(await dispatchRemoteIntent(context, conflictedId));
@@ -12776,8 +11682,6 @@ describe("pre-v3 remote cache recovery", () => {
     });
     expect(outboxReceipts(location.dbPath)).toHaveLength(2);
 
-    // note: The real settlement write commits on the predecessor AFTER the carried snapshot was
-    // read and BEFORE the guard's write lock, so it can only be caught by the re-read comparison.
     let settlement = "unknown";
     setRemoteCacheReplacementLedgerGapForTest(() =>
       recordRemoteReceipt(context, {
@@ -12805,13 +11709,8 @@ describe("pre-v3 remote cache recovery", () => {
       setRemoteCacheReplacementLedgerGapForTest(undefined);
     }
 
-    // invariant: The receipt really committed on the predecessor, so the refusal is about the
-    // changed carried ledger rather than about a write that never landed.
     expect(settlement).toBe("committed");
-    // invariant: The changed ledger refuses the replacement by route.
     expect(refused.code).toBe("collaboration.upgrade-required");
-    // invariant: The predecessor is still named, keeps its v3 generation and identity, and still
-    // carries the receipt the successor would have dropped.
     expect(ledgerVersions(location.dbPath)).toEqual([1, 2, 3]);
     expect(metaRecord(location.dbPath)).toMatchObject({ store_id: recorded.storeId, authority_epoch: recorded.epoch });
     const survivorReceipts = outboxReceipts(location.dbPath);
@@ -12820,16 +11719,11 @@ describe("pre-v3 remote cache recovery", () => {
   }, 30_000);
 
   test("the settlement admission refuses a v3 local lane, a pre-v3 remote lane and an ordinary v3 remote read", async () => {
-    // invariant: The settlement admission serves exactly one shape - the remote checkout's own v3
-    // cache. Every other lane keeps its ordinary refusal, so a regression dropping either the mode
-    // or the version condition is caught here instead of widening what the outbox verbs touch.
     const localRepo = makeRepo("https://github.com/v3-local/settlement.git");
     const localContext = contextAt(localRepo);
     const localLane = locationAt(localRepo);
     writeV3Lane(localLane);
     activate(localLane.dbPath);
-    // invariant: A LOCAL v3 lane refuses the settlement admission by MODE: the cache scope requires a
-    // remote checkout, so a settlement request never reads or migrates its ledger.
     const localRows = outboxRows(localLane.dbPath);
     const localLedger = ledgerRows(localLane.dbPath);
     const localTables = tableNames(localLane.dbPath);
@@ -12840,7 +11734,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ledgerRows(localLane.dbPath)).toEqual(localLedger);
     expect(tableNames(localLane.dbPath)).toEqual(localTables);
 
-    // note: A pre-v3 remote lane has no outbox at all, so the settlement admission never applies.
     const oldFixture = remoteFixture("remote-v2-settlement");
     const oldCommit = oldFixture.publish(oldFixture.payload());
     const oldGeneration = Number(oldFixture.payload().generation);
@@ -12861,8 +11754,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ledgerRows(oldLane.dbPath)).toEqual(oldLedger);
     expect(tableNames(oldLane.dbPath)).toEqual(oldTables);
 
-    // invariant: An ORDINARY read of the same v3 cache stays refused: settlement admits the outbox
-    // verbs alone, never every remote read.
     const freshFixture = remoteFixture("remote-v3-ordinary-read");
     const freshCommit = freshFixture.publish(freshFixture.payload());
     const freshGeneration = Number(freshFixture.payload().generation);
@@ -12882,9 +11773,6 @@ describe("pre-v3 remote cache recovery", () => {
     expect(ordinary.message).toContain("remote bind");
     expect(ledgerRows(freshLane.dbPath)).toEqual(freshLedger);
     expect(tableNames(freshLane.dbPath)).toEqual(freshTables);
-    // invariant: The settlement admission is the ONE exception on the same bytes: a request that
-    // asks to settle them is admitted, proving the ordinary refusal above is the mode/version
-    // boundary rather than an unreadable lane.
     expect(
       await withRemoteCacheWrite(freshContext, () => "admitted", { settleOutbox: true }),
     ).toBe("admitted");
@@ -12892,10 +11780,6 @@ describe("pre-v3 remote cache recovery", () => {
   }, 30_000);
 
   test("an expired access check behind an unsettled v3 intent is refreshable on that generation", async () => {
-    // invariant: The replacement that upgrades a v3 cache refuses while one intent's provider outcome is
-    // unknown, and the settlement verbs re-prove a CURRENT access check. Refusing the observation that
-    // refreshes that check left the operator with no order at all: no refresh, so no settlement, so no
-    // replacement. The observation writes only tables v3 carries unchanged, so it is admitted there.
     const fixture = remoteFixture("v3-repair-order");
     const commit = fixture.publish(fixture.payload());
     const generation = Number(fixture.payload().generation);
@@ -12903,14 +11787,10 @@ describe("pre-v3 remote cache recovery", () => {
     const location = locationAt(fixture.repo);
     await bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] });
     await ingestRemoteObservation(context, { ...observation(positiveCheck()), selectorCommit: commit, generation });
-    // note: The state an interrupted settlement leaves behind: the cache is a v3 generation again, its
-    // one intent has no known provider outcome, and the check a dispatch must re-prove has expired.
     downgradeToV3(location);
     const db = new DatabaseSync(location.dbPath);
     try {
       db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
-      // note: the downgrade rewrites the cache to its v3 generation, so the observation row a refresh
-      // advances is re-seeded at the revision that generation left behind.
       db.prepare(
         "insert into remote_observations(generation, project_key, revision, as_of, completeness, code, snapshot_json, received_at) " +
           "values (?, ?, 1, null, 'unavailable', null, null, '2026-11-21T00:00:00.000Z')",
@@ -12933,15 +11813,12 @@ describe("pre-v3 remote cache recovery", () => {
     }
     const ledgerBefore = ledgerRows(location.dbPath);
 
-    // invariant: The replacement refuses those bytes, by route, while that intent is unsettled.
     const blocked = await refusalOf(() =>
       bindRemoteAuthority(context, { version: 1, selectorCommit: commit, generation, checks: [positiveCheck()] }),
     );
     expect(blocked.code).toBe("remote.effect-pending");
-    // invariant: The lane was not replaced by that attempt.
     expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
 
-    // invariant: The supported first step now exists: refreshing the check on this generation.
     const refreshed = await ingestRemoteObservation(context, {
       ...observation(positiveCheck(), { expectRevision: 1 }),
       selectorCommit: commit,
@@ -12955,22 +11832,13 @@ describe("pre-v3 remote cache recovery", () => {
     } finally {
       bound.close();
     }
-    // invariant: The refresh wrote no schema: the lane is still the v3 generation whose ledger refuses
-    // the replacement until its intent is settled.
     expect(ledgerRows(location.dbPath)).toEqual(ledgerBefore);
   }, 30_000);
 });
 
-/**
- * invariant: Review wave 5. The exchange decides its topology from the `route` each ledger row
- * recorded at stage — never from a peer-lane probe, which a two-checkout exchange cannot answer —
- * and no discard may leave provider work alive. These are the refusals and releases an operator
- * recovers from, asserted at the engine boundary the CLI delegates to.
- */
 describe("cross-authority move route and discard", () => {
   const actor = "project-manager";
 
-  /** note: One activated local lane plus one captured record, the source half a local exchange stages. */
   async function localSourceLane(name: string) {
     const key = `github.com/local-fixture/${name}`;
     const context = contextAt(makeRepo(`https://${key}.git`));
@@ -12985,10 +11853,6 @@ describe("cross-authority move route and discard", () => {
   }
 
   test("a local exchange source records its route and releases only its own half", async () => {
-    // invariant: Finding 1. The peer's lane is unreachable from this checkout, so the discard reads
-    // the staged row's route instead of probing: an exchange source releases its half, and the record
-    // it fenced becomes writable again. A probe answers nothing here and the old path delegated to a
-    // one-checkout release that refuses.
     const cache = await outboxCache("route-local-source");
     const source = await localSourceLane("route-local-source");
     const operationId = "00000000-0000-4000-8000-000000000a11";
@@ -13006,23 +11870,16 @@ describe("cross-authority move route and discard", () => {
 
     const released = await discardAcrossAuthorities(source.context, request);
     expect(released.phase).toBe("discarded");
-    // invariant: The fence is gone with the row: the record this authority kept is writable again.
     await appendOccurrence(
       source.context,
       source.issueId,
-      // note: the same identity triple the capture established, with a fresh observation key.
       { ...fixtureCapture("Route source route-local-source"), occurrenceKey: "run-after-route-discard" } as never,
       { operationId: "00000000-0000-4000-8000-000000000a12", actor, expectedRevision: 2 },
     );
   }, 30_000);
 
   test("a remote destination refuses a remote-sourced request before staging anything", async () => {
-    // invariant: Finding 2. The source's recorded route says it was staged by a remote checkout, and
-    // the request document carries it, so the destination refuses remote-to-remote before writing a
-    // row or freezing a create. A probe cannot see a separate-home source and lets the move through.
     const source = await outboxCache("route-remote-source");
-    // note: The destination's selector is created only AFTER the source staged, which is exactly a
-    // two-checkout exchange: the source's own home cannot answer for the peer lane at all.
     const destination = remoteFixture("route-remote-destination");
     const operationId = "00000000-0000-4000-8000-000000000a21";
     const request = {
@@ -13045,7 +11902,6 @@ describe("cross-authority move route and discard", () => {
     const destinationDbPath = locationAt(destination.repo).dbPath;
     const refused = await refusalOf(() => moveAcrossByDocument(destinationContext, request, staged.document!));
     expect(refused.code).toBe("collaboration.mode-unavailable");
-    // invariant: Nothing was staged and nothing was enqueued: no provider create can ever land.
     const db = new DatabaseSync(destinationDbPath);
     try {
       expect(db.prepare("select count(*) as n from issue_moves").get()).toEqual({ n: 0 });
@@ -13056,9 +11912,6 @@ describe("cross-authority move route and discard", () => {
   }, 30_000);
 
   test("a remote destination cannot discard while its provider create may still land", async () => {
-    // invariant: Finding 3. The create intent is enqueued and the admission was never recorded, so
-    // abandoning the move here would leave a provider record no ledger admits. Only a create that can
-    // never land lets this half release — and then it does, without touching the source's half.
     const cache = await outboxCache("route-live-create");
     const source = await localSourceLane("route-live-create");
     const operationId = "00000000-0000-4000-8000-000000000a31";
@@ -13089,10 +11942,6 @@ describe("cross-authority move route and discard", () => {
   }, 30_000);
 
   test("an occurrence key another record holds refuses the move before the source can tombstone", async () => {
-    // invariant: Finding 5. `occurrences.occurrence_key` is lane-unique, so a colliding row fails the
-    // admission INSERT — for an exchange that refusal would land after the source's irreversible
-    // tombstone. The destination proves the keys free while it emits `staged`, so the source row stays
-    // `staged` and the record is never closed on either authority.
     const cache = await outboxCache("route-collision");
     const destination = await localSourceLane("route-collision");
     const occupant = await captureIssue(
@@ -13123,7 +11972,6 @@ describe("cross-authority move route and discard", () => {
     );
     expect(refused.code).toBe("issue.ambiguous-identity");
     expect(detailsOf(refused)).toMatchObject({ colliding_occurrence_keys: ["occurrence-one"] });
-    // invariant: no `staged` memo came back, so the source never froze its tombstone for this move.
     expect(routeOfRow(cache.dbPath, operationId, "source")).toBe("remote-unknown");
     const db = new DatabaseSync(cache.dbPath);
     try {
@@ -13136,11 +11984,6 @@ describe("cross-authority move route and discard", () => {
     expect(outboxRows(cache.dbPath)).toEqual([]);
   }, 30_000);
   test("a v4 one-checkout move backfills its route from the reachable destination half", async () => {
-    // invariant: Review wave 6. A v4 source row names the move only by the peer it was staged
-    // against, and its destination half lives in a lane this checkout can open — the one fact that
-    // distinguishes the one-checkout topology from an exchange. A `local-remote` label would make
-    // the discard release only the source half and strand the staged destination row beside an
-    // unfenced record.
     const sourceRepo = makeRepo("https://v4-move.invalid/acme/source.git");
     const sourceContext = contextAt(sourceRepo);
     const sourceLocation = locationAt(sourceRepo);
@@ -13182,8 +12025,6 @@ describe("cross-authority move route and discard", () => {
     expect(destReceipt.fromVersion).toBe(4);
     expect(routeOfRow(destLocation.dbPath, operationId, "destination")).toBe("local-local");
 
-    // invariant: The relabelled route is the discard's own admission check: one run releases BOTH
-    // halves, and the frozen record is writable again once its source row leaves the blocking set.
     const discarded = await discardAcrossAuthorities(sourceContext, {
       operationId,
       actor: "project-manager",
@@ -13211,9 +12052,6 @@ describe("cross-authority move route and discard", () => {
   });
 
   test("a v4 exchange half keeps the route its own side names when no reachable peer row exists", async () => {
-    // invariant: The same backfill must not relabel an exchange: a v4 source whose destination
-    // lane this checkout cannot open is a two-checkout move, so it keeps `local-remote` — the label
-    // that makes the discard release only the half this checkout holds.
     const sourceRepo = makeRepo("https://v4-move.invalid/acme/exchange-source.git");
     const sourceContext = contextAt(sourceRepo);
     const sourceLocation = locationAt(sourceRepo);
@@ -13225,8 +12063,6 @@ describe("cross-authority move route and discard", () => {
         sourceAuthority: sourceLocation.repoKey,
         destinationAuthority: "v4-move.invalid/acme/never-present",
       });
-      // note: A v4 ledger may carry any string an older build wrote; a peer key that fails
-      // resolution must read as "not present", never abort the ladder.
       seedV4MoveRow(db, {
         operationId: "v4-move-bad-peer",
         role: "source",

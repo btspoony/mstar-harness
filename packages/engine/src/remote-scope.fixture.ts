@@ -1,12 +1,3 @@
-/**
- * note: TEST-ONLY fixture: a real remote scope for read-boundary tests.
- *
- * It is not exported from the package index and the build's entry points never
- * import it. It creates a unique canonical origin, publishes the protected
- * selector ref to a local bare repository, and gives tests the exact
- * `ScopeCheck` / `RemoteSnapshot` documents the Host Agent would submit - the
- * same public engine DTOs, never a mocked database or provider.
- */
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
@@ -69,13 +60,10 @@ export type RemoteScopeFixture = {
   repo: string;
   harness: string;
   origin: string;
-  /** note: The local bare origin directory, so a case can make the origin unavailable. */
   bare: string;
   repoKey: string;
   context(): StoreContext;
-  /** note: Publish (or republish) the selector; returns the checked commit. */
   publish(overrides?: Record<string, unknown>): string;
-  /** note: The strict verification batch for the published generation; `extra` covers further selected projects. */
   batch(commit: string, generation?: number, extra?: ScopeCheck[]): { version: 1; selectorCommit: string; generation: number; checks: ScopeCheck[] };
 };
 
@@ -362,15 +350,8 @@ export function submission(commit: string, check: ScopeCheck, snapshot: RemoteSn
   return { version: 1 as const, selectorCommit: commit, generation: 3, check, expectRevision, snapshot };
 }
 
-/* ------------------------------------------------------------------------ *
- * note: Outbox settlement: the host's own evidence for one frozen intent
- * ------------------------------------------------------------------------ */
-
-/** note: Dispatch one intent and return its single send permit's attempt id. */
 async function permitAttempt(context: StoreContext, operationId: string): Promise<string> {
   const read = await readRemoteIntent(context, operationId);
-  // invariant: A reviewed resolution's base IS its recorded fork: the permit needs the host's own
-  // complete traversal of exactly those heads, started after the conflict evidence was recorded.
   const fork = read.resolves === null ? null : await forkObservationOf(context, read);
   const permit = await dispatchRemoteIntent(context, operationId, fork ?? undefined);
   if (permit.kind !== "permit") {
@@ -379,7 +360,6 @@ async function permitAttempt(context: StoreContext, operationId: string): Promis
   return permit.permit.attemptId;
 }
 
-/** note: The host-attested fork traversal a resolution's dispatch must carry. */
 async function forkObservationOf(context: StoreContext, resolution: RemoteIntentRead): Promise<Record<string, unknown>> {
   const conflictedId = resolution.resolves;
   if (conflictedId === null) throw new Error(`fixture: operation ${resolution.operationId} is not a resolution`);
@@ -403,7 +383,6 @@ async function forkObservationOf(context: StoreContext, resolution: RemoteIntent
   };
 }
 
-/** note: The receipt envelope every settlement below submits for one attempt. */
 function receiptOf(
   read: RemoteIntentRead,
   attemptId: string,
@@ -422,7 +401,6 @@ function receiptOf(
   };
 }
 
-/** note: The provider identity a receipt names for the record its intent addresses. */
 function receiptIdentity(read: RemoteIntentRead, issueId: string): Record<string, unknown> {
   return {
     provider: read.binding.provider,

@@ -86,7 +86,6 @@ const verbs = ["init", "upgrade", "migrate", "backup", "activate", "retire"] as 
 const collaborationVerbs = ["plan", "apply", "activate", "restore", "adopt"] as const;
 const remoteVerbs = ["status", "bind", "observe", "adopt-issue"] as const;
 
-/** note: The one flag table both store families publish. */
 const optionFlags: Record<keyof StoreInput, string> = {
   harness: "--harness <path>", apply: "--apply", manifest: "--manifest <path>", attestation: "--attestation <absolute-json>", out: "--out <path>",
   backup: "--backup <path>",
@@ -115,27 +114,14 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   }
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
-    // invariant: these branches recover through runtime-selected store verbs, so no single statically provable command covers them.
-    // reachability: manual — the repo-identity, cutover-not-quiescent, cutover-unconfirmed and not-initialized branches recover through runtime-selected store verbs, persisted-evidence inspection, or the collaboration-restore route whose required flags directly follow the registered verb name, so the action-word candidate scan cannot parse them; no single statically provable command covers these branches
     : refusalEnvelope({
       command: id,
       status: "refused",
       code,
       exitCode: 1,
       message,
-      // invariant: Execution initialization is the one store verb a remote checkout
-      // runs AFTER its cache exists, so its recovery names the bootstrap order and
-      // never the binding-free `store init` route the generic branches assume.
-      // Literal branches only: the repository's refusal-quality lint proves the
-      // text statically, so every code the engine can emit carries the family's
-      // own words for the exact route instead of a composed variable.
-      // invariant: An engine-authored recovery is forwarded verbatim, never restated: it is the
-      // single owner of that code's repair route, so this chain only supplies the text for
-      // codes the engine does not own.
       recovery: engineErrorFacts(error).recovery ?? (id === "store.init" && (code === "remote.unavailable" || code === "remote.selector-unavailable")
         ? "Store init never creates a remote cache: access to the canonical origin and the protected selector ref is the prerequisite, and the checkout is inspected with mstar path resolve. Then check mstar store collaboration remote status --harness <abs>, have the Host Agent verify the selected scope, complete the reviewed bind with mstar store collaboration remote bind --harness <abs> --input <file|->, and retry mstar store init --harness <abs>."
-        // invariant: A stale binding is mode-specific, so the recovery names both modes instead of
-        // replacing the local/mirror adoption route with instructions for another checkout.
         : id === "store.init" && code === "collaboration.stale-binding"
         ? "Store init never creates or adopts an authority this checkout is not bound to: inspect the checkout with mstar path resolve and correct its origin or .mstarc mode. A remote checkout whose selector moved or whose binding is stale re-establishes its cache with mstar store collaboration remote bind --harness <abs> --input <file|->, then retries mstar store init --harness <abs>. A local or mirror checkout that holds no finalized binding for its own published authority adopts it with mstar store collaboration adopt --harness <abs> --expect-store <store-id>; a checkout that now resolves to another repository starts a new checkout instead."
         : code === "store.attestation-invalid"
@@ -144,10 +130,8 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         // explicit document that overrides the generated one).
         ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> --attestation <absolute-json> for an upgrade, or mstar store activate --manifest <path> --operator <name> for an activation."
         : code === "collaboration.repo-identity-unresolved" || code === "collaboration.mode-required" || code === "collaboration.mode-invalid" || code === "collaboration.mode-unavailable"
-          // note: Every repository-scoped store verb needs the checkout's collaboration identity and mode.
           ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=local|mirror, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
           : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
-            // invariant: A combined source or a competing target is settled by the reviewed cutover, never by a guessed merge.
             ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then apply and activate it with mstar store collaboration apply --harness <abs> --manifest <abs-manifest> and mstar store collaboration activate --harness <abs> --manifest <abs-manifest>. A source or target another activation owns is preserved, never overwritten."
             : code === "collaboration.cutover-not-quiescent"
               ? "Settle the pending mirror batches or catalog registrations the refusal names with their own verbs, stop the remaining writers, then retry the same reviewed manifest."
@@ -242,24 +226,12 @@ function absoluteFile(value: string, flag: string): string {
 function outputPath(value: string | undefined, cwd: string): string | undefined {
   return value === undefined ? undefined : resolveCliPath(value, cwd);
 }
-/**
- * invariant: Publish ONE operator report create-only, beside the operation it describes.
- *
- * A report is evidence, never an authority: the destination must be a NEW name,
- * so an operator can never truncate a source, a recovery manifest or a live
- * authority with serialized output — including from the read-only `plan` verb.
- * A failure to publish a report never rewrites the operation's outcome: the
- * caller keeps the committed result and discloses the reporting failure.
- */
 function publishReport(
   out: string | undefined,
   value: unknown,
 ): { out: string | null; reportError: { code: string; message: string } | null } {
   if (out === undefined) return { out: null, reportError: null };
   const target = path.resolve(out);
-  // invariant: EVERY step — directory creation, the private write, the create-only link and
-  // the cleanup — sits inside this report-only boundary: a committed operation's
-  // outcome is never replaced by a report failure, not even by its own cleanup.
   let tmp: string | null = null;
   try {
     mkdirSync(path.dirname(target), { recursive: true });
@@ -284,17 +256,11 @@ function publishReport(
       try {
         rmSync(tmp, { force: true });
       } catch {
-        // invariant: cleanup is best-effort scratch removal; it never decides the outcome
       }
     }
   }
 }
 
-/**
- * invariant: The create-only default manifest below the selected harness's recovery folder.
- * The receipt discloses it, so an operator who omitted `--out` still knows
- * exactly which two images and which manifest now exist.
- */
 function defaultBackupManifestPath(harnessDir: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   return path.join(harnessDir, "archived", "recovery", `repository-${stamp}-${randomUUID().slice(0, 8)}.json`);
@@ -334,9 +300,6 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       case "store.init": {
         const fact = findLegacyWorkspaceFact(context.harnessDir);
         if (fact !== null) throw new StoreError("store.already-exists", `${fact}. Nothing was created.`);
-        // note: The repository's collaboration authority comes first: a fresh init
-        // creates or reuses it WITHOUT clearing it, and only this checkout's
-        // execution is initialized here.
         const collaboration = await ensureCollaborationAuthority(context);
         const handle = await initializeStore(context);
         try {
@@ -358,13 +321,6 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
       case "store.upgrade": {
         requireInputs(input, ["operator"]);
         const operator = required(input.operator, "--operator");
-        // invariant: Caller-input usage is decided before any lane is touched, so a malformed
-        // selector or an unreadable attestation file leaves an existing v1 lane exactly as it was.
-        // The schema cutover's safety disposal needs the existing operator/stop
-        // attestation when a retired plan-PM claim is present. The engine's own
-        // validator is the authority; the CLI reads the absolute JSON file and
-        // hands the parsed document through unchanged. Omitting it is valid when
-        // no retired claim exists.
         const attestation = input.attestation === undefined
           ? undefined
           : jsonFile<ActivationAttestation>(input.attestation, "--attestation");
@@ -378,26 +334,11 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
             code: "store.upgrade-dsh-ack-unmatched",
           });
         }
-        // invariant: An existing v1 collaboration lane is advanced by the v2 migration BEFORE
-        // current-only admission can refuse it with the very command the operator ran.
         const collaborationUpgrade = await upgradeExistingCollaborationStore(context, operator);
-        // invariant: The two owners meet here: this checkout's collaboration authority is
-        // established (create/reuse, never cleared) before the execution half
-        // can report any imported state. A combined source with collaboration
-        // rows refuses with the cutover route, and the import itself refuses a
-        // staged lane.
         try {
           await ensureCollaborationAuthority(context);
         } catch (error) {
-          // invariant: A combined source must reach this build's schema here, because the
-          // reviewed cutover's source floor is the last schema a released build writes: the
-          // refusal above otherwise leaves `store collaboration plan` and the terminal
-          // lifecycle write unreachable. Only EXECUTION advances; collaboration rows are the
-          // cutover's to move.
           if (!(error instanceof StoreError) || error.code !== "collaboration.cutover-required") throw error;
-          // note: The SAME provision-and-retry the legacy-import branch uses, so the help's
-          // automatic-attestation promise holds here too; it also refuses an open mirror run
-          // before the schema passes the released build's ceiling.
           const schemaVersion = await advanceSchemaWithGeneratedAttestation({
             context,
             operator,
@@ -414,14 +355,6 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         const upgraded = await upgradeStoreMinimal({
           context,
           operator,
-          // invariant: The caller's id seeds the operation, so a clean retry (same options, same
-          // source bytes) replays its retained receipt instead of reserving a second operation.
-          // The request identity is the operator, the source bytes and the declarations this run
-          // consumes (--ack-skip-workflow, --ack-skip-compass, --delivery): a retry that adds one
-          // is a different request and conflicts under the old id, so the advertised recovery
-          // names those and never claims the same `--operation` still applies — `--operation` is
-          // omitted. `--ack-skip-dsh` is host-state import state, NOT request identity: adding it
-          // under the same id replays the receipt rather than conflicting.
           operationId: input.operation ?? randomUUID(),
           ...(attestation === undefined ? {} : { attestation }),
           ...(input.ackSkipDsh === undefined ? {} : { acknowledgedSkips: input.ackSkipDsh }),
@@ -432,8 +365,6 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
         return ok(id, collaborationUpgrade === null ? upgraded : { ...upgraded, collaboration: collaborationUpgrade });
       }
       case "store.backup": {
-        // invariant: A repository backup is the verified PAIR of both domains, never one
-        // execution image sold as a full backup.
         const out = outputPath(input.out, invocation.cwd) ?? defaultBackupManifestPath(context.harnessDir);
         const receipt: RepositoryBackupReceipt = await backupRepositoryStores(context, { out: absoluteFile(out, "--out") });
         return ok(id, receipt);
@@ -491,12 +422,6 @@ async function execute(id: string, input: StoreInput, invocation: InvocationCont
  * a file path and is never an inline JSON input.
  */
 
-/**
- * invariant: The one operator lifecycle of the collaboration authority. `--harness` names
- * an absolute operation TARGET (this checkout's harness), never a discovered
- * root, so every verb here runs against the scope the operator named and no
- * other.
- */
 async function executeCollaboration(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   const verb = id.slice("store.collaboration.".length) as (typeof collaborationVerbs)[number];
   try {
@@ -529,9 +454,6 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
       return ok(id, { ...receipt, receiptFile: report.out, reportError: report.reportError });
     }
     if (verb === "adopt") {
-      // note: The explicit adoption verb: binds THIS checkout to an already ACTIVE
-      // authority whose recorded lineage proves the exact live generation. It
-      // mutates no collaboration data.
       const adoption = await adoptCollaborationBinding(context, {
         ...(input.expectStore === undefined ? {} : { expectStoreId: required(input.expectStore, "--expect-store") }),
       });
@@ -545,8 +467,6 @@ async function executeCollaboration(id: string, input: StoreInput, invocation: I
       const authority = await restoreCollaborationBackup(context, receipt, {
         operator: required(input.operator, "--operator"),
         attestation,
-        // note: The pair is resolved beside the manifest the OPERATOR supplied, not a
-        // recorded absolute path: a moved, intact pair restores from its new home.
         manifestPath: absoluteFile(required(input.backup, "--backup"), "--backup"),
       });
       const report = writeReceipt(authority);
@@ -597,7 +517,6 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
     id,
     cli: { path: ["store", "collaboration", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
     rootInputs: [],
     output: commandEnvelopeSchema,
     effects: ["read", "write"],
@@ -606,11 +525,6 @@ function collaborationDefinition(verb: (typeof collaborationVerbs)[number]): Com
   };
 }
 
-/**
- * note: Read a JSON argument for a remote verb: a file path, or `-` for stdin. An
- * unreadable path or a body that is not JSON is a USAGE refusal (exit 2) naming
- * the flag; no store work has happened yet.
- */
 async function readRemoteJson(invocation: InvocationContext, value: string | undefined, flag: string): Promise<unknown> {
   if (value === undefined || value.trim() === "") throw new SddScriptError(`${flag} is required`, 2);
   let raw: string;
@@ -631,12 +545,6 @@ async function readRemoteJson(invocation: InvocationContext, value: string | und
   }
 }
 
-/**
- * note: The remote observation lane: `status|bind|observe|adopt-issue` under
- * `store collaboration remote`. `--harness` names this checkout's harness
- * explicitly, exactly like the collaboration cutover family; no provider call,
- * credential or transport exists here.
- */
 async function executeRemote(id: string, input: StoreInput, invocation: InvocationContext): Promise<CommandEnvelope> {
   const verb = id.slice("store.collaboration.remote.".length) as (typeof remoteVerbs)[number];
   try {
@@ -668,12 +576,6 @@ async function executeRemote(id: string, input: StoreInput, invocation: Invocati
   }
 }
 
-/**
- * note: The strict `--input` document each remote verb carries, published through schema
- * discovery (`payloadSchemas.inputDocument`). The descriptor name is deliberately NOT an
- * input field: the CLI value of `--input` stays a file path (or `-` for stdin), so only
- * discovery sees the schema and nothing reshapes the path input.
- */
 const remoteInputDocuments: Partial<Record<(typeof remoteVerbs)[number], z.ZodType>> = {
   bind: remoteBindDocumentSchema,
   observe: remoteObserveDocumentSchema,
@@ -723,10 +625,7 @@ function remoteDefinition(verb: (typeof remoteVerbs)[number]): CommandDefinition
     id,
     cli: { path: ["store", "collaboration", "remote", verb], aliases: [], arguments: [], options },
     input: inputSchema.pick(shape),
-    // note: `payloadSchemas.inputDocument` is the strict JSON the --input flag carries;
-    // the flag's own value stays a file path, so no admission schema changes.
     ...(remoteInputDocuments[verb] === undefined ? {} : { payloads: { inputDocument: { schema: remoteInputDocuments[verb] } } }),
-    // invariant: `harness` names the operation's target, so the connection pin must not rewrite it.
     rootInputs: [],
     output: commandEnvelopeSchema,
     effects: effects[verb],

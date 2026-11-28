@@ -37,7 +37,6 @@ import { createExecutionWorkflow, readExecutionState, type ExecutionCaller } fro
 import { initializeStore, type StoreContext } from "../src/store-db.js";
 import type { WorkflowSnapshot } from "../src/workflow.js";
 import {
-
   SddScriptError,
   assertBaseSha,
   checkSddAction,
@@ -67,13 +66,6 @@ const ambientEnvValues = new Map<string, string | undefined>(
   AMBIENT_ENV_KEYS.map((key) => [key, process.env[key]]),
 );
 
-// why: an ambient MSTAR_CONTROL_ROOT / SDD_DIR export would redirect fixture
-// resolution and fail these tests spuriously (or worse, resolve against the
-// developer's real control worktree), so pin all three to undefined before
-// every test and restore the ambient values once at the end of the suite.
-// `sddWorkspace` reads only MSTAR_CONTROL_ROOT as its root selector
-// (MSTAR_HARNESS_DIR is retired and ignored); taskBrief/reviewPackage read
-// SDD_DIR.
 beforeEach(() => {
   for (const key of AMBIENT_ENV_KEYS) delete process.env[key];
 });
@@ -2482,14 +2474,12 @@ test("explicit linked marker refuses unavailable Git without creating process st
   }
 });
 
-
 // The file-snapshot "both topology keys" refusal (`control_worktree_path`
 // alongside `integration_worktree_path`) retired with the file probe: the
 // ACTIVE graph is written only through `createExecutionWorkflow`, whose
 // `validateWorkflowSnapshot` refuses the dual-key shape at registration, so
 // the resolver can never observe it (workflow.snapshot validation tests own
 // that invariant).
-
 
 test("review and base verification bound hung Git before artifact writes", () => {
   const root = tmpRoot("sdd-bounded-git-");

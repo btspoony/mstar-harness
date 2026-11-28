@@ -78,13 +78,6 @@ function authorityError(code: string, message: string): AuthorityRefusal {
 async function authorityRefusalFor(api: WriteGateEngineApi, target: GatedDocument): Promise<AuthorityRefusal | null> {
  if (target.kind === "status" || target.kind === "snapshot") {
  try {
- // invariant: ACTIVE-only: the engine's route decision retires the file execution
- // route entirely — status/snapshot writes are vetoed while the
- // authority is ACTIVE. A pre-activation harness (`store.not-initialized`
- // / `store.not-active`) is NO verdict: the compass-governed document
- // lint below decides (the register route has no such pre-activation
- // permission any more). Any other refusal leaves the authority UNKNOWN
- // and fails closed; there is no file-route fallback.
  await api.resolveExecutionReadRoute({ harnessDir: target.harnessDir });
  return authorityError("execution.direct-write-refused", "The ACTIVE execution authority retires this file as a persistence route");
  } catch (error) {
@@ -201,11 +194,6 @@ async function executeBefore(event: WriteBeforeEvent, services: WriteGateService
 
  const requestedDoc = classifyOne(api, requested);
  const landedDoc = landed === requested ? null : classifyOne(api, landed);
- // invariant: The bytes a write lands on carry their own authority: a requested
- // execution document that resolves to a register must face the register
- // gate, and a requested register that resolves elsewhere must still face
- // its own. Both distinct classifications are decided (register first), so
- // neither direction can mask the other's authority.
  const documents: GatedDocument[] = [];
  for (const doc of [landedDoc, requestedDoc]) {
  if (doc === null) continue;

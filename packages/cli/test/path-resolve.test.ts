@@ -243,9 +243,6 @@ describe("mstar path resolve — harness/specs dir resolution", () => {
 
 describe("mstar path resolve — collaboration diagnostic", () => {
   test("path resolve discloses collaboration selection (main and linked) without creating a database", () => {
-    // why: The user home is the namespace anchor; the child process reads it at
-    // startup, so a fixture home is the only seam that keeps the diagnostic off
-    // the developer's real ~/.mstar.
     const home = mkdtempSync(join(tmpdir(), "mstar-collab-home-"));
     try {
       withRoot((root) => {
@@ -253,8 +250,6 @@ describe("mstar path resolve — collaboration diagnostic", () => {
         execFileSync("git", ["-C", root, "remote", "add", "origin", "https://github.com/Acme/Repo.git"], {
           stdio: "ignore",
         });
-        // note: Every origin-backed checkout now proves selector absence with a live lookup;
-        // route the synthetic origin to an empty local bare instead of a network transport.
         const emptyOrigin = join(root, "empty-origin.git");
         execFileSync("git", ["init", "-q", "--bare", emptyOrigin], { stdio: "ignore" });
         execFileSync(
@@ -282,7 +277,6 @@ describe("mstar path resolve — collaboration diagnostic", () => {
         expect(data(fromLinked).collaboration).toEqual(expected);
         expect(existsSync(join(home, ".mstar"))).toBe(false);
 
-        // note: No mode: the same envelope carries the engine's named diagnostic.
         writeFileSync(join(root, ".mstarc"), "[config]\nreview_dir=process/reviews\n");
         const withoutMode = runResolve([root], { HOME: home });
         expect(withoutMode.exitCode).toBe(0);

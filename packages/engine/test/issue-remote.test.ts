@@ -69,7 +69,6 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** note: The phases of every recorded reservation for one operation id. */
 async function intentPhases(context: StoreContext, operationId: string): Promise<string[]> {
   const handle = await openStore(context, "read");
   try {
@@ -82,7 +81,6 @@ async function intentPhases(context: StoreContext, operationId: string): Promise
   }
 }
 
-/** note: The cache's outbox rows, newest last, as the verbs froze them. */
 function outboxRows(context: StoreContext): Array<Record<string, unknown>> {
   const db = new DatabaseSync(resolveCollaborationLocation(context).dbPath);
   try {
@@ -98,15 +96,10 @@ function frozenChange(row: Record<string, unknown>): { kind: string; issueRef: s
   return (JSON.parse(String(row.request_json)) as { event: { change: { kind: string; issueRef: string; mstar: Record<string, unknown> } } }).event.change;
 }
 
-/**
- * note: An established answer records ONE settled no-change claim under its operation id — that is
- * what keeps the id from carrying a different effect later — and nothing that could be dispatched.
- */
 function expectNoChangeClaim(context: StoreContext): void {
   expect(outboxRows(context).map((row) => row.state)).toEqual(["abandoned"]);
 }
 
-/** note: One refusal as its envelope: the test's own failure when nothing refused. */
 async function refusalOf(run: () => Promise<unknown>): Promise<{ code: string; message: string; details?: unknown }> {
   try {
     await run();
@@ -122,7 +115,6 @@ type RemoteFixture = Readonly<{
   context: StoreContext;
 }>;
 
-/** note: The observed fixture issue rewritten to a terminal disposition, as a closed provider record carries it. */
 function withTerminalSubject(snapshot: RemoteSnapshot): RemoteSnapshot {
   const [first, ...rest] = snapshot.issues;
   if (first === undefined || first.mstar === null) return snapshot;
@@ -135,7 +127,6 @@ function withTerminalSubject(snapshot: RemoteSnapshot): RemoteSnapshot {
   };
 }
 
-/** note: The observed fixture issue linked to a SECOND plan, so closure needs the whole acceptance. */
 function withSecondPlanLink(snapshot: RemoteSnapshot): RemoteSnapshot {
   const [first, ...rest] = snapshot.issues;
   if (first === undefined || first.mstar === null) return snapshot;
@@ -167,11 +158,6 @@ function withSecondPlanLink(snapshot: RemoteSnapshot): RemoteSnapshot {
   };
 }
 
-/**
- * why: A second MARKED observed issue beside the fixture's own, so a duplicate/superseded
- * closure has a canonical target that carries a portable reference the frozen relation
- * can name.
- */
 function withCanonicalTarget(snapshot: RemoteSnapshot): RemoteSnapshot {
   const [first, second, ...rest] = snapshot.issues;
   if (first === undefined || first.mstar === null) return snapshot;
@@ -200,11 +186,6 @@ function withCanonicalTarget(snapshot: RemoteSnapshot): RemoteSnapshot {
   };
 }
 
-/**
- * why: The fixture's provider-only issue carrying the capture's occurrence as its genesis subject,
- * exactly as a re-observation would install it between a capture's dedupe read and its freeze:
- * the identity the old snapshot did not carry is now marked on the authority.
- */
 function withAdoptedOccurrence(snapshot: RemoteSnapshot, overrides: Partial<CaptureInput> = {}): RemoteSnapshot {
   const input = captureInput(overrides);
   return {
@@ -259,11 +240,6 @@ function withAdoptedOccurrence(snapshot: RemoteSnapshot, overrides: Partial<Capt
   };
 }
 
-/**
- * note: The observed marked issue carrying ONE more occurrence, exactly as a re-observation would
- * install it between a capture's dedupe read and its freeze: the same identity triple, the given
- * occurrence key, and content that matches the capture input built from the same overrides.
- */
 function withExtraOccurrence(snapshot: RemoteSnapshot, overrides: Partial<CaptureInput> = {}): RemoteSnapshot {
   const input = captureInput(overrides);
   const [first, ...rest] = snapshot.issues;
@@ -299,11 +275,6 @@ function withExtraOccurrence(snapshot: RemoteSnapshot, overrides: Partial<Captur
   };
 }
 
-/**
- * note: The plan provenance one composite's own scope check reads: the residual-close
- * remote half refuses an issue whose observed subject names no link to THIS plan,
- * so the fixture subjects name the link before any gate below it can answer.
- */
 function withResidualPlanLinks(snapshot: RemoteSnapshot): RemoteSnapshot {
   const [first, ...rest] = snapshot.issues;
   if (first === undefined || first.mstar === null) return snapshot;
@@ -336,11 +307,6 @@ function withResidualPlanLinks(snapshot: RemoteSnapshot): RemoteSnapshot {
   };
 }
 
-/**
- * note: One bound checkout whose cache holds one complete observation. `mutate` adjusts the
- * observed subject before ingest (a terminal disposition, extra plan links), the same
- * way the Host Agent's snapshot would differ.
- */
 async function remoteFixture(
   label: string,
   mutate?: (snapshot: RemoteSnapshot) => RemoteSnapshot,
@@ -356,7 +322,6 @@ async function remoteFixture(
   return { scope, commit, context };
 }
 
-/** note: The observed fixture occurrence, exactly as the complete snapshot froze it. */
 function captureInput(overrides: Partial<CaptureInput> = {}): CaptureInput {
   return {
     projectId: REMOTE_IDS.projectId,
@@ -384,7 +349,6 @@ const resolvedEvidence: ClosureEvidence = {
   alignmentRef: "QA gate: Approve",
 };
 
-/** note: The plan-scoped residual-close composite's own target id, as every plan row names it. */
 const RESIDUAL_PLAN_ID = "20261121-issue-remote-residual";
 const RESIDUAL_WORKFLOW_ID = "wf-issue-remote";
 
@@ -394,10 +358,6 @@ type RemotePlanFixture = RemoteFixture & {
   token: () => Promise<ExecutionToken>;
 };
 
-/**
- * note: One remote-bound checkout that also holds an ACTIVE execution workflow and plan row,
- * so the residual-close composite can run its remote half against the observed subject.
- */
 async function remotePlanFixture(
   label: string,
   mutate?: (snapshot: RemoteSnapshot) => RemoteSnapshot,
@@ -477,10 +437,6 @@ function residualCloseRequest(
   };
 }
 
-// ---------------------------------------------------------------------------
-// note: remote capture dedupe
-// ---------------------------------------------------------------------------
-
 test("a recurring remote capture returns the established occurrence without a second create", async () => {
   const fixture = await remoteFixture("capture-established");
   const receipt = await captureIssue(fixture.context, captureInput(), { operationId: "30000000-0000-4000-8000-000000000001", actor: "project-manager" });
@@ -511,9 +467,6 @@ test("the same identity appends one occurrence through one issue-replace", async
   expect(occurrences[0]).toMatchObject({ occurrenceKey: "occurrence-one" });
   expect(occurrences[1]).toMatchObject({ occurrenceKey: "run-2" });
 
-  // invariant: The confirmed append receipt answers the observed occurrence: the recorded
-  // provider effect, not a pending row, is the business outcome a replay reports, and the
-  // receipt's occurrenceId names the occurrence ACTUALLY in the confirmed event.
   await confirmFrozenIntent(fixture.context, rows[0]!.operation_id as string);
   const appendedEventId = (occurrences[1] as Record<string, unknown>).eventId;
   const confirmed = await captureIssue(fixture.context, captureInput({ occurrenceKey: "run-2" }), {
@@ -568,8 +521,6 @@ test("a reused occurrence key refuses like the local capture body", async () => 
 test("a snapshot that moves under the dedupe read never freezes a second subject", async () => {
   const fixture = await remoteFixture("capture-moved-snapshot");
   const identity = { occurrenceKey: "moved-in", sourceIdentity: "review:moved", rootCauseKey: "moved.cause", acceptanceKey: "moved.acceptance" };
-  // note: A re-observation installs the same identity BETWEEN the capture's dedupe read and the
-  // freeze, so the create must be decided against the freeze-time snapshot, not the older sample.
   let sampled = false;
   setRemoteWriteScopeGapForTest(async () => {
     if (sampled) return;
@@ -591,8 +542,6 @@ test("a snapshot that moves under the dedupe read never freezes a second subject
   expect(refused.message).toContain("already carries this identity");
   expect(outboxRows(fixture.context)).toHaveLength(0);
 
-  // invariant: The named correction route works: after the refresh the SAME capture answers the
-  // established receipt instead of freezing anything.
   const established = await captureIssue(fixture.context, captureInput(identity), {
     operationId: "30000000-0000-4000-8000-000000000007",
     actor: "project-manager",
@@ -603,8 +552,6 @@ test("a snapshot that moves under the dedupe read never freezes a second subject
 
 test("an occurrence that arrives before the freeze answers the established receipt instead of appending twice", async () => {
   const fixture = await remoteFixture("capture-freeze-race");
-  // note: The dedupe read sees NO occurrence with this key (so the capture chooses append), and
-  // the re-observation installs it before the replacement is formed.
   let sampled = false;
   setRemoteWriteScopeGapForTest(async () => {
     if (sampled) return;
@@ -633,8 +580,6 @@ test("an operation id with a frozen entry answers through the replay gate, not a
   expect(queued.code).toBe("remote.effect-pending");
   expect(outboxRows(fixture.context)).toHaveLength(1);
 
-  // note: The access check expires, so the frozen request is disclosed metadata-only: the serial
-  // replay identity still answers FIRST, exactly as the local operation ledger does.
   const db = new DatabaseSync(resolveCollaborationLocation(fixture.context).dbPath);
   try {
     db.prepare("update remote_bindings set verified_at = ?").run(new Date(Date.now() - 61_000).toISOString());
@@ -652,9 +597,6 @@ test("an operation id with a frozen entry answers through the replay gate, not a
 test("a key another subject carries answers the established receipt, never a second append", async () => {
   const fixture = await remoteFixture("capture-cross-subject-key");
   const input = captureInput({ occurrenceKey: "cross-key" });
-  // note: A re-observation installs the SAME identity and key on a DIFFERENT subject between the
-  // capture's dedupe read and the replacement's own scope read, so the project-wide key now
-  // belongs to the other subject and the append callback's target-only scan would miss it.
   let sampled = false;
   setRemoteWriteScopeGapForTest(async () => {
     if (sampled) return;
@@ -670,8 +612,6 @@ test("a key another subject carries answers the established receipt, never a sec
     actor: "project-manager",
   });
   expect(sampled).toBe(true);
-  // invariant: The project-wide key decides: the occurrence the OTHER subject already carries is
-  // the established answer, and nothing is appended a second time.
   expect(established).toMatchObject({
     issueId: REMOTE_IDS.providerOnlyIssueId,
     occurrenceId: "11111111-1111-4111-8111-199999999999",
@@ -683,9 +623,6 @@ test("a key another subject carries answers the established receipt, never a sec
 test("a scope that moves after the last sample refuses the freeze and keeps retrying the same id", async () => {
   const fixture = await remoteFixture("capture-moved-after-sample");
   const identity = { occurrenceKey: "late-move", sourceIdentity: "review:late", rootCauseKey: "late.cause", acceptanceKey: "late.acceptance" };
-  // note: The move lands AFTER the LAST scope sample (the write's own read), so every sampled
-  // view the verb decided from is already stale when the freeze transaction opens. Only the
-  // freeze-time observation revision can prove that; the samples cannot.
   let samples = 0;
   setRemoteWriteScopeGapForTest(async () => {
     samples += 1;
@@ -706,33 +643,23 @@ test("a scope that moves after the last sample refuses the freeze and keeps retr
   expect(refused.code).toBe("collaboration.observation-stale");
   expect(outboxRows(fixture.context)).toHaveLength(0);
 
-  // invariant: The refusal is an environment state, so the SAME capture (same operation id,
-  // same payload) proceeds after the refresh and answers the established occurrence instead of
-  // creating a second subject.
   const established = await captureIssue(fixture.context, captureInput(identity), {
     operationId: "30000000-0000-4000-8000-00000000000b",
     actor: "project-manager",
   });
   expect(established).toMatchObject({ issueId: REMOTE_IDS.providerOnlyIssueId, created: false });
-  // invariant: The recorded claim makes the id unusable for a different effect afterwards.
   expectNoChangeClaim(fixture.context);
 });
 
 test("a durable operation under the same id refuses an established no-op answer", async () => {
   const fixture = await remoteFixture("capture-noop-overlap");
   const operationId = "30000000-0000-4000-8000-00000000000c";
-  // note: The bounded overlap of the no-op answer: the losing capture passes replay admission
-  // (no outbox row yet) and pauses inside the write's own scope read, while a DIFFERENT-payload
-  // capture freezes the SAME operation id in that gap. The winner's row is durable before the
-  // loser's sampled no-op decision, so only a re-read at that decision boundary can refuse the
-  // collision; the observed no-op alone would report a false established success over it.
   let samples = 0;
   setRemoteWriteScopeGapForTest(async () => {
     samples += 1;
     if (samples < 2) return;
     setRemoteWriteScopeGapForTest(undefined);
     const marked = completeSnapshot(positiveCheck()).issues[0]!.mstar!;
-    // note: The frozen event's subject carries no derived `head` or outer `issueRef`.
     const { issueRef: _derivedRef, head: _derivedHead, ...subject } = marked;
     await prepareRemoteIntent(fixture.context, {
       binding: {
@@ -771,9 +698,6 @@ test("a durable operation under the same id refuses an established no-op answer"
     }),
   );
   expect(samples).toBe(2);
-  // invariant: The established answer is replay-first like an insert: the boundary re-reads the
-  // outbox row under the same id, and a different request frozen there is a collision, never a
-  // false established success.
   expect(refused.code).toBe("remote.operation-conflict");
   expect(refused.message).toContain("frozen under the business request");
   const rows = outboxRows(fixture.context);
@@ -788,8 +712,6 @@ test("an established occurrence success is recorded and replays its own answer u
   expect(established).toMatchObject({ issueId: REMOTE_IDS.markedIssueId, created: false, storeRevision: 0 });
   expectNoChangeClaim(fixture.context);
 
-  // invariant: The recorded claim answers the identical request with the SAME business result, from
-  // the durable row instead of a re-derived observation answer, and never appends a second row.
   const replayed = await captureIssue(fixture.context, captureInput(), { operationId, actor: "project-manager" });
   expect(replayed).toEqual(established);
   const rows = outboxRows(fixture.context);
@@ -803,8 +725,6 @@ test("a different payload under an established operation id refuses instead of r
   const established = await captureIssue(fixture.context, captureInput(), { operationId, actor: "project-manager" });
   expect(established).toMatchObject({ created: false });
 
-  // invariant: The successful no-op OWNS the operation id: another request under it is a
-  // collision, never a fresh write, because a reused id must never carry a different effect.
   const refused = await refusalOf(() =>
     captureIssue(fixture.context, captureInput({ occurrenceKey: "run-2" }), { operationId, actor: "project-manager" }),
   );
@@ -812,10 +732,6 @@ test("a different payload under an established operation id refuses instead of r
   expect(refused.message).toContain("frozen under the business request");
   expectNoChangeClaim(fixture.context);
 });
-
-// ---------------------------------------------------------------------------
-// note: remote close gates
-// ---------------------------------------------------------------------------
 
 test("a remote closure refuses an already-terminal issue", async () => {
   const fixture = await remoteFixture("30000000-0000-4000-8000-000000000006", withTerminalSubject);
@@ -827,7 +743,6 @@ test("a remote closure refuses an already-terminal issue", async () => {
     }),
   );
   expect(refused.code).toBe("issue.invalid-disposition");
-  // invariant: The refusal names the usable next steps: inspect, reopen only deliberately.
   expect(JSON.stringify(refused.details)).toContain("mstar issue show");
   expect(JSON.stringify(refused.details)).toContain("mstar issue reopen");
   expect(outboxRows(fixture.context)).toHaveLength(0);
@@ -845,17 +760,9 @@ test("a terminal refusal addressed by provider id names an executable inspect co
   expect(refused.code).toBe("issue.invalid-disposition");
   const details = (refused.details ?? {}) as Record<string, unknown>;
   const recovery = String(details.recovery);
-  // invariant: A provider UUID refuses `issue show` without --project in remote mode, so the
-  // terminal refusal of a UUID-addressed closure names the command WITH its project — the exact
-  // command this checkout can run.
   expect(recovery).toContain(`mstar issue show --id ${REMOTE_IDS.markedIssueId} --project ${REMOTE_IDS.projectId}`);
-  // note: And it is executable: the printed inspect form reads the addressed issue.
   const shown = await showIssue(fixture.context, REMOTE_IDS.markedIssueId, REMOTE_IDS.projectId);
-  // note: The marked subject's provider id surfaces as the detail's externalId either way.
   expect(JSON.stringify(shown)).toContain(REMOTE_IDS.markedIssueId);
-  // invariant: Reopening is never the default suggestion: the recovery names the deliberate
-  // inputs a reopen requires through the command's OWN registered contract (its JSON
-  // `IssueReopen` payload), never a flag the command does not accept.
   expect(recovery).toContain("mstar issue reopen");
   expect(recovery).toContain("mstar issue reopen --help");
   expect(recovery).toContain("mstar schema IssueReopen");
@@ -875,8 +782,6 @@ test("a terminal refusal addressed by portable reference names the reference for
   );
   expect(refused.code).toBe("issue.invalid-disposition");
   const recovery = String(((refused.details ?? {}) as Record<string, unknown>).recovery);
-  // invariant: A stable reference needs no --project, so the refusal prints exactly the form the
-  // caller addressed — and that form reads the same issue.
   expect(recovery).toContain(`mstar issue show --id ${REMOTE_IDS.issueRef}`);
   expect(recovery).not.toContain("--project");
   const shown = await showIssue(fixture.context, REMOTE_IDS.issueRef);
@@ -886,8 +791,6 @@ test("a terminal refusal addressed by portable reference names the reference for
 
 test("a closure whose scope moves after its sample refuses the freeze on the freeze revision", async () => {
   const fixture = await remoteFixture("close-moved-scope", withCanonicalTarget);
-  // note: The re-observation removes the canonical target AFTER the closure's own scope read, so
-  // the sampled gate decision (duplicate-of observed) is stale when the freeze transaction opens.
   let sampled = false;
   setRemoteWriteScopeGapForTest(async () => {
     if (sampled) return;
@@ -912,8 +815,6 @@ test("a closure whose scope moves after its sample refuses the freeze on the fre
       expectedRevision: 1,
     }),
   );
-  // invariant: The gates hold on the revision that can actually freeze: a sample the freeze
-  // transaction no longer observes refuses, and nothing is enqueued behind it.
   expect(refused.code).toBe("collaboration.observation-stale");
   expect(outboxRows(fixture.context)).toHaveLength(0);
 });
@@ -947,9 +848,6 @@ test("a plan-scoped closure whose scope moves after its sample keeps its reserva
       evidence: { reason: "same defect", references: ["qa/run.md"], canonicalIssueId: "88888888-8888-4888-8888-888888888888", alignmentRef: "QA gate: Approve" },
     },
   }));
-  // invariant: A scope that moved under the sampled base is an environment state: the composite
-  // reports a partial naming it and RETAINS the reservation for the same-id reissue after the
-  // refresh, instead of declining an operation that proved no pre-freeze failure.
   expect(refused.code).toBe("collaboration.operation-partial");
   const details = (refused.details ?? {}) as Record<string, unknown>;
   expect(details).toMatchObject({ phase: "prepared", cause_code: "collaboration.observation-stale" });
@@ -959,7 +857,6 @@ test("a plan-scoped closure whose scope moves after its sample keeps its reserva
 
 test("a remote closure enforces multi-plan acceptance against the observed project", async () => {
   const fixture = await remoteFixture("close-multi-plan", withSecondPlanLink);
-  // note: One linked plan covered while two are linked: the local gate's own refusal.
   const one = await refusalOf(() =>
     closeIssue(fixture.context, REMOTE_IDS.markedIssueId, "resolved", { ...resolvedEvidence, references: ["20261122-second-plan"] }, {
       operationId: "30000000-0000-4000-8000-000000000007",
@@ -968,12 +865,9 @@ test("a remote closure enforces multi-plan acceptance against the observed proje
     }),
   );
   expect(one.code).toBe("issue.invalid-disposition");
-  // invariant: The refusal names the two supported corrections: the complete references, or an
-  // honest scope:all in the original verb's evidence file.
   expect(JSON.stringify(one.details)).toContain("scope");
   expect(JSON.stringify(one.details)).toContain("evidence file");
   expect(outboxRows(fixture.context)).toHaveLength(0);
-  // note: The whole acceptance verified: the closure enqueues.
   const all = await refusalOf(() =>
     closeIssue(fixture.context, REMOTE_IDS.markedIssueId, "resolved", { ...resolvedEvidence, scope: "all" }, {
       operationId: "30000000-0000-4000-8000-000000000008",
@@ -1003,25 +897,20 @@ test("an unscoped remote closure enforces the canonical gate and stores the port
       ),
     );
 
-  // invariant: The closing issue is never its own canonical target, by provider id or by IssueRef.
   expect((await close("30000000-0000-4000-8000-000000000020", "duplicate", REMOTE_IDS.markedIssueId)).code).toBe(
     "issue.invalid-disposition",
   );
   expect((await close("30000000-0000-4000-8000-000000000021", "superseded", REMOTE_IDS.issueRef)).code).toBe(
     "issue.invalid-disposition",
   );
-  // invariant: A subject addressed by its portable reference still refuses its own native alias.
   expect(
     (await close("30000000-0000-4000-8000-000000000022", "duplicate", REMOTE_IDS.markedIssueId, REMOTE_IDS.issueRef))
       .code,
   ).toBe("issue.invalid-disposition");
-  // invariant: A canonical target the observed project does not carry is never frozen.
   expect(
     (await close("30000000-0000-4000-8000-000000000023", "duplicate", "99999999-9999-4999-8999-999999999999")).code,
   ).toBe("issue.not-found");
   expect(outboxRows(fixture.context)).toHaveLength(0);
-  // invariant: An observed canonical target passes the gate, and the frozen relation names its
-  // portable reference even when the caller addressed it by provider id.
   expect(
     (await close("30000000-0000-4000-8000-000000000024", "duplicate", "88888888-8888-4888-8888-888888888888")).code,
   ).toBe("remote.effect-pending");
@@ -1055,8 +944,6 @@ test("a plan-scoped remote residual-close enforces multi-plan acceptance", async
     ...residualCloseRequest(fixture, "residual-multi-all", { ...resolvedEvidence, scope: "all" }),
     expected: await fixture.token(),
   }));
-  // note: The composite's own report for a durably enqueued, unconfirmed provider intent:
-  // the gate passed, so the closure waits on its provider effect like any remote composite.
   expect(all.code).toBe("collaboration.operation-partial");
   expect(outboxRows(fixture.context)).toHaveLength(1);
   expect(outboxRows(fixture.context)[0]).toMatchObject({ state: "enqueued" });
@@ -1088,20 +975,15 @@ test("a plan-scoped remote residual-close enforces the canonical gate", async ()
       }),
     );
 
-  // invariant: The closing issue is never its own canonical target, by provider id or by IssueRef.
   expect((await close("residual-canonical-self", "duplicate", REMOTE_IDS.markedIssueId)).code).toBe("issue.invalid-disposition");
   expect((await close("residual-canonical-self-ref", "superseded", REMOTE_IDS.issueRef)).code).toBe("issue.invalid-disposition");
-  // invariant: A subject addressed by its portable reference still refuses its own native alias.
   expect(
     (await close("residual-canonical-alias", "duplicate", REMOTE_IDS.markedIssueId, REMOTE_IDS.issueRef)).code,
   ).toBe("issue.invalid-disposition");
-  // invariant: A canonical target the observed project does not carry is never frozen.
   expect((await close("residual-canonical-missing", "duplicate", "99999999-9999-4999-8999-999999999999")).code).toBe(
     "issue.not-found",
   );
   expect(outboxRows(fixture.context)).toHaveLength(0);
-  // invariant: An observed canonical target passes the gate, and the frozen relation names its
-  // portable reference even when the caller addressed it by provider id.
   expect(
     (await close("residual-canonical-observed", "duplicate", "88888888-8888-4888-8888-888888888888")).code,
   ).toBe("collaboration.operation-partial");
@@ -1113,10 +995,6 @@ test("a plan-scoped remote residual-close enforces the canonical gate", async ()
   expect(outboxRows(fixture.context)).toHaveLength(1);
 });
 
-// ---------------------------------------------------------------------------
-// note: remote milestone assignment store revision
-// ---------------------------------------------------------------------------
-
 test("a remote milestone assignment refuses on a stale store revision", async () => {
   const fixture = await remoteFixture("milestone-stale-store");
   const assign = (operationId: string, expectedStoreRevision: number): Promise<unknown> =>
@@ -1126,11 +1004,8 @@ test("a remote milestone assignment refuses on a stale store revision", async ()
       { projectId: REMOTE_IDS.projectId, milestoneId: "milestone-1", reason: "tracked here" },
       { operationId, actor: "project-manager", expectedRevision: 1, expectedStoreRevision },
     );
-  // note: The ingest left the observed store at revision 1; a stale base refuses.
   const stale = await refusalOf(() => assign("30000000-0000-4000-8000-000000000009", 0));
   expect(stale.code).toBe("milestone.revision-conflict");
-  // invariant: The recovery names the command that reads this project's observation revision and
-  // the flag that carries it: a remote write's base is that revision, never a local listing.
   const details = stale.details;
   const recovery = details !== null && typeof details === "object" && "recovery" in details ? String(details.recovery) : "";
   expect(recovery).toContain("mstar store collaboration remote status --harness <abs>");
@@ -1138,7 +1013,6 @@ test("a remote milestone assignment refuses on a stale store revision", async ()
   expect(recovery).toContain("--expect-store");
   expect((await refusalOf(() => assign("30000000-0000-4000-8000-00000000000a", 7))).code).toBe("milestone.revision-conflict");
   expect(outboxRows(fixture.context)).toHaveLength(0);
-  // note: The observed base matches: the assignment enqueues.
   expect((await refusalOf(() => assign("30000000-0000-4000-8000-00000000000b", 1))).code).toBe("remote.effect-pending");
   expect(outboxRows(fixture.context)).toHaveLength(1);
 });

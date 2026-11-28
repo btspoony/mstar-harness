@@ -168,11 +168,6 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
                     : id === "plan.progress"
                       ? "The progress value must be the JSON progress object (status, summary, evidence_paths) and the plan revision must be current. Run mstar plan progress --workflow <workflow-id> --plan <plan-id> --progress '<json-progress-object>'."
                       : (id === "plan.issue-add" || id === "plan.issue-close") && code.startsWith("collaboration.")
-                        // invariant: A residual is one cross-store composite: the collaboration
-                        // effect commits first and the plan row is finalized after it.
-                        // The refusal names which half is missing or moved, so the
-                        // operator reissues the SAME operation id (never a new one,
-                        // which would allocate a second issue) once that half is fixed.
                         ? "The residual's collaboration effect or its plan finalization is incomplete. In a remote checkout the provider intent is settled first: inspect it with mstar store collaboration remote outbox-show --harness <abs> --operation <intent-id>, dispatch it and record its receipt, then reissue this same verb with the same --operation id and payload; never retry under a new operation id."
                         : id === "plan.issue-add"
                           ? "Valid issue entries and the current revision for the addressed plan are required. Run mstar plan issue-add --workflow <workflow-id> --plan <plan-id> --entries '<json-array>'."

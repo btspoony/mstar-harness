@@ -26,11 +26,9 @@ const roots: string[] = [];
  */
 const AMBIENT_CWD = process.cwd();
 const AMBIENT_HARNESS_DIR = process.env.MSTAR_HARNESS_DIR;
-/** note: The user-level collaboration lane is resolved through HOME; isolate it. */
 const LANE_HOME = mkdtempSync(path.join(os.tmpdir(), "mcp-harness-root-home-"));
 const AMBIENT_HOME = process.env.HOME;
 process.env.HOME = LANE_HOME;
-// note: In-process resolution uses the OS homedir, not $HOME: isolate it too.
 let laneHomeSpy: { mockRestore(): void } | undefined;
 beforeAll(() => {
   laneHomeSpy = spyOn(nodeOs, "homedir").mockImplementation(() => LANE_HOME);
@@ -51,13 +49,6 @@ afterAll(() => {
   rmSync(LANE_HOME, { recursive: true, force: true });
 });
 
-/** why: A real Git main worktree: the resolver admits a `harness` selector only when
- * it is the fixed `.mstar` under the checkout `git worktree list` names first,
- * so every harness fixture below is a genuine repository. The path is
- * realpath'd so the returned paths compare verbatim against engine output on
- * symlinked tmpdirs. The checkout also declares its collaboration identity:
- * issue/catalog authority lives in the lane, which is scoped by the repository.
- */
 function gitMainWorktree(parent: string, name: string): string {
   const repo = path.join(parent, name);
   mkdirSync(path.join(repo, ".mstar"), { recursive: true });
@@ -67,10 +58,6 @@ function gitMainWorktree(parent: string, name: string): string {
   return realpathSync(repo);
 }
 
-/**
- * why: Both authorities, exactly as `store init` leaves them: the collaboration
- * lane owns issue/catalog authority, the execution store owns execution/host.
- */
 async function initializeHarness(harness: string): Promise<void> {
   await ensureCollaborationAuthority({ harnessDir: harness });
   (await initializeStore({ harnessDir: harness })).close();
@@ -165,7 +152,6 @@ function scaffoldWorkspaces(): {
   writeFileSync(launchGitignore, "# launch workspace marker\nnode_modules/\n", "utf8");
   return { target, launch, launchHarness, launchGitignore };
 }
-
 
 /** The fixture's own discriminator, read from a successful persist envelope. */
 function persistOrigin(envelope: CommandEnvelope): unknown {
@@ -798,12 +784,6 @@ describe("MCP harness root", () => {
   });
 });
 
-/**
- * why: The rows a write would create in a collaboration lane, read without trusting
- * file bytes: SQLite sidecars and WAL contents are invisible here, a committed
- * or pending write is not. The authority's own `creation:` receipt is bootstrap
- * evidence, not a write a consumer could make, so it is excluded.
- */
 async function storeRowCounts(harnessDir: string): Promise<{ issues: number; operations: number }> {
   const handle = await openCollaborationStore({ harnessDir }, "read");
   try {
@@ -902,11 +882,7 @@ const CONTROL_ROOT_CLASS: Readonly<Record<string, "root" | "none">> = {
   "status.workflow-close": "root", "store.activate": "root", "store.backup": "root",
   "store.execution.export": "none", "store.execution.restore": "none", "store.execution.restore-preview": "none",
   "store.collaboration.activate": "none", "store.collaboration.apply": "none",
-  // why: adopt is the replacement clone's binding verb — an unbound checkout
-  // has no control root yet, so it must admit on an unpinned connection.
   "store.collaboration.plan": "none", "store.collaboration.restore": "none", "store.collaboration.adopt": "none",
-  // note: The remote verbs take their own absolute --harness operation target and are not
-  // admitted root-free, so an unpinned shared connection classifies them as root.
   "store.collaboration.remote.status": "root", "store.collaboration.remote.bind": "root",
   "store.collaboration.remote.observe": "root", "store.collaboration.remote.adopt-issue": "root",
   "store.collaboration.remote.outbox-pending": "root", "store.collaboration.remote.outbox-show": "root",
@@ -984,13 +960,10 @@ const LAUNCH_CWD_DEFAULT: Readonly<Record<string, null | { readonly args: Record
   "store.execution.export": null,
   "store.execution.restore": null,
   "store.execution.restore-preview": null,
-  // why: Every collaboration verb takes an ABSOLUTE operation target and manifest
-  // path, so no path it reads resolves against the invocation directory.
   "store.collaboration.activate": null,
   "store.collaboration.apply": null,
   "store.collaboration.plan": null,
   "store.collaboration.restore": null,
-  // note: adopt names its target explicitly (--harness <abs>): no launch-cwd default.
   "store.collaboration.adopt": null,
   "worktree.qc-alignment": { args: { files: ["qc1.md", "qc2.md"] }, subject: "the assignment file" },
 };
@@ -1435,7 +1408,6 @@ describe("MCP control-root admission class", () => {
     }
   });
 
-
   test("an unpinned no-argument roles.validate does not answer for the host checkout", async () => {
     const fixture = await launchDirectoryCheckout();
     // A corpus OUTSIDE the launch directory, so the second half proves the
@@ -1594,18 +1566,6 @@ describe("MCP control-root admission class", () => {
     delete process.env.MSTAR_HARNESS_DIR;
     process.chdir(launch);
     try {
-      // why: A write rooted at B by the call's own selector, from a server whose
-      // launch directory owns A's harness: the capture lands in B and leaves
-      // A's store rows untouched.
-      //
-      // The assertion reads A's ROWS rather than its file bytes: SQLite leaves
-      // `-wal`/`-shm` beside a store after a read, and it keeps an unflushed
-      // write in the WAL, so a byte snapshot is both noisy (a read looks like a
-      // diff) and incomplete (a WAL-only write looks like no diff). Row counts
-      // are exactly what "the capture did not reach A" means, and the baseline
-      // reads A's LIVE collaboration lane — the store the issue writer actually
-      // commits to — before the call, so a capture that lands in B cannot pass
-      // by leaking a row or a receipt into A's lane.
       const before = await storeRowCounts(launchHarness);
       expect(before).toEqual({ issues: 0, operations: 0 });
       const added = await callRawTool(createContextResolver(), "issue.add", {
@@ -1794,8 +1754,6 @@ function twoGitWorkspaces(): { rootA: string; rootB: string; harnessA: string; h
     mkdirSync(path.join(repo, ".mstar"), { recursive: true });
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
     execFileSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
-    // note: The checkout declares its collaboration identity: issue/catalog authority
-    // lives in the lane, which is scoped by the repository.
     writeFileSync(path.join(repo, ".mstarc"), `[collaboration]\nmode=local\nrepo_id=fixture-${repoSequence++}\n`);
     return realpathSync(repo);
   };

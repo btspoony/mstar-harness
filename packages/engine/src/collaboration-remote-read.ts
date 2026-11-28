@@ -1,20 +1,3 @@
-/**
- * invariant: collaboration-remote-read.ts -- the ONE read boundary over a remote cache.
- *
- * A `remote` checkout's authority is the provider; `collaboration.db` holds only
- * verified observations. This module turns the current generation's admitted
- * snapshots into the same domain DTOs the local readers answer with, so every
- * consumer reads selected-source evidence instead of local rows:
- *
- * - A required read refuses (`remote.unavailable`,
- *   `collaboration.observation-incomplete`, `collaboration.observation-stale`)
- *   rather than answering zero rows / zero totals from an empty local table.
- * - Only MStar subjects carry findings semantics. A provider-only issue is
- *   visible as `kind:"provider-only"` and is never counted, grouped by
- *   disposition/severity, closed or adopted by its title or native status.
- * - Nothing here writes, refreshes, or opens a local-authority lane, and no
- *   provider call happens: an observation is a trusted-host assertion.
- */
 import {
   openRemoteCache,
   readCollaborationBinding,
@@ -47,23 +30,14 @@ import type { CatalogDocumentKind } from "./catalog.js";
 import { MilestoneError, type MilestoneNamesRead, type MilestoneRead, type ProjectMilestoneDTO } from "./milestone-store.js";
 import { StoreError, type StoreContext } from "./store-db.js";
 
-/** note: A provider issue id is an immutable Linear UUID, never a display identifier such as ENG-42. */
 const PROVIDER_ISSUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SEVERITY_RANK: Record<Severity, number> = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
 const TERMINAL = new Set<Disposition>(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
 
-/**
- * note: The read's sample-to-snapshot gap seam: a regression binds a successor between the
- * captured `{location,binding}` pair and the SQLite snapshot. Production runs without a callback.
- */
 let remoteReadSampleGapForTest: (() => void | Promise<void>) | undefined;
 export function setRemoteReadSampleGapForTest(callback: (() => void | Promise<void>) | undefined): void {
   remoteReadSampleGapForTest = callback;
 }
-
-// ---------------------------------------------------------------------------
-// note: Admitted project evidence for one read
-// ---------------------------------------------------------------------------
 
 /** note: One selected project as this cache serves it, or why it cannot serve. */
 export type RemoteProjectEvidence = Readonly<{
@@ -75,7 +49,6 @@ export type RemoteProjectEvidence = Readonly<{
   completeness: "complete" | "partial" | "unavailable";
   code: string | null;
   freshness: "fresh" | "expired" | "incomplete";
-  /** note: The provider traversal started inside the freshness window (a second clock from the access check). */
   asOfFresh: boolean;
   snapshot: RemoteSnapshot | null;
 }>;
@@ -88,10 +61,8 @@ export type RemoteReadView = Readonly<{
   selectorCommit: string;
   generation: number;
   phase: "active" | "draining";
-  /** note: The declared contributing projects this view loaded; never another selected project. */
   projectIds: readonly string[];
   projects: ReadonlyMap<string, RemoteProjectEvidence>;
-  /** note: Aggregate snapshot counters: both move whenever any project's observation is replaced. */
   revision: number;
   catalogRevision: number;
 }>;
@@ -161,17 +132,10 @@ export async function openRemoteReadView(
       );
     }
   }
-  // note: The sample the caller took is re-observed at the boundary: a regression binds a
-  // successor in this window, so a matching pair alone is not proof the lane stood still.
   await remoteReadSampleGapForTest?.();
-  // note: ONE sample: the lane is admitted for the location and binding this view reads and
-  // stamps itself with, so a concurrent rebind never labels rows with another generation.
   const handle = await openRemoteCache(context, "read", { location, binding });
   try {
     handle.db.exec("begin");
-    // invariant: The row snapshot must belong to the SAME selector generation the pair named.
-    // A successor committed before this transaction began leaves the predecessor's rows in
-    // place, so a bound-generation-stable read could otherwise satisfy the successor's gate.
     const latest = handle.db
       .prepare("select max(generation) as generation from remote_bindings")
       .get() as { generation?: unknown } | undefined;
@@ -191,9 +155,6 @@ export async function openRemoteReadView(
           `where b.generation = ? and b.project_key in (${requested.map(() => "?").join(", ")})`,
       )
       .all(binding.generation, ...requested) as StoredEvidenceRow[];
-    // invariant: Q1: a recorded fork closes required reads until its LIVE `resolved_by` chain
-    // reaches a confirmed terminal repair; a nominally complete traversal of the same competing
-    // heads proves the rows, never that the fork settled.
     const outbox = handle.db
       .prepare(
         "select operation_id, project_key, state, resolved_by from remote_outbox " +
@@ -206,8 +167,6 @@ export async function openRemoteReadView(
       resolved_by?: unknown;
     }>;
     handle.db.exec("commit");
-    // invariant: The admitted selector commit is re-proved on the live ref at the read
-    // boundary: a moved ref refuses instead of answering a superseded generation's rows.
     assertSelectionUnchanged(context, location);
     const byProject = new Map(rows.map((row) => [row.project_key, row]));
     const links = new Map<string, { projectId: string; state: string; resolvedBy: string | null }>();
@@ -221,9 +180,6 @@ export async function openRemoteReadView(
         resolvedBy: typeof entry.resolved_by === "string" ? entry.resolved_by : null,
       });
     }
-    // invariant: Q1: a recorded fork closes required reads until its LIVE `resolved_by` chain
-    // reaches a confirmed terminal repair AND the observation shows that fork merged. A nominally
-    // complete traversal of the same competing heads proves the rows, never that the fork settled.
     const unresolvedForks = new Set<string>();
     for (const [operationId, link] of links) {
       if (link.state !== "conflict") continue;
@@ -270,12 +226,8 @@ export async function openRemoteReadView(
         asOf: row.as_of,
         completeness,
         code: row.code,
-        // note: Freshness is the ACCESS check's currency, not the snapshot's coverage:
-        // an expired check means no read may serve this scope, complete or not.
         freshness: current ? (completeness === "complete" ? "fresh" : "incomplete") : "expired",
         asOfFresh: Number.isFinite(asOfAt) && Math.abs(now - asOfAt) <= REMOTE_SCOPE_TTL_MS,
-        // note: A partial observation carries its verified rows; required reads refuse it before serving,
-        // but the observation still discloses its real asOf instead of masquerading as absent.
         snapshot: completeness === "unavailable" ? null : snapshotOf(row.snapshot_json, selected.localProjectId),
       });
     }
@@ -321,7 +273,6 @@ function unavailableEvidence(
   };
 }
 
-/** note: The binding's latest check verdict, as status and serving freshness read it. */
 function outcomeLabel(verificationJson: string): string {
   try {
     const parsed: unknown = JSON.parse(verificationJson);
@@ -332,12 +283,10 @@ function outcomeLabel(verificationJson: string): string {
       }
     }
   } catch {
-    // note: A damaged verification document is unavailable evidence, never a guess.
   }
   return "unavailable";
 }
 
-/** note: A stored snapshot was validated at ingest; a row that no longer parses is a corrupt cache. */
 function snapshotOf(raw: string | null, projectId: string): RemoteSnapshot | null {
   if (raw === null || raw === "") return null;
   let parsed: unknown;
@@ -363,10 +312,6 @@ function snapshotOf(raw: string | null, projectId: string): RemoteSnapshot | nul
   // (a remote cache is derived observation state, re-bootstrapped rather than migrated in place).
   return normalizeRetiredDocumentKind(parsed as RemoteSnapshot);
 }
-
-// ---------------------------------------------------------------------------
-// note: Required-source admission and the collaboration observation
-// ---------------------------------------------------------------------------
 
 /** The exact project set one scope needs; a repository/plan scope needs every selected project. */
 export function remoteScopeProjectIds(view: RemoteReadView, scope: CollaborationScope): readonly string[] {
@@ -424,8 +369,6 @@ export function requireRemoteProjects(
         { projectId },
       );
     }
-    // invariant: The traversal clock is separate from the access check: a check made now over a
-    // traversal started outside the window still cannot satisfy a count, rollup or gate.
     if (!evidence.asOfFresh) {
       throw new StoreError(
         "collaboration.observation-stale",
@@ -481,13 +424,8 @@ export function remoteCollaborationObservation(
   }
   const absent = evidence.find((entry) => entry.snapshot === null || entry.completeness === "unavailable" || entry.asOf === null);
   if (absent !== undefined) return unavailable(absent.code ?? "remote.unavailable");
-  // note: An expired check cannot support any claim, complete or partial.
   if (evidence.some((entry) => entry.freshness === "expired")) return unavailable("collaboration.observation-stale");
-  // note: A traversal started outside the window is stale even under a current check: an optional
-  // view discloses that instead of a complete stamp, and no gate or count can decide on it.
   if (evidence.some((entry) => !entry.asOfFresh)) return unavailable("collaboration.observation-stale");
-  // note: The aggregate instant is the OLDEST contributing observation, so a reader never
-  // understates age by picking the freshest stream.
   const asOf = evidence.map((entry) => entry.asOf as string).sort()[0] as string;
   const revision = evidence.reduce((sum, entry) => sum + entry.revision, 0);
   const gap = evidence.find((entry) => entry.completeness !== "complete");
@@ -511,10 +449,6 @@ export function remoteCollaborationObservation(
     catalogRevision: revision,
   };
 }
-
-// ---------------------------------------------------------------------------
-// note: MStar subject accessors
-// ---------------------------------------------------------------------------
 
 type Subject = NonNullable<RemoteIssue["mstar"]>;
 
@@ -587,11 +521,6 @@ function lastActivityOf(projectId: string, issue: RemoteIssue): string | null {
   return present.length === 0 ? null : present.sort().at(-1) as string;
 }
 
-// ---------------------------------------------------------------------------
-// note: Issue reads
-// ---------------------------------------------------------------------------
-
-/** note: The page-bounds rule shared with the local reader. */
 function pageBounds(filter: IssueFilter): { limit: number; offset: number } {
   const limit = filter.limit ?? 50;
   const offset = filter.offset ?? 0;
@@ -672,10 +601,6 @@ export function remoteIssuePage(view: RemoteReadView, filter: IssueFilter): Issu
               .filter((issue) => filter.query === undefined || filter.query === "" || queryMatches(issue, filter.query))
               .map((issue) => ({ projectId: entry.projectId, issue })),
           )
-          // note: The page contract needs a TOTAL order: newest provider update first, then
-          // project and the immutable provider id, so `offset` names the same rows on a re-read.
-          // The input accepts whole-second and fractional UTC spellings for one instant, so
-          // the key is the parsed instant, never the text.
           .sort((left, right) => {
             const leftAt = Date.parse(left.issue.providerUpdatedAt);
             const rightAt = Date.parse(right.issue.providerUpdatedAt);
@@ -873,9 +798,6 @@ function mstarDetail(
 function titleOfRef(view: RemoteReadView, issueRef: string, projectIds: readonly string[]): string | null {
   for (const projectId of projectIds) {
     const evidence = view.projects.get(projectId);
-    // invariant: A relation title is cross-project data. Only a project this read DECLARES
-    // and that is current and complete may disclose it; an unresolved title stays null
-    // rather than reading an undeclared or expired snapshot.
     if (evidence === undefined || evidence.freshness !== "fresh" || !evidence.asOfFresh || evidence.snapshot === null) continue;
     for (const issue of evidence.snapshot.issues) {
       if (issue.mstar?.issueRef === issueRef) {
@@ -886,10 +808,6 @@ function titleOfRef(view: RemoteReadView, issueRef: string, projectIds: readonly
   }
   return null;
 }
-
-// ---------------------------------------------------------------------------
-// note: Findings, residuals and dated flow
-// ---------------------------------------------------------------------------
 
 /** note: A complete plan-scoped findings observation: every OPEN MStar subject linked to the plan. */
 export function remotePlanFindings(view: RemoteReadView, planId: string): {

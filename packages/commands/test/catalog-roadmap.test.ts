@@ -49,14 +49,11 @@ function invocation(cwd: string): InvocationContext {
 const catalog = Object.fromEntries(getCatalogCommandDefinitions().map((definition) => [definition.id, definition]));
 const project = Object.fromEntries(getProjectCommandDefinitions().map((definition) => [definition.id, definition]));
 
-/** note: A synthetic checkout whose origin names the collaboration repository. */
 function checkout(name: string, originSlug = name): { cwd: string; harness: string } {
   const cwd = join(root, name);
   mkdirSync(cwd, { recursive: true });
   execFileSync("git", ["init", "-q"], { cwd, stdio: ["ignore", "ignore", "ignore"] });
   execFileSync("git", ["remote", "add", "origin", `https://github.com/acme/${originSlug}.git`], { cwd, stdio: ["ignore", "ignore", "ignore"] });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync("git", ["config", `url.${cwd}.insteadOf`, `https://github.com/acme/${originSlug}.git`], {
     cwd,
     stdio: ["ignore", "ignore", "ignore"],
@@ -67,13 +64,10 @@ function checkout(name: string, originSlug = name): { cwd: string; harness: stri
   return { cwd, harness };
 }
 
-/** note: The private staged record flipped to active: this plan ships no public activator. */
 async function activeFixture(name: string): Promise<{ cwd: string; harness: string }> {
   const { cwd, harness } = checkout(name);
   const store = await initializeStore({ harnessDir: harness });
   store.close();
-  // note: The supported bootstrap records this checkout's binding as well as publishing
-  // the lane; a bare state flip leaves every write refusing `stale-binding`.
   await ensureCollaborationAuthority({ harnessDir: harness });
   await registerCatalogEntity({ harnessDir: harness }, {
     kind: "project", id: "proj", title: "Project", rootKind: "projects", relativePath: "proj",
@@ -106,8 +100,6 @@ describe("catalog command family", () => {
   });
   test("inactive catalog mutation exposes the collaboration activation recovery", async () => {
     const { cwd, harness } = checkout("inactive-mutation");
-    // invariant: The lane exists but is staged: ordinary catalog traffic is refused at
-    // admission and the recovery is the reviewed activation sequence.
     await initializeCollaborationStore(resolveCollaborationLocation({ harnessDir: harness }));
     const result = await catalog["catalog.register"]!.execute({
       harness, kind: "document", id: "doc", title: "Doc", rootKind: "specs", path: "doc.md",
@@ -146,12 +138,7 @@ describe("catalog command family", () => {
     if (shown.status === "ok") expect(JSON.stringify(shown.data)).toContain("Project");
     if (exported.status === "ok") expect(JSON.stringify(exported.data)).toContain("proj");
 
-    // note: A replacement clone with the same repository identity but no local
-    // catalog content and no execution store reads the same logical rows: the
-    // project location resolves against THIS checkout and is disclosed absent.
     const clone = checkout("catalog-read-data-clone", "catalog-read-data");
-    // invariant: Reading a live authority requires this checkout's own recorded binding; a
-    // bare clone is a foreign checkout, never an implicit reader.
     writeCollaborationBinding({ harnessDir: clone.harness }, await readCollaborationAuthority({ harnessDir: harness }));
     const cloneList = await catalog["catalog.list"]!.execute({ harness: clone.harness, kind: "project" }, invocation(clone.cwd));
     expect(cloneList.status).toBe("ok");
@@ -160,8 +147,6 @@ describe("catalog command family", () => {
     if (cloneShow.status === "ok") {
       expect(cloneShow.data).toMatchObject({ entity: { relativePath: "proj", present: false } });
     }
-    // invariant: A sparse plan registration whose document is missing here is a named
-    // refusal; it never mints or rebinds the registered execution location.
     const missingPlan = await catalog["catalog.register"]!.execute({
       harness: clone.harness, kind: "plan", file: join(clone.harness, "plans", "plan-missing.md"), operationId: "clone-plan", actor: "test",
     }, invocation(clone.cwd));
@@ -275,8 +260,6 @@ describe("catalog command family", () => {
   test("collaboration command evidence: catalog list, catalog show and project show share their read's observation", async () => {
     const { cwd, harness } = await activeFixture("command-evidence");
     type Evidence = { scope: { kind: string; key: string }; completeness: string; asOf: string; revision: number };
-    // why: The command envelope's `data`/`details` are open records; narrow once here
-    // instead of asserting a fabricated shape at each read site.
     const observation = (container: unknown): Evidence => {
       if (container === null || typeof container !== "object" || !("collaboration" in container)) {
         throw new Error("the command output carries no collaboration observation");
@@ -317,7 +300,6 @@ describe("catalog command family", () => {
     expect(binding.status).toBe("ok");
     if (binding.status === "ok") {
       expect(observation(binding.data).scope).toEqual({ kind: "project", key: "proj" });
-      // why: A named absence keeps its own keys AND the observation of the read.
       expect(binding.data).toMatchObject({ kind: "absent", code: "linear.binding-absent" });
     }
 
@@ -337,10 +319,6 @@ describe("catalog command family", () => {
     }, { operationId: "late-doc", actor: "test" });
     const lanePath = resolveCollaborationLocation({ harnessDir: harness }).dbPath;
 
-    // invariant: Deterministic interleave: the newer link commits at the instant the page's
-    // rows read finishes and its transaction commits. A page that reads its
-    // links after that commit answers the newer revision; one that reads them
-    // inside its own snapshot cannot.
     const realPrepare = DatabaseSync.prototype.prepare;
     const realExec = DatabaseSync.prototype.exec;
     let sawPageRows = false;
@@ -374,8 +352,6 @@ describe("catalog command family", () => {
       if (listed.status !== "ok") return;
       expect(injected).toBe(true);
       const page = listed.data as { links: unknown[]; storeRevision: number; collaboration: { revision: number } };
-      // note: The page answered before the link committed: no late link, and the
-      // evidence names the revision its rows were actually read at.
       expect(page.links).toEqual([]);
       expect(page.collaboration.revision).toBe(page.storeRevision);
     } finally {

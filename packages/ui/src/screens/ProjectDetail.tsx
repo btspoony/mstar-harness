@@ -55,9 +55,6 @@ export function effortInput(value: string): { kind: "empty" } | { kind: "count";
   if (trimmed === "") return { kind: "empty" };
   if (!/^[+-]?\d+$/.test(trimmed)) return { kind: "invalid" };
   const sessions = Number(trimmed);
-  // safety: a digit string beyond the safe range loses precision to Number() and the
-  // browser JSON encoding then sends null, which the engine reads as a
-  // legitimate clear — so it must be refused before any write.
   return Number.isSafeInteger(sessions) ? { kind: "count", sessions } : { kind: "invalid" };
 }
 
@@ -112,7 +109,6 @@ export type CreateDraft = {
   name: string;
   effort: string;
   status?: string;
-  /** note: the fields the operator edited, so a kept draft can re-open with its intent. */
   touched?: readonly MilestoneDraftField[];
 };
 
@@ -128,11 +124,8 @@ export type CreateDraft = {
  * the truth the editor re-seeds from.
  */
 export type MilestoneDraftStore = {
-  // note: the stored draft for one target, or undefined when none was typed.
   read(target: string): CreateDraft | undefined;
-  // note: merges one field change into the target's draft.
   write(target: string, patch: Partial<CreateDraft>): void;
-  // note: drops the target's draft (an accepted write, a cancelled edit).
   clear(target: string): void;
 };
 
@@ -167,9 +160,6 @@ export function milestonePatch(
   milestone: Milestone,
   draft: MilestoneDraft,
 ): { name?: string; effortSessions?: number | null; status?: string } {
-  // invariant: only a field the operator touched can travel, and only while its typed value
-  // still differs from the milestone the refresh just read — an untouched field is never
-  // sent, whatever another writer changed it to.
   const touched = draft.touched;
   return {
     ...(touched.has("name") && draft.name.trim() !== milestone.name ? { name: draft.name.trim() } : {}),
@@ -329,7 +319,6 @@ export type ProjectDetailProps = {
   copy: ProjectDetailCopy;
   /** The milestone write channel, when the host can write (plan Task 4). */
   writes?: MilestoneWriteSurface;
-  /** note: the host-owned draft store; absent, drafts live in component state as before. */
   drafts?: MilestoneDraftStore;
   /** see packages/ui/src/screens/ProjectDetail.tsx - The assign picker's read: the offer list, or the loading/failed arm. */
   assignableIssues?: AssignableIssuesRead;
@@ -385,24 +374,13 @@ function MilestoneActions(props: {
   /** see packages/ui/src/screens/ProjectDetail.tsx - Re-issue the picker's read; absent means this host cannot retry. */
   onRetryAssignable?: () => void;
   copy: ProjectDetailCopy;
-  /** note: the host-owned draft store (absent: drafts live in component state, as before). */
   drafts?: MilestoneDraftStore;
-  /** note: the identity the host opened this page over — it scopes every draft key. */
   draftsProject?: string;
 }) {
   const { milestone, writes, assignable, copy } = props;
-  // why: the key the host scoped to this page's identity — milestone ids are globally
-  // unique, but the key still comes from the identity the form was opened over, never the
-  // host's current selection at read time.
   const targetKey = milestoneDraftTargetKey(props.draftsProject, milestone.milestoneId);
-  // invariant: one state, the OPEN draft — `null` is the closed editor. Seeded from the
-  // host's store when it holds one for this milestone (a re-mount after a refresh), else
-  // closed; a cancelled edit clears the entry, so the next open re-seeds from the milestone.
   const [draft, setDraftState] = useState<MilestoneDraft | null>(() => {
     const kept = props.drafts?.read(targetKey);
-    // invariant: a re-mounted editor shows the FRESH milestone for every field the operator did
-    // not touch — a stale displayed value would silently win over a status another writer changed —
-    // and keeps only the fields they did touch, so a retry still sends exactly their edits.
     if (kept === undefined) return null;
     const touched = new Set(kept.touched ?? []);
     const fresh = milestoneDraft(milestone);
@@ -413,9 +391,6 @@ function MilestoneActions(props: {
       touched,
     };
   });
-  // why: the host store shadows the component state — a refresh unmounts this editor and
-  // the re-mounted one seeds from the store, so the typed text survives. The sync is an
-  // effect (not the state setter), because a state updater must stay pure.
   useEffect(() => {
     if (props.drafts === undefined) return;
     if (draft === null) props.drafts.clear(targetKey);
@@ -447,7 +422,6 @@ function MilestoneActions(props: {
           disabled={writes.busy}
           data-ms-milestone-edit=""
           onClick={() => {
-            // why: a reopened editor never shows a verdict about a value it no longer holds
             setEffortError(false);
             setDraft(milestoneDraft(milestone));
           }}
@@ -518,9 +492,6 @@ function MilestoneActions(props: {
         }
         setEffortError(false);
         const patch = milestonePatch(milestone, draft);
-        // why: nothing the operator edited still differs from the milestone a refresh just read, so
-        // there is nothing to write — submitting an empty patch would be refused and look like a
-        // failure to the operator who only retried an edit another writer already applied.
         if (Object.keys(patch).length === 0) {
           setDraft(null);
           return;
@@ -535,8 +506,6 @@ function MilestoneActions(props: {
       </label>
       <label>
         {copy.milestones.writes.effortLabel}
-        {/* why: plain text keeps the raw keystrokes — a number input sanitises bad text
-            to "", which would coerce garbage into a null (a cleared estimate). */}
         <input
           type="text"
           inputMode="numeric"
@@ -679,15 +648,10 @@ function MilestoneBlock(props: {
 
 function MilestoneCreateForm(props: { writes: MilestoneWriteSurface; nextOrdinal: number; copy: ProjectDetailCopy; drafts?: MilestoneDraftStore; draftsProject?: string }) {
   const { writes, copy } = props;
-  // why: the create draft is keyed by the identity the form was opened over — a bare
-  // `create` would re-seed every project's create form from the one draft that exists.
   const targetKey = milestoneDraftTargetKey(props.draftsProject, "create");
-  // why: seeded from the host store — a refresh re-mounts the form over the typed values.
   const [name, setName] = useState(() => props.drafts?.read(targetKey)?.name ?? "");
   const [effort, setEffort] = useState(() => props.drafts?.read(targetKey)?.effort ?? "");
   const [effortError, setEffortError] = useState(false);
-  // why: every keystroke reaches the host store, so the draft is the host's, not the
-  // unmounted subtree's.
   useEffect(() => {
     if (name === "" && effort === "") props.drafts?.clear(targetKey);
     else props.drafts?.write(targetKey, { name, effort });
@@ -776,10 +740,6 @@ function dispositionTone(disposition: string): string {
   return disposition === "resolved" || disposition === "open" ? disposition : "neutral";
 }
 
-// invariant: the timeline is one node per milestone in the read's order (ordinal,
-// then id — the comparator `readMilestonesOn` sorts with) plus one trailing node for
-// the unassigned issues; every number is the read's own — the effort line, the
-// retired-over-total pair and the open count.
 function MilestoneTimeline(props: { model: MilestonesModel; copy: ProjectDetailCopy }) {
   const { model, copy } = props;
   const ordered = [...model.milestones].sort(

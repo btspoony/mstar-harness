@@ -46,7 +46,6 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -124,7 +123,6 @@ function controlRoot(label: string): StoreContext {
   return { harnessDir };
 }
 
-/** note: Publish the collaboration lane and this checkout's binding. */
 async function seedCollaboration(context: StoreContext): Promise<void> {
   const location = resolveCollaborationLocation(context);
   await initializeCollaborationStore(location);
@@ -614,7 +612,6 @@ describe("execution-cross-domain \u2014 an unavailable authority refuses every r
       code: "store.corrupt",
     });
     expect(await refusalOf(() => withStoreRead(context, queryDashboard("workflows")))).toEqual({ code: "store.corrupt" });
-
   });
 });
 
@@ -693,7 +690,6 @@ describe("retained evidence path checks across the authority switch", () => {
     // The direct completion boundary checks the plan's own configured areas.
     const input = readCompletionEvidence(completionRequest(bodies));
     expect(() => assertEvidenceInsidePlanArea(planAreaRoots(context.harnessDir, RETAINED_PLAN), input.evidence_refs)).not.toThrow();
-
 
     // No blanket blob conversion: the bodies are files, and the active store —
     // main file and, when present, its write-ahead log — holds no copy of them.

@@ -129,8 +129,6 @@ export type ExecutionErrorCode =
   // caller branches on the exact refusal instead of parsing the message.
   | "workflow.reopen-completed"
   | "workflow.reopen-not-terminal"
-  // note: A composite cross-store operation whose collaboration effect is committed
-  // while its execution finalization is still outstanding (`collaboration-operations.ts`).
   | "collaboration.operation-partial"
   | "store.not-active"
   | "store.stale-epoch";
@@ -1313,7 +1311,6 @@ export async function declinedReservationCause(
         const parsed: unknown = JSON.parse(row.cause_details_json);
         if (isPlainObject(parsed)) details = parsed;
       } catch {
-        // note: an unreadable cause still proves the decline; its detail block is simply absent.
       }
     }
     return {
@@ -2549,10 +2546,6 @@ export async function createExecutionWorkflow(
   const creation = resolveCreateWorkflow(context.caller, input?.entry, input?.snapshot, input?.operationId);
   const operationId = input.operationId;
   const requestHash = createWorkflowRequestHash(context.caller, creation, input.expected);
-  // invariant: A committed operation replays FIRST, under the current execution identity:
-  // a lost response must still answer from its receipt even when the
-  // collaboration lane has since become unavailable, and a different payload on
-  // the same id is a conflict rather than a second creation.
   const replay = await withExecutionTransaction(context, (tx) => {
     assertActiveExecutionAuthority(
       tx,
@@ -2576,9 +2569,6 @@ export async function createExecutionWorkflow(
     };
   });
   if (replay !== null) return replay;
-  // invariant: A pin names a collaboration catalog row, so the evidence is read on that
-  // lane BEFORE the execution write transaction opens: no cross-file read ever
-  // runs inside it, and an unreadable catalog refuses the pinned creation.
   const pinnedPlanIds = [...new Set(creation.plans.filter((plan) => plan.pin !== null).map((plan) => plan.planId))];
   const catalog: CreationCatalogSelection =
     pinnedPlanIds.length === 0
@@ -2728,7 +2718,6 @@ function readSessionRows(db: StoreDb, store: StoreIdentity, workflowId: string):
     };
   });
 }
-
 
 /** §2.2: one workflow header row's CAS revision, or `coordination.workflow-not-found`. */
 function readWorkflowHeaderRow(db: StoreDb, workflowId: string): { revision: number; creatorSessionId: string | null } {
@@ -2885,7 +2874,6 @@ function liveSession(tx: ExecutionTransaction, address: SessionAddress): Session
   return mine;
 }
 
-
 /** §2.1: a reference from another store or another epoch fences before anything is read. */
 function assertReferenceAuthority(
   tx: ExecutionTransaction,
@@ -2896,7 +2884,6 @@ function assertReferenceAuthority(
   assertAuthorityGeneration(tx, { referenceStoreId, referenceEpoch, ...(target === undefined ? {} : { target }) });
 }
 
-
 function writeExecutionSession(
   db: StoreDb,
   input: { workflowId: string; address: SessionAddress; epoch: number; now: string },
@@ -2906,7 +2893,6 @@ function writeExecutionSession(
       "values (?, 'coordinator', ?, ?, 1, 'active', ?)",
   ).run(input.workflowId, input.address.sessionId, input.epoch, input.now);
 }
-
 
 /**
  * §2.2 write one plan's state and coordination blocks in ONE statement: the row
@@ -3079,7 +3065,6 @@ export function readLiveSessionIdentities(tx: ExecutionTransaction, workflowId: 
   return new Set(rows.map((row) => storedText(row.session_id, `execution_sessions(${workflowId}).session_id`)));
 }
 
-
 /**
  * §2.2 the stored coordinator session rows of one workflow, INCLUDING the
  * non-active ones — the recovery bootstrap has to see the suspended, revoked
@@ -3169,7 +3154,6 @@ export function releaseIntegrationMergeLease(
     .prepare("update execution_integration_leases set revision = ?, lease_json = ? where workflow_id = ?")
     .run(existing.revision + 1, JSON.stringify(tombstone), input.workflowId);
 }
-
 
 /**
  * §3.1 the committed receipt of one operation id, or `null` for a first
@@ -3403,19 +3387,6 @@ function receiptFacts(receipt: ExecutionRead<unknown>): Record<string, unknown> 
   };
 }
 
-/**
- * invariant: The composite reservation ledger this receipt writer must consult, classified
- * by the store's OWN recorded migration history:
- *
- * - `present`: the ledger exists and the reservation probe runs.
- * - `pre-intent`: the store's recorded schema predates the ledger's migration, so
- *   no reservation capability exists yet. This is the supported window in which
- *   the version-9 normalizer writes receipts — a ledger that does not exist
- *   reserves nothing.
- * - `drift`: the store RECORDS the ledger's migration but the table is missing.
- *   Skipping the probe there would let a receipt commit an operation a pending
- *   composite already reserved, so the writer refuses instead of failing open.
- */
 function reservationLedgerState(db: StoreDb): "present" | "pre-intent" | "drift" {
   if (tableNamesOn(db).has("execution_collaboration_intents")) return "present";
   const ledgerVersion = MIGRATIONS.find((migration) => migration.name === "execution-collaboration-intents")?.version;
@@ -3449,23 +3420,9 @@ export function writeOperationReceipt(
     receipt: ExecutionRead<unknown>;
     now: string;
     slim?: true;
-    /**
-     * why: The admitted composite's own finalization: its reservation is the row this
-     * write completes, so it is the one writer allowed while that id is pending.
-     */
     allowReservedIntent?: true;
   },
 ): void {
-  // invariant: §3.1 the operation-id namespace is ONE namespace across both execution
-  // ledgers. A different writer may not commit an id a pending composite reserved
-  // (or already declined): the effect's receipt would otherwise be unreachable
-  // and a same-id retry would read this unrelated receipt instead.
-  //
-  // The reservation ledger arrives with its own migration, and a schema-8 store's
-  // version-9 normalizer writes receipts BEFORE that migration runs: a ledger
-  // that does not exist yet reserves nothing. A store that RECORDS the ledger's
-  // migration without carrying it is drift, and the writer refuses rather than
-  // committing an id a lost reservation may already own.
   const ledger = reservationLedgerState(tx.db);
   if (ledger === "drift") {
     throw new StoreError(

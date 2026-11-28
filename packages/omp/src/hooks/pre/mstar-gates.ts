@@ -1,22 +1,3 @@
-/**
- * invariant: omp `tool_call` pre-hook for coordination writes and task dispatches. Hard
- * mode blocks engine-validated violations; soft dispatch findings are logged,
- * while authority refusals remain unconditional.
- *
- * Gate 1 protects execution-owned coordination paths and issue/catalog authority
- * paths. Retired file documents are judged by the ACTIVE execution DB state;
- * project registers by the collaboration lane's ACTIVE record — a missing,
- * staged or unreadable lane fails closed rather than falling through to a
- * document validator. Neither domain's verdict is inferred from the other.
- *
- * Target classification and write validation come from the shared
- * `@mstar-harness/engine` gates module. The local hook supplies event shape,
- * host paths and the `{ block, reason }` refusal channel.
- *
- * Gate 2 retains the Assignment-header hard-enforcement boundary and the
- * caller-scoped recursion constraints. Unexpected gate errors return explicit
- * block envelopes; intentional refusals keep their existing shape.
- */
 import { dirname, resolve } from "node:path";
 import {
   assertStoreRuntimeSupported,
@@ -110,11 +91,6 @@ function refusalOf(error: unknown): { code: string; message: string } {
   return { code: code === "" ? "store.authority-unreadable" : code, message };
 }
 
-/**
- * invariant: Resolve the ACTIVE collaboration (issue/catalog) authority. An unavailable,
- * missing or staged lane refuses; no execution-store read and no
- * document-backed fallback is admitted.
- */
 type AuthorityRoute =
   | { kind: "retired"; storeRevision: number | null }
   | { kind: "unavailable"; code: string; message: string };
@@ -142,11 +118,6 @@ function aliasedRegisterDir(resolved: string, landed: string): string | null {
   return aliased?.kind === "register" ? aliased.harnessDir : null;
 }
 
-/** note: The harness root of the register a write LANDS on through a symlink alias
- * (stricter-wins veto): the landed destination is the authority the bytes
- * belong to even when the caller's own path already classified as a register
- * elsewhere. `null` when the write is not an alias or does not land on a
- * register. */
 function landedRegisterDirOf(resolved: string, landed: string): string | null {
   if (landed === resolved) return null;
   const aliased = harnessDocKindOfTarget(landed);

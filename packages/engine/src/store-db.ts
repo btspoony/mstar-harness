@@ -66,8 +66,6 @@ export type StoreErrorCode =
   | "store.corrupt"
   | "store.busy"
   | "store.upgrade-attestation-missing"
-  // note: An open mirror run in a combined store is settled by the released build that owns
-  // `sync_runs` there, so the schema advance past its ceiling refuses instead of stranding it.
   | "store.upgrade-sync-run-open"
   | "store.upgrade-state-changed"
   | "store.upgrade-staged-record-missing"
@@ -89,65 +87,34 @@ export type StoreErrorCode =
   | "store.upgrade-dsh-source-refused"
   | "store.upgrade-dsh-ack-unmatched"
   | "store.upgrade-dsh-failed"
-  // note: The collaboration lane's own database boundary (collaboration-store.ts):
-  // missing routed database, inert staged database, invalid/corrupt/inaccessible
-  // database, and a trusted repository/mode/store-id/epoch that does not match.
   | "collaboration.not-initialized"
   | "collaboration.not-active"
-  // note: An admitted older lane is read, not migrated: only `store upgrade --operator` advances it.
   | "collaboration.upgrade-required"
-  // note: A `remote` selection's local database is a verified cache; the local domain entries
-  // refuse it because the provider, not these rows, is the authority.
   | "collaboration.mode-unavailable"
   | "collaboration.operation-partial"
-  // invariant: One record's staged move (cross-authority-move.ts, lane v4): its source row freezes
-  // the record from `staged` on, so a write to it is `issue.move-in-progress`, and a phase the
-  // state machine does not allow forward is `collaboration.move-phase-invalid`.
   | "issue.move-in-progress"
   | "collaboration.move-phase-invalid"
-  // note: One record's move into a destination that already holds a record under the same reference,
-  // whose content is not the frozen copy; refusing it is what keeps publication from losing history.
   | "collaboration.move-destination-occupied"
   | "collaboration.unreadable"
   | "collaboration.stale-binding"
-  // note: Remote observation evidence: a scope the host could not verify, the snapshot gap a
-  // consumer must disclose instead of reading as empty, and a stale base revision.
   | "collaboration.observation-incomplete"
   | "collaboration.observation-stale"
-  // note: The remote boundary's own refusals (collaboration-remote.ts): a malformed DTO, a
-  // check that does not address the selected project, and the provider access outcomes.
   | "remote.input-invalid"
   | "remote.scope-mismatch"
   | "remote.denied"
   | "remote.revoked"
   | "remote.unsafe-fidelity"
   | "remote.unavailable"
-  // note: One operation id is bound to one frozen request; a different request or binding
-  // under the same id never replays and never overwrites the stored intent.
   | "remote.operation-conflict"
-  // note: The outbox lifecycle's own refusals: an unknown or unaddressable intent, a send
-  // that the binding's state does not admit, and a business write whose effect is only
-  // durably queued (never mapped to business success).
   | "remote.intent-not-found"
   | "remote.dispatch-refused"
   | "remote.effect-pending"
-  // note: A settled provider effect that does not carry the business outcome its frozen request
-  // reviewed: the composite declines instead of recording an execution binding from a guess.
   | "remote.effect-mismatch"
-  // invariant: The one-way authority cutover (collaboration-cutover.ts): a combined or
-  // partially cut store is not runtime authority, a competing source/mode/
-  // manifest cannot win by force, pending catalog or mirror work must be
-  // settled first, and a fence without a verified recovery point never runs.
   | "collaboration.cutover-required"
   | "collaboration.cutover-conflict"
   | "collaboration.cutover-not-quiescent"
-  // invariant: The fence's own durable boundary failed: a failed commit or an incomplete
-  // rollback leaves the persisted state UNCONFIRMED, so the operator must
-  // inspect it instead of retrying as if nothing happened.
   | "collaboration.cutover-unconfirmed"
   | "collaboration.backup-incomplete"
-  // note: The cutover activation input: an activation needs a named operator whose
-  // own attestation document is the one supplied.
   | "store.attestation-invalid";
 
 /** Typed refusal with an actionable, stable code and optional machine facts. */
@@ -399,9 +366,7 @@ function busyAware(db: StoreDb, path: string, timeout: number): StoreDb {
  * exact pragma order and side effects they had before.
  */
 export type StoreConnectOptions = Readonly<{
-  /** invariant: Open a writer only when the database exists (`mode=rw`); never create it. */
   noCreate?: boolean;
-  /** why: Keep the database's current journal mode instead of switching a writer to WAL. */
   keepJournalMode?: boolean;
 }>;
 
@@ -420,16 +385,10 @@ export async function connect(
   return openConnection(dbPath, mode, DatabaseSync, timeout, options);
 }
 
-/** note: `dbPath` as a SQLite URI path: every segment percent-encoded, so `%`, `?`
- * and `#` in a store path are addressed literally. */
 function sqliteUriPath(dbPath: string): string {
   return resolve(dbPath).split(sep).map(encodeURIComponent).join("/");
 }
 
-/**
- * invariant: A SQLite `mode=rw` URI addressing `dbPath`: an existing database opens, a
- * missing one refuses instead of being created.
- */
 function existingOnlyUri(dbPath: string): string {
   return `file:${sqliteUriPath(dbPath)}?mode=rw`;
 }
@@ -552,7 +511,6 @@ export function walShapedStoreFile(dbPath: string): boolean {
       closeSync(source);
     }
   } catch {
-    // note: Not a readable store file: the open reports its own failure.
     return false;
   }
 }
@@ -1156,12 +1114,6 @@ export type Migration = {
   name: string;
   sql: string;
   normalize?: (db: StoreDb, context: MigrationContext) => void;
-  /**
-   * invariant: The table this body alters, when the body cannot run without it. The cutover
-   * fence moves that table to the collaboration lane and drops the local copy, so a FENCED
-   * combined store records the version without running the body; the lane's own ladder applies
-   * the same alteration there. The same absence in an unfenced store is damage and still fails.
-   */
   requiresTable?: string;
 };
 
@@ -1181,10 +1133,6 @@ function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
       { runs },
     ),
     {
-      // invariant: This is the ONE owner of the run-open recovery text; the CLI forwards it
-      // verbatim instead of restating it, so the two cannot drift. Both commands name the SAME
-      // absolute harness: a run settled from another checkout settles THAT store and leaves this
-      // control root's run open, so the retry would refuse again.
       recovery:
         "Settle or take over the open mirror run(s) the refusal names with the 4.9.x build's " +
         "mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|-> " +
@@ -2347,17 +2295,11 @@ function applyPendingMigrations(
     const prior = readAppliedMigrations(db, true);
     const priorMax = prior.length === 0 ? 0 : validateAppliedMigrations(prior);
     const pending = MIGRATIONS.filter((m) => m.version > priorMax);
-    // invariant: An open mirror run a COMBINED store holds is settled by the released build
-    // that owns `sync_runs` there, so the batch refuses BEFORE the schema passes that build's
-    // ceiling. A fresh store (no history) writes a new `sync_runs` and has none to strand.
     if (priorMax > 0 && pending.some((migration) => migration.version > RELEASED_COMBINED_SCHEMA_MAX)) {
       refuseOpenMirrorRuns(db, priorMax);
     }
     if (prior.length === 0) db.exec(SCHEMA_VERSION_TABLE_SQL);
     for (const migration of pending) {
-      // invariant: A migration whose table the cutover fence moved runs only where the table is
-      // still local. The fence row is what admits the skip: an unfenced store missing the table
-      // is damage, and its body runs and fails exactly as before.
       const movedByFence =
         migration.requiresTable !== undefined &&
         !tableNamesOn(db).has(migration.requiresTable) &&
@@ -2474,20 +2416,6 @@ export type CollaborationFence = Readonly<{
   fencedAt: string;
 }>;
 
-/**
- * invariant: The store's collaboration-owned tables. A store that still holds rows in any
- * of them owns its issue/catalog authority the pre-cutover way, and a file-era
- * import or fresh bootstrap would mint a SECOND authority beside it. The fence
- * drops exactly these tables, so a fenced store has nothing to refuse by row
- * count — its own refusal comes first, and names the retained pre-fence image.
- *
- * `issue_counter` is the allocator: a pristine store always carries its
- * singleton row, so only a MOVED allocator counts as held authority.
- *
- * This lives here — the one module every store layer imports — so the bootstrap,
- * the file-era import and the runtime binding check share ONE rule without an
- * import cycle.
- */
 const COLLABORATION_HELD_TABLES: readonly string[] = [
   "issues",
   "occurrences",
@@ -2505,12 +2433,6 @@ const COLLABORATION_HELD_TABLES: readonly string[] = [
   "catalog_operations",
 ];
 
-/**
- * invariant: The subset that carries DOMAIN AUTHORITY: every collaboration-owned table
- * except the catalog registration journal. A journal row is pending execution
- * state a supported verb reconciles; by itself it never makes a checkout the
- * issue/catalog authority, so a runtime lane read must not be refused for it.
- */
 const COLLABORATION_AUTHORITY_TABLES: readonly string[] = COLLABORATION_HELD_TABLES.filter(
   (table) => table !== "catalog_operations",
 );

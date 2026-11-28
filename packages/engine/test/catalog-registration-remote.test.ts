@@ -39,7 +39,6 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** note: One bound remote checkout whose execution store no longer owns the journal. */
 async function fencedRemoteCheckout(label: string) {
   const root = mkdtempSync(join(ROOT, `${label}-`));
   const scope = createRemoteScope(root, label);
@@ -47,8 +46,6 @@ async function fencedRemoteCheckout(label: string) {
   const commit = scope.publish();
   await bindRemoteAuthority(context, scope.batch(commit));
   await initializeStore(context).then((handle) => handle.close());
-  // why: The fenced shape a remote checkout lands in — the cache owns the journal, and the
-  // execution store no longer carries the table at all.
   const fenced = new DatabaseSync(join(scope.harness, "store.db"));
   try {
     fenced.exec("drop table catalog_operations");
@@ -58,7 +55,6 @@ async function fencedRemoteCheckout(label: string) {
   return { scope, context };
 }
 
-/** note: One REGISTERED lifecycle in the execution registry — the fact the gate decides first. */
 function registerWorkflow(harness: string, workflowId: string): void {
   const store = new DatabaseSync(join(harness, "store.db"));
   try {
@@ -71,7 +67,6 @@ function registerWorkflow(harness: string, workflowId: string): void {
   }
 }
 
-/** note: One prepared journal row on the lane that owns it. */
 function insertPrepared(lanePath: string, row: {
   operationId: string;
   workflowId: string;
@@ -101,7 +96,6 @@ describe("a remote checkout's catalog journal", () => {
 
     expect(await readPendingRegistration(context, "wf-remote-journal")).toBeNull();
 
-    // invariant: The verdict takes no write lock: a competing RESERVED writer cannot refuse a read.
     const location = resolveCollaborationLocation(context);
     const holder = new DatabaseSync(location.dbPath);
     try {
@@ -112,7 +106,6 @@ describe("a remote checkout's catalog journal", () => {
       holder.close();
     }
 
-    // invariant: A genuinely pending journal on the cache is still reported.
     insertPrepared(location.dbPath, { operationId: "remote-pending", workflowId: "wf-remote-journal" });
     expect(await readPendingRegistration(context, "wf-remote-journal")).toEqual({ operationId: "remote-pending", phase: "prepared", hasIdentityFailure: false });
   });
@@ -141,18 +134,15 @@ describe("a remote checkout's catalog journal", () => {
       lane.close();
     }
 
-    // invariant: A pending row on the cache is visible to discovery, not only to the point read.
     const pending = await listPendingCatalogRegistrations(context);
     expect(pending).toContainEqual(expect.objectContaining({ operationId: "remote-pending-write", workflowId: "wf-remote-write", phase: "prepared" }));
     expect(pending).toContainEqual(expect.objectContaining({ operationId: "remote-pending-purge", workflowId, phase: "prepared" }));
 
-    // invariant: Abort settles it on the cache and advances that lane's counter.
     expect(await abortCatalogExecution(context, "remote-pending-write")).toEqual({
       operationId: "remote-pending-write", workflowId: "wf-remote-write", phase: "aborted", sourceBytesRetained: true,
     });
     expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 3, catalogRevision: 4 });
 
-    // invariant: Both purge halves compare generations on the cache lane, so they agree.
     const receipt = await purgeCatalogRegistration(context, {
       workflowId, operationId: "remote-pending-purge", expectedCatalogRevision: 4, actor: "project-manager",
     });
@@ -160,21 +150,15 @@ describe("a remote checkout's catalog journal", () => {
     expect(await listPendingCatalogRegistrations(context)).toEqual([]);
     expect(await readCatalogRevisions(context)).toEqual({ storeRevision: 4, catalogRevision: 4 });
 
-    // invariant: Settlement retains the source document itself, never a re-serialized copy.
     expect(JSON.parse(readFileSync(snapshotPath, "utf8"))).toEqual({ identity: workflowId });
   });
 
   test("a lane this checkout does not hold passes registration through instead of refusing selection", async () => {
     const { scope, context } = await fencedRemoteCheckout("remote-journal-gate-missing-lane");
     registerWorkflow(scope.harness, "wf-registered");
-    // note: The cache the bind created is gone, so the journal's owner cannot be opened at all.
     const location = resolveCollaborationLocation(context);
     for (const path of [location.dbPath, `${location.dbPath}-wal`, `${location.dbPath}-shm`]) rmSync(path, { force: true });
 
-    // invariant: A lane this workspace does not hold carries no journal row, so it is the same
-    // pre-activation pass-through `store.not-active` already had — never a
-    // `collaboration.not-initialized` refusal of a workflow selection. An unregistered workflow
-    // never even pays for that read.
     await expect(assertCatalogExecutionCommitted(context, "wf-unregistered")).resolves.toBeUndefined();
     await expect(assertCatalogExecutionCommitted(context, "wf-registered")).resolves.toBeUndefined();
   });
@@ -184,8 +168,6 @@ describe("a remote checkout's catalog journal", () => {
     registerWorkflow(scope.harness, "wf-registered");
     insertPrepared(resolveCollaborationLocation(context).dbPath, { operationId: "op-gate-pending", workflowId: "wf-registered" });
 
-    // invariant: Tolerating a lane this workspace does not hold never hides a journal it DOES
-    // hold: a registered workflow with a pending registration still refuses.
     await expect(assertCatalogExecutionCommitted(context, "wf-registered")).rejects.toMatchObject({
       code: "catalog.registration-pending",
     });
@@ -204,7 +186,6 @@ describe("a remote checkout's catalog journal", () => {
     } finally {
       fenced.close();
     }
-    // note: The cache the bind created is gone, so the journal's owner cannot be opened at all.
     rmSync(resolveCollaborationLocation(context).dbPath, { force: true });
 
     const readRefusal = await readPendingRegistration(context, "wf-remote-absent").catch((error: unknown) => error) as {
@@ -212,7 +193,6 @@ describe("a remote checkout's catalog journal", () => {
     };
     expect(readRefusal.code).toBe("collaboration.not-initialized");
     expect(readRefusal.message).toContain("mstar store init");
-    // invariant: The REMOTE recovery replaces the local creation advice for this path only.
     expect(readRefusal.recovery).toContain("mstar store collaboration remote bind --harness <abs> --input <file|->");
     expect(readRefusal.recovery).not.toContain("mstar store init");
 

@@ -63,7 +63,6 @@ describe("owning-skill table", () => {
     // store family default is mstar-conventions; execution commands override.
     expect(owningSkillFor("store.init")).toBe("mstar-conventions");
     expect(owningSkillFor("store.execution.restore")).toBe("mstar-artifacts");
-    // invariant: A multi-segment family default owns the remote lane and nothing else in the store family.
     expect(owningSkillFor("store.collaboration.remote.outbox-dispatch")).toBe("mstar-remote-collaboration");
     expect(owningSkillFor("store.collaboration.remote.status")).toBe("mstar-remote-collaboration");
     expect(owningSkillFor("store.collaboration.adopt")).toBe("mstar-conventions");

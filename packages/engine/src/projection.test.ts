@@ -62,7 +62,6 @@ afterAll(() => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
-/** note: Publish the staged lane and this checkout's binding, as real activation does. */
 function activateCollaboration(context: StoreContext): void {
   const location = resolveCollaborationLocation(context);
   const db = new DatabaseSync(location.dbPath);
@@ -101,8 +100,6 @@ async function fixture(name: string, root = ROOT): Promise<Fixture> {
     cwd: workspace,
     stdio: ["ignore", "ignore", "ignore"],
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${workspace}.insteadOf`, `https://github.com/acme/${name.replace(/[^a-z0-9._-]/gi, "-")}.git`],
@@ -1097,9 +1094,6 @@ describe("projection publication and last-good handling", () => {
 
   test("a catalog write between capture and publication cannot be published as current", async () => {
     const f = await fixture("forked-snapshot-");
-    // invariant: The hook lands a catalog write AFTER the first capture released its
-    // source-local snapshot. Publication must refuse that capture and publish
-    // the re-captured source set, never the forked one under a current stamp.
     const report = await refreshProjections(f.context, {
       beforePublish: async (attempt) => {
         if (attempt !== 1) return;

@@ -108,14 +108,8 @@ export type CatalogExecutionReceipt = {
   catalogRevision: number;
   /** Retained on historical journal receipts; ACTIVE registration returns false. */
   recovered: boolean;
-  /**
-   * invariant: Scoped warnings of a REPLAY, when the committed collaboration effect's
-   * acknowledgement could not be confirmed. Both business effects are committed
-   * either way; the warning names what a replay can (or cannot) repair.
-   */
   recovery?: { warnings: Array<{ code: string; message: string }> };
 };
-
 
 /** One pending operation as `mstar catalog reconcile --list` reports it. */
 export type PendingCatalogRegistration = {
@@ -139,7 +133,6 @@ export type CatalogRegistrationErrorCode =
   | "catalog.reconcile-conflict"
   | "catalog.purge-not-found"
   | "catalog.purge-identity-mismatch";
-
 
 export class CatalogRegistrationError extends Error {
   readonly code: CatalogRegistrationErrorCode;
@@ -729,7 +722,6 @@ function nowRfc3339(): string {
   return new Date().toISOString();
 }
 
-
 /**
  * The store that owns the catalog journal: the reviewed cutover moves
  * `catalog_operations` into the collaboration lane and drops it from the
@@ -747,13 +739,6 @@ function executionOwnsJournal(db: StoreDb): boolean {
   return tableNamesOn(db).has("catalog_operations");
 }
 
-/**
- * invariant: The journal's ONE owner. A combined source still holds
- * `catalog_operations` (execution); a split source names the lane this checkout
- * resolves — its private remote cache, or the local/mirror domain lane. Read and
- * write paths take this same verdict, so a row is never written on a file its
- * readers do not read.
- */
 type JournalOwner = "combined" | "domain" | "remote-cache";
 
 function journalOwnerOf(context: StoreContext, execution: StoreDb): JournalOwner {
@@ -761,23 +746,15 @@ function journalOwnerOf(context: StoreContext, execution: StoreDb): JournalOwner
   return resolveCollaborationLocation(context).mode === "remote" ? "remote-cache" : "domain";
 }
 
-/**
- * invariant: A bound split checkout that reaches the journal through its private remote cache
- * must not be told to run `store init`: that verb never creates a remote cache, and the only
- * supported route to one is the reviewed `remote bind`. The code and the lane's own words stay;
- * only the recovery this path publishes changes.
- */
 const REMOTE_CACHE_RECOVERY =
   "This checkout's remote cache does not exist, and a remote checkout never creates one locally: " +
   "re-establish it with the reviewed mstar store collaboration remote bind --harness <abs> --input <file|->, then retry.";
 
-/** note: Mark a cache-lane refusal with the remote-specific recovery, preserving its code and message. */
 function withRemoteCacheRecovery(error: unknown): unknown {
   if (!(error instanceof StoreError) || error.code !== "collaboration.not-initialized") return error;
   return Object.assign(error, { recovery: REMOTE_CACHE_RECOVERY });
 }
 
-/** note: The remote cache's read handle, with the missing-lane refusal mapped for this path. */
 async function openRemoteJournalLane(context: StoreContext): Promise<{ db: StoreDb; close(): void }> {
   try {
     return await openRemoteCache(context, "read");
@@ -786,7 +763,6 @@ async function openRemoteJournalLane(context: StoreContext): Promise<{ db: Store
   }
 }
 
-/** note: The split owner's read connection; a remote selection never opens the domain lane. */
 async function openJournalLane(
   context: StoreContext,
   owner: "domain" | "remote-cache",
@@ -796,10 +772,6 @@ async function openJournalLane(
     : await openCollaborationStore(context, "read");
 }
 
-/**
- * why: A verdict is never a mutation, so the journal read takes no write lock.
- * `executionDb` stays open (read-only) for the facts execution still owns.
- */
 async function withJournalRead<T>(
   context: StoreContext,
   fn: (db: StoreDb, executionDb: StoreDb) => T,
@@ -885,15 +857,6 @@ export async function withSplitJournal<T>(journal: SplitJournal | null, run: () 
   }
 }
 
-/**
- * invariant: One journal write lands on the file `journalOwnerOf` names, the
- * same verdict every reader takes. A combined source transacts on its execution
- * store exactly as before; a split source writes the lane that owns the journal
- * (the remote checkout's cache included), while the execution handle only
- * supplies the facts execution still owns (authority state, registry
- * membership). The callback stays synchronous: every lane refuses a thenable
- * before commit.
- */
 async function withJournalWrite<T>(
   context: StoreContext,
   fn: (db: StoreDb, generation: { storeId: string; epoch: number }, executionDb: StoreDb) => T,
@@ -903,9 +866,6 @@ async function withJournalWrite<T>(
     assertStoreActive(execution.db);
     const owner = journalOwnerOf(context, execution.db);
     if (owner === "combined") {
-      // why: execution-store imports this module, so a static import would close the
-      // execution-store → coordination → catalog-registration cycle; nothing but the
-      // combined lane's transaction needs it.
       const { withExecutionTransaction } = await import("./execution-store.js");
       return await withExecutionTransaction(context, (tx) =>
         fn(tx.db, { storeId: tx.storeId, epoch: tx.epoch }, tx.db),
@@ -951,12 +911,6 @@ function assertStoreActive(db: StoreDb): void {
   }
 }
 
-/**
- * why: The shared revisions live on the JOURNAL OWNER's meta singleton — a
- * combined source keeps them in `store_meta` (execution), while the reviewed
- * cutover moves them into the lane's `collaboration_meta` together with the
- * journal (the same table `catalog.ts` reads after the cutover).
- */
 function readJournalVersions(db: StoreDb): { storeRevision: number; catalogRevision: number } {
   const metaTable = tableNamesOn(db).has("store_meta") ? "store_meta" : "collaboration_meta";
   const row = db
@@ -968,7 +922,6 @@ function readJournalVersions(db: StoreDb): { storeRevision: number; catalogRevis
   return { storeRevision: row.revision, catalogRevision: row.catalog_revision };
 }
 
-/** note: Advance the shared store revision on the journal owner's own meta singleton. */
 function bumpSharedRevision(db: StoreDb): void {
   const metaTable = tableNamesOn(db).has("store_meta") ? "store_meta" : "collaboration_meta";
   db.prepare(`update ${metaTable} set revision = revision + 1 where id = 1`).run();
@@ -1010,7 +963,6 @@ export function pendingRegistrationOf(
   };
 }
 
-/** note: The recorded identity failure of one journal row, or undefined when it holds none. */
 function identityFailureOf(row: JournalRow): {
   workflow_id: string;
   snapshot_path: string;
@@ -1034,10 +986,6 @@ function identityFailureOf(row: JournalRow): {
     : undefined;
 }
 
-/**
- * invariant: The aborted row and the owner's shared revision advance on the one
- * connection that owns both, so abort never leaves the counter behind the row.
- */
 function recordAborted(db: StoreDb, operationId: string, reason: string): void {
   db.prepare("update catalog_operations set phase = 'aborted', result_json = ?, updated_at = ? where operation_id = ?").run(
     JSON.stringify({ aborted: true, reason, sourceBytesRetained: true }),
@@ -1046,7 +994,6 @@ function recordAborted(db: StoreDb, operationId: string, reason: string): void {
   );
   bumpSharedRevision(db);
 }
-
 
 function parseJournalDelta(row: JournalRow): JournalDelta {
   let parsed: unknown;
@@ -1149,7 +1096,6 @@ export function writeBinding(
 // Public interface (contract §3)
 // ---------------------------------------------------------------------------
 
-
 /** What an explicit abort reports. */
 export type CatalogExecutionAbort = {
   operationId: string;
@@ -1188,19 +1134,13 @@ export async function abortCatalogExecution(
   });
 }
 
-
 /** The current store/catalog revisions: what a caller records as the expectation. */
 export async function readCatalogRevisions(context: StoreContext): Promise<CatalogRevisions> {
-  // note: The shared revisions live on the JOURNAL OWNER's meta singleton — the lane's
-  // `collaboration_meta` after the fence — never on the execution store the fence left behind.
   return await withJournalRead(context, (db, executionDb) => {
-    // note: The staged-store refusal stays on the execution handle, exactly as before;
-    // only the revision SOURCE moved to the journal owner.
     assertStoreActive(executionDb);
     return readJournalVersions(db);
   });
 }
-
 
 /**
  * The ONE refusal a pending registration produces, verbatim for the dispatch
@@ -1256,28 +1196,14 @@ export function assertCatalogExecutionCommittedOn(
   const id = requireText(workflowId, "workflowId");
   if (!catalogVerdictApplies(db, id)) return;
   if (pending === null) return;
-  // note: This caller READ the registry row above, so the refusal may say so.
   refusePendingRegistration(id, pending, true);
 }
 
-/**
- * note: Whether the gate has any verdict to give: ACTIVE authority AND a row in the
- * execution store's own registry. Both facts are that handle's, so every caller reads
- * them before it pays for the journal's cross-file read.
- */
 function catalogVerdictApplies(db: StoreDb, workflowId: string): boolean {
   if (readStoreAuthority(db).authorityState !== "active") return false;
   return db.prepare("select workflow_id from execution_registry where workflow_id = ?").get(workflowId) !== undefined;
 }
 
-/**
- * invariant: The journal lane this workspace does not hold — a bound remote checkout
- * whose cache is absent, or a scope with no collaboration store yet. A missing or
- * staged lane carries no journal row, so it is the same pre-activation exclusion
- * `store.not-active` already gets: never a catalog verdict, and it never retro-refuses a
- * selection. A stale binding or unreadable lane is a real misconfiguration and still
- * propagates.
- */
 const NO_JOURNAL_LANE: readonly StoreErrorCode[] = ["collaboration.not-initialized", "collaboration.not-active"];
 
 /**
@@ -1344,7 +1270,6 @@ export async function listPendingCatalogRegistrations(context: StoreContext): Pr
         phase: row.phase === "execution-written" ? ("execution-written" as const) : ("prepared" as const),
         createdAt: row.created_at,
         updatedAt: row.updated_at,
-        // note: Registry membership is execution's own row, never the journal file's.
         rootVisible: executionDb.prepare("select 1 from execution_registry where workflow_id = ?").get(workflowId) !== undefined,
       }];
     }),
@@ -1411,7 +1336,6 @@ export async function purgeCatalogRegistration(
     if (row === undefined || parseJournalWorkflowId(row) !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `no failed registration record exists for workflow ${JSON.stringify(workflowId)}; run \`mstar catalog reconcile --list\` and retry with the matching operation id`);
     }
-    // note: ONE identity-failure rule, shared with the pending refusal the gate publishes.
     const failure = identityFailureOf(row);
     if (!isPlainObject(failure) || failure.workflow_id !== workflowId) {
       throw new CatalogRegistrationError("catalog.purge-not-found", `operation ${JSON.stringify(operationId)} has no identity-failure record for this workflow; if it is pending and unregistered, abandon it without file changes using \`mstar catalog reconcile --abort --operation-id ${operationId}\``);

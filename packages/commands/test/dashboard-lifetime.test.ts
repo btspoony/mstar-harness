@@ -49,11 +49,6 @@ function context(harnessDir: string, effects: CommandEffects): InvocationContext
   };
 }
 
-/**
- * why: A harness on BOTH lanes: the execution authority plus the active
- * collaboration authority of a synthetic checkout, so the seeded catalog and
- * workflow rows are served from their own sources.
- */
 async function workspace(prefix: string): Promise<string> {
   const root = mkdtempSync(path.join(tmpdir(), prefix));
   execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "ignore", "ignore"] });
@@ -61,8 +56,6 @@ async function workspace(prefix: string): Promise<string> {
     cwd: root,
     stdio: ["ignore", "ignore", "ignore"],
   });
-  // note: The live selector lookup is real Git I/O; route the synthetic origin to this fixture's
-  // own repository, which never publishes the selector ref.
   execFileSync(
     "git",
     ["config", `url.${root}.insteadOf`, `https://github.com/acme/${path.basename(root)}.git`],
@@ -104,7 +97,6 @@ function serviceEffects(handles: RunningDashboard[], onOpen?: (url: string) => P
     },
   };
 }
-
 
 describe("dashboard ACTIVE projection views", () => {
   test("all projection-backed views read seeded ACTIVE-authority data", async () => {

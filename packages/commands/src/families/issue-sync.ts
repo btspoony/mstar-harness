@@ -212,17 +212,13 @@ function failure(id: string, error: unknown): CommandEnvelope<never> {
   });
 }
 
-
 /** note: Everything a verb needs from the declarations, resolved once, before any write. */
 type Target = {
   projectId: string;
   bindingId: string;
   harnessDir: string;
-  /** note: The `.mstarc` connection facts this command resolved. */
   linear: LinearBinding;
-  /** note: The binding row the collaboration lane holds, revision included. */
   project: ProjectBinding;
-  /** note: Where the `.mstarc` was read: the under-lock comparison re-reads it here. */
   repoRoot: string;
   remoteProject: string;
   identity: { repo: string; author: string };
@@ -295,7 +291,6 @@ function pushContextFor(target: Target, runId: string | undefined): PushContext 
   };
 }
 
-/** note: The binding row as the collaboration lane holds it; the mirror's only binding source. */
 const BINDING_SQL =
   "select project_id, provider, workspace, team, remote_project, revision, updated_at from project_bindings where project_id = ?";
 
@@ -311,18 +306,11 @@ function bindingOf(row: Record<string, unknown>): ProjectBinding {
   };
 }
 
-/**
- * note: The project binding, read through the collaboration boundary: after the
- * cutover the binding lives in the repository's collaboration store, so no
- * execution table is consulted and a clone with no execution store can still
- * plan and record. `db` may be a read handle or the transaction's own connection.
- */
 function bindingOn(db: StoreDb, projectId: string): ProjectBinding | null {
   const row = db.prepare(BINDING_SQL).get(projectId) as Record<string, unknown> | undefined;
   return row === undefined ? null : bindingOf(row);
 }
 
-/** note: The resolved binding, read through the collaboration read handle. */
 async function collaborationBinding(harnessDir: string, projectId: string): Promise<ProjectBinding | null> {
   const handle = await openCollaborationStore({ harnessDir }, "read");
   try {
@@ -332,32 +320,20 @@ async function collaborationBinding(harnessDir: string, projectId: string): Prom
   }
 }
 
-/** note: The binding row's facts, as one comparable line. */
 function projectStampOf(binding: ProjectBinding): string {
   return JSON.stringify([binding.provider, binding.workspace, binding.team, binding.remoteProject, binding.revision]);
 }
 
-/** note: The `.mstarc` connection facts, including the facet mapping they resolve to. */
 function linearStampOf(linear: LinearBinding): string {
   return JSON.stringify([linear.enabled, linear.mode, linear.workspace, linear.team, linear.repo, linear.mapping]);
 }
 
-/**
- * invariant: The complete destination one run is opened under: the collaboration generation
- * it belongs to, the marker identity its payloads carry, the repository's effective
- * `[linear]` connection, and the project binding row. A run's proof is this whole
- * line, so a changed workspace, a different mapping, a changed git author or
- * repository, a rebind, or a restored image (new epoch) all refuse continuation
- * instead of recording a cached result under a new destination.
- */
 function runStampOf(target: Target, authority: CollaborationAuthority): string {
   return (
     "binding=" +
     JSON.stringify({
       storeId: authority.storeId,
       epoch: authority.epoch,
-      // why: the marker's repo and author are stamped into every payload, so a new
-      // author or repository would confirm a write the planned marker never named.
       marker: { repo: target.identity.repo, author: target.identity.author },
       linear: linearStampOf(target.linear),
       project: projectStampOf(target.project),
@@ -365,18 +341,6 @@ function runStampOf(target: Target, authority: CollaborationAuthority): string {
   );
 }
 
-/**
- * note: One sync effect on the collaboration authority. `withSyncWrite` takes
- * `BEGIN IMMEDIATE`, re-verifies the repository binding and active state under
- * the lock, commits, and owns the single collaboration revision advance of that
- * commit; the ledger and ingest verbs below never open a transaction of their own.
- *
- * The project binding is re-read from the COLLABORATION store inside that
- * transaction — the lane that owns it after the cutover — and re-proved against
- * the facts this command resolved, so a rebind or a `.mstarc` edit between
- * resolution and the write refuses instead of retargeting the ledger at another
- * remote destination. No execution table is consulted on this path.
- */
 async function syncWrite<T>(
   target: Target,
   apply: (db: StoreDb, authority: CollaborationAuthority) => T,
@@ -387,7 +351,6 @@ async function syncWrite<T>(
   });
 }
 
-/** invariant: Refuse when the binding this command resolved is no longer the binding in force. */
 function requireBindingUnderLock(db: StoreDb, target: Target): void {
   const current = bindingOn(db, target.projectId);
   if (current === null) {
@@ -397,8 +360,6 @@ function requireBindingUnderLock(db: StoreDb, target: Target): void {
         "destination. Bind one with `mstar project bind --project " + target.projectId + " --provider linear --remote-project <name-or-id> --operation <id>`",
     );
   }
-  // why: the `.mstarc` connection is the other half of the destination, and it is a
-  // file: re-reading it here catches an edit no transaction can lock.
   const repo = readRepoLinearBinding(target.repoRoot);
   const linear = repo.kind === "bound" ? linearStampOf(repo.binding) : null;
   if (projectStampOf(current) !== projectStampOf(target.project) || linear !== linearStampOf(target.linear)) {
@@ -410,13 +371,6 @@ function requireBindingUnderLock(db: StoreDb, target: Target): void {
   }
 }
 
-/**
- * note: A run belongs to the exact destination and authority generation it was
- * opened under, and says so in its own record (`sync_runs.reason`): the
- * collaboration store id and epoch, the effective `[linear]` connection, and the
- * project binding row. Continuation therefore refuses a rebind, a changed
- * workspace or mapping, and a restored image whose new epoch retired the run.
- */
 function requireRunBinding(run: RunLease, target: Target, authority: CollaborationAuthority): void {
   const stamp = runStampOf(target, authority);
   if (!run.reason.endsWith(stamp)) {
@@ -430,12 +384,6 @@ function requireRunBinding(run: RunLease, target: Target, authority: Collaborati
   }
 }
 
-/**
- * note: Only a `mirror` repository delivers to Linear. `local` holds the same
- * authority over the same rows and never pushes or ingests remote data, and a
- * `remote` repository's collaboration authority is the provider itself: this
- * mirror lane must never become its delivery route.
- */
 function requireMirror(authority: CollaborationAuthority): void {
   if (authority.mode !== "mirror") {
     throw refused(
@@ -488,10 +436,6 @@ async function runPending(id: string, input: Input, invocation: InvocationContex
   const target = await resolveTarget(invocation, input);
   return syncWrite(target, (db, authority) => {
     requireMirror(authority);
-    // why: One run per binding, claimed before any candidate work. `pending` does not
-    // release it: the lease covers the caller's tool calls as much as this
-    // process, and `apply` is what ends the run. The run records the binding
-    // generation it was opened under, which every continuation re-proves.
     const run = acquireRun(db, {
       bindingId: target.bindingId,
       direction: PUSH_DIRECTION,
@@ -754,9 +698,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
   const target = await resolveTarget(invocation, input);
   const parsed = parseResults(await readJsonArgument(invocation, input.results, "--results"));
   const recordsResults = parsed.results.length > 0;
-  // why: Raw results are only meaningful as the answer to a plan this repository
-  // recorded. A batch that names no run cannot be attributed to one, and a
-  // takeover never records results — it exists to release a dead holder.
   if (recordsResults && takeRun) {
     throw refused(
       "sync.run-held",
@@ -764,9 +705,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
         "result list (\`--results -\` carrying \`[]\`), then record these results under the run id the takeover returns",
     );
   }
-  // why: an ordinary cycle that planned nothing (empty project, every item skipped or
-  // unresolved) is completed by naming its own run with an empty list; that is a
-  // completion, not a borrow. Anything unnamed must name what it records instead.
   if (!recordsResults && adoptions.length === 0 && released.size === 0 && !takeRun && namedRun === undefined) {
     throw new UsageError(
       "--results carries no entries and no operator verb was given, so there is nothing to record. Pass the results your " +
@@ -797,15 +735,9 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
     assertReleaseTargets(db, target.bindingId, released);
 
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
-    // why: a stale create cycle this run did not open may only be recorded through the
-    // adoption that names its identity; the preflight refuses the rest before a write.
     if (recordsResults) {
       assertApplyOwnsHeldRun(db, target, held, takeRun, parsed.results, adoptedIdentities);
     }
-    // why: raw results continue the run the caller NAMED and nothing else — not the
-    // currently held token, not a fresh one. An operator-only batch (adopt/release)
-    // is an explicitly confirmed action, so it may borrow the held lease or open one
-    // so every ledger write still carries a token.
     let active: RunLease;
     if (namedRun !== undefined) {
       if (held === null) {
@@ -834,9 +766,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
             target.projectId + "` to open one",
         );
       }
-      // why: a takeover clears a dead holder without recording anything, and it
-      // restamps the run under the binding in force, which is how a superseded run
-      // is retired after a rebind.
       active = acquireRun(db, {
         bindingId: target.bindingId,
         direction: PUSH_DIRECTION,
@@ -857,10 +786,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       requireRunBinding(held, target, authority);
       active = held;
     }
-    // why: only a run this invocation acquired (a fresh one, a takeover, or the exact
-    // run it named) may be ended here. An operator-only batch that found a run held by
-    // someone else borrowed that lease and must leave it intact: its holder may still
-    // be inside a provider call, and its own exact-token results must remain valid.
     const ownsRun = namedRun !== undefined || takeRun || held === null;
     const push = pushContextFor(target, active.runId);
     const report: ApplyReport = {
@@ -910,11 +835,6 @@ async function runApply(id: string, input: Input, invocation: InvocationContext)
       else if (outcome.outcome === "unconfirmed") report.counts.unconfirmed += 1;
       else report.counts.refused += 1;
     }
-    // invariant: The run ends in the commit that recorded its results, and only when this
-    // invocation owns it (exact named run, takeover, or a run it acquired): a lease
-    // merely borrowed by an operator-only batch belongs to its holder. A batch that
-    // refuses before this point rolls back whole, so the run a `pending` opened stays
-    // held and the same results can be re-sent under its id.
     if (ownsRun) {
       releaseRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION, runId: active.runId });
     }
@@ -991,8 +911,6 @@ async function runIngest(id: string, input: Input, invocation: InvocationContext
   const records = parseRecords(await readJsonArgument(invocation, input.records, "--records"));
   return syncWrite(target, (db, authority) => {
     requireMirror(authority);
-    // why: An association recorded under a run opened for another binding would
-    // attribute these remote issues to a destination this command no longer mirrors.
     const held = readRun(db, { bindingId: target.bindingId, direction: PUSH_DIRECTION });
     if (held !== null) requireRunBinding(held, target, authority);
     const report = ingestRecords(

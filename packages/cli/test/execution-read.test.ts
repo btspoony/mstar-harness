@@ -63,15 +63,6 @@ const TS = "2026-09-21T00:00:00.000Z";
 
 const roots: string[] = [];
 
-/** why: The collaboration binding registry lives under `<homedir>/.mstar/repos`,
- * so the fixture's in-process binding and the spawned CLI must agree on HOME.
- * A sibling suite member that leaves ambient HOME state behind can otherwise
- * split them: the CLI then cannot see the binding, ownership is unproven, and
- * the corrupt-execution probe escapes as `collaboration.unreadable` instead of
- * the store's own `store.corrupt`. Pin BOTH spellings to one private root for
- * this file — `process.env.HOME` (what the spawned CLI inherits) and
- * `os.homedir()` (what in-process engine calls resolve) — and restore both.
- */
 const FILE_HOME = mkdtempSync(join(nodeOs.tmpdir(), "execution-read-home-"));
 const AMBIENT_HOME = process.env.HOME;
 let homeSpy: { mockRestore(): void } | undefined;
@@ -113,12 +104,6 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-/** why: Run the real CLI entry from the fixture root. The shared spawn env pins out
- * the ambient harness and identity vars; per-case extras go on top. The root
- * itself comes from the fixture checkout — the env pin is retired. `HOME` is
- * pinned to this file's private root explicitly, so the spawned CLI reads the
- * same binding registry the fixture's in-process writes landed in, even if a
- * sibling file's ambient HOME is leaking through `process.env`. */
 function runCli(args: string[], fixture: Fixture, extraEnv: Record<string, string> = {}): RunResult {
   return harnessRunCli(args, {
     cwd: fixture.root,
@@ -420,7 +405,6 @@ describe("execution-cli-read — the CLI answers execution-source reads by route
     expect(show.exitCode).toBe(1);
     expect(jsonOf(show).code).toBe("store.corrupt");
 
-
     const status = runCli(["status", "validate"], corrupt);
     expect(status.exitCode).toBe(1);
     expect(jsonOf(status).code).toBe("store.corrupt");
@@ -512,9 +496,6 @@ describe("execution-cross-domain", () => {
     expect(
       projected !== null && typeof projected === "object" && "code" in projected ? projected.code : undefined,
     ).toBe("store.corrupt");
-    // invariant: The split boundary: the issues view's authority is the repository lane,
-    // which is healthy — a corrupt execution store must not fail it, and the
-    // empty answer is the lane's own genuine zero.
     const issues = await readDashboardView({ context: fixture.context, view: "issues" });
     expect(issues.data).toBeDefined();
 

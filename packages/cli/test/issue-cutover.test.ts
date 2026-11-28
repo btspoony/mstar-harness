@@ -490,8 +490,6 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     const root = realpathSync(mkdtempSync(join(tmpdir(), "mstar-issue-remote-")));
     roots.push(root);
     execFileSync("git", ["init", "-q", "-b", "main"], { cwd: root });
-    // invariant: An origin-less scope cannot enroll in remote, so selection refuses before any
-    // collaboration lane is opened; no local row or empty rollup may stand in for it.
     writeFileSync(
       join(root, ".mstarc"),
       "[linear]\nenabled=true\nworkspace=acme\nteam=ENG\n[collaboration]\nmode=remote\nrepo_id=remote-fixture\n",
@@ -504,8 +502,6 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     expect(jsonOf(rollup).code).toBe("remote.selector-unavailable");
     expect(jsonOf(rollup).data).toBeUndefined();
 
-    // invariant: The mirror delivery lane opens the same collaboration store, so a remote
-    // selection never becomes its route: it refuses at selection, before any ledger work.
     const sync = runCli(["issue-sync", "pending", "--project", PROJECT_ID, "--harness", harness], root);
     expect(sync.exitCode).toBe(1);
     expect(jsonOf(sync).code).toBe("remote.selector-unavailable");
@@ -522,8 +518,6 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     const handle = await initializeStore(context);
     handle.close();
     await initializeCollaborationStore(resolveCollaborationLocation(context));
-    // invariant: The issue authority is the repository lane: a torn copy of ITS database
-    // is the failure the rollup must surface, never a zeroed success.
     writeText(resolveCollaborationLocation(context).dbPath, "this is not a SQLite database");
     const rollup = runCli(["status", "tech-debt", "--harness", harness], root);
     expect(rollup.exitCode).toBe(1);
@@ -541,8 +535,6 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     const context = { harnessDir: harness };
     const handle = await initializeStore(context);
     handle.close();
-    // invariant: A created-but-never-published lane is staged: no ACTIVE record, so no
-    // issue read may pass through it.
     await initializeCollaborationStore(resolveCollaborationLocation(context));
 
     for (const args of [
@@ -597,12 +589,6 @@ describe("mstar status — the issue authority is never read as an empty rollup 
     expect(found).toEqual([]);
   });
 });
-
-// ---------------------------------------------------------------------------
-// note: The remote observation and outbox lane at the CLI boundary: admission, native
-// detail, and the full provider-free loop from a durable intent to a recorded
-// receipt. No provider is reachable from any command here.
-// ---------------------------------------------------------------------------
 
 describe("remote collaboration CLI", () => {
   const remoteIds = {
@@ -717,7 +703,6 @@ describe("remote collaboration CLI", () => {
       ],
     };
 
-    // note: Before any bind the status discloses an unbound checkout and creates nothing.
     const before = runCli(["store", "collaboration", "remote", "status", "--harness", fixture.harness], fixture.repo, env);
     expect(before.exitCode).toBe(0);
     expect(jsonOf(before).binding).toMatchObject({ state: "unbound" });
@@ -771,8 +756,6 @@ describe("remote collaboration CLI", () => {
     expect(guessed.exitCode).toBe(1);
     expect(jsonOf(guessed).code).toBe("issue.scope-refused");
 
-    // invariant: The unmarked native issue is never closed by its native status: it carries no
-    // MStar subject, so no remote replacement addresses it (the enqueue refuses before writing).
     const closed = runCli(
       [
         "issue", "close",
@@ -823,8 +806,6 @@ describe("remote collaboration CLI", () => {
       fixture.repo,
       env,
     );
-    // invariant: The adoption is ONE durable intent, and the command's exit 0 discloses the
-    // outbox state instead of claiming the issue was adopted.
     expect(adopted.exitCode).toBe(0);
     expect(jsonOf(adopted)).toMatchObject({ operationId: operation, state: "enqueued", replayed: false });
 
@@ -835,8 +816,6 @@ describe("remote collaboration CLI", () => {
     const dispatched = runCli([...remote, "outbox-dispatch", "--harness", fixture.harness, "--operation", operation], fixture.repo, env);
     expect(dispatched.exitCode).toBe(0);
     const permit = jsonOf(dispatched).permit as Record<string, any>;
-    // note: Assert field-by-field: Bun's `toMatchObject` writes asymmetric matchers into the
-    // received object, which would replace the permit values this receipt is built from.
     expect(permit.operationId).toBe(operation);
     expect(typeof permit.attemptId).toBe("string");
     expect(typeof permit.requestHash).toBe("string");
@@ -855,14 +834,11 @@ describe("remote collaboration CLI", () => {
     };
     writeFileSync(receiptFile, JSON.stringify(receipt));
     const recorded = runCli([...remote, "outbox-receipt", "--harness", fixture.harness, "--input", receiptFile], fixture.repo, env);
-    // note: Exit 0 acknowledges the durable evidence; only `confirmed` is an effect success.
     expect(recorded.exitCode).toBe(0);
     expect(jsonOf(recorded)).toMatchObject({ state: "unconfirmed" });
     const shownIntent = runCli([...remote, "outbox-show", "--harness", fixture.harness, "--operation", operation], fixture.repo, env);
     expect(jsonOf(shownIntent)).toMatchObject({ state: "unconfirmed", attemptId: permit.attemptId, disclosure: "full" });
 
-    // invariant: No cache-only adoption is performed: the observation revision and the
-    // visible issue set are exactly what the admission recorded.
     const after = runCli(["store", "collaboration", "remote", "status", "--harness", fixture.harness], fixture.repo, env);
     expect(jsonOf(after).projects).toEqual([expect.objectContaining({ projectId: remoteIds.projectId, revision: 1, completeness: "complete" })]);
     const relisted = runCli(["issue", "list", "--harness", fixture.harness], fixture.repo, env);
@@ -870,7 +846,6 @@ describe("remote collaboration CLI", () => {
     expect(afterPage.total).toBe(0);
     expect(afterPage.providerIssues).toHaveLength(1);
 
-    // note: The host's provider effect is the exact frozen event on the addressed record.
     const confirmedFile = join(root, "confirmed.json");
     writeFileSync(confirmedFile, JSON.stringify({
       ...receipt,

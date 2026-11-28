@@ -419,8 +419,6 @@ describe("Overview — what it shows, in the IA §3.1 order", () => {
   });
 
   test("an unestimated milestone states the word, never an empty slot", () => {
-    // why: an unestimated milestone must say so in its OWN row, counted — a page-wide
-    // hit from another surface cannot satisfy it.
     const rows = milestones(3);
     const page = overview({
       milestones: read({

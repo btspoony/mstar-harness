@@ -101,8 +101,6 @@ async function seedProject(harnessDir: string): Promise<void> {
  * holds a non-empty milestone without depending on the assign CHANNEL.
  */
 async function assignDirectly(harnessDir: string, milestoneId: string | null, issueId: string): Promise<void> {
-  // note: Issues are collaboration facts after the cutover: assign on that lane (the
-  // execution store holds no issue rows).
   await withCollaborationWrite({ harnessDir }, ({ db }) => {
     db.prepare('update issues set milestone_id=? where id=?').run(milestoneId, issueId)
   })
@@ -134,9 +132,6 @@ async function milestoneRollup(endpoint: WriteEndpoint, sessionId: string, cwd: 
   return (read.envelope.data as { milestones: { data: { milestones: RollupMilestone[] } } }).milestones.data.milestones
 }
 
-// why: route the production client's RPC at the REAL panel service, so a spec drives
-// the client and shell over the real store — only the transport is local. A dropped
-// or coerced `effortSessions` in either half then fails the readback below.
 function serviceConnection(service: WriteEndpoint): MstarPanelSnapshotConnection {
   return {
     rpc: {
@@ -360,8 +355,6 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     expect(edited).toHaveLength(1)
     expect(edited[0]).toMatchObject({ name: 'Renamed', status: 'active', effortSessions: 20 })
 
-    // why: a clear is an explicit `effortSessions: null` patch, not an omitted
-    // field — omitting it leaves the stored count alone.
     const cleared = await endpoint.milestoneUpdate(
       'ses_ms2',
       app.root,
@@ -381,8 +374,6 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     const endpoint = endpointOf(app)
     await seedProject(app.harnessDir)
 
-    // why: the seat re-arms the channel after every write with the freshly observed
-    // revision, so the spec does the same — one channel per write, the production client throughout.
     const channelAt = (expectedStoreRevision: number) => {
       const states: { busy: boolean; refusal: string | null }[] = []
       const channel = createMilestoneWrites({
@@ -397,8 +388,6 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
       })
       return {
         channel,
-        // why: a write is settled only when its terminal answer flipped busy back
-        // to false — a timer alone can read back before the engine has written.
         settle: async () => {
           for (let i = 0; i < 100 && states[states.length - 1]?.busy !== false; i++) {
             await new Promise((resolve) => setTimeout(resolve, 0))
@@ -417,8 +406,6 @@ describe('milestoneAdd / milestoneUpdate — engine verbs with the observed revi
     const created = await milestoneRollup(endpoint, 'ses_ms_chain', app.root)
     expect(created).toMatchObject([{ name: 'Chained', effortSessions: 12 }])
 
-    // why: the clear travels as an explicit `null` — an omitted field would leave the
-    // stored 12 alone — and the STORE holds null afterwards.
     const clear = channelAt(await revision())
     clear.channel.update(created[0]!.milestoneId, { effortSessions: null })
     await clear.settle()
@@ -816,13 +803,9 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     seat.channel.create({ name: 'Typed draft name', effortSessions: 0, ordinal: 0 })
     await seat.settle()
 
-    // why: the engine refused the count, so the refusal is the channel's, verbatim.
     expect(seat.channel.refusal).toBeTruthy()
     expect(seat.channel.refusal).toContain('milestone.invalid-input')
-    // invariant: nothing was written, so the read is NOT reloaded and the mounted form keeps
-    // the operator's typed name and count.
     expect(seat.reloads).toHaveLength(0)
-    // why: the store holds no milestone, so the refusal really wrote nothing.
     expect(await milestoneRollup(endpoint, 'ses_draft_create', app.root)).toHaveLength(0)
   })
 
@@ -846,7 +829,6 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     expect(seat.channel.refusal).toBeTruthy()
     expect(seat.channel.refusal).toContain('milestone.invalid-input')
     expect(seat.reloads).toHaveLength(0)
-    // invariant: the stored milestone is untouched, so the editor stays open over true data.
     expect(await milestoneRollup(endpoint, 'ses_draft_update', app.root)).toMatchObject([
       { name: 'Existing', effortSessions: 12 },
     ])
@@ -865,9 +847,6 @@ describe('a refused write never reloads the read — the operator\'s draft survi
   })
 
   it('the reader itself is unchanged: a new identity (navigation) still enters loading', async () => {
-    // why: the reload gate lives in the write channel; the reader's own behaviour — a new key is a
-    // new read, loading until it answers — must
-    // not change. Drives the production OnceReader directly.
     const { OnceReader } = require('../src/client/panel/once-reader.ts') as typeof import('../src/client/panel/once-reader.ts')
     const gateway = stubGateway()
     const client = new MstarPanelSnapshotClient(gateway.connection)
@@ -876,7 +855,6 @@ describe('a refused write never reloads the read — the operator\'s draft survi
     expect(reader.getSnapshot().kind).toBe('loading')
     await new Promise((resolve) => setTimeout(resolve, 5))
     expect(reader.getSnapshot().kind).toBe('ok')
-    // why: navigation re-enters loading because a new identity is a new read.
     reader.begin('view-two', client, async () => ({ kind: 'ok' }))
     expect(reader.getSnapshot().kind).toBe('loading')
   })
@@ -884,11 +862,6 @@ describe('a refused write never reloads the read — the operator\'s draft survi
 
 
 describe('a revision conflict refreshes the read, the draft survives, and the retry lands', () => {
-  // invariant: every write arms from the OPEN read's store revision. Once another writer moves
-  // the store, the open page's revision is stale — the conflict refusal must therefore refresh
-  // the read (the reload a validation refusal must NOT do), or every retry is refused forever.
-  // These specs drive the production channel against the REAL engine; the conflict is built by
-  // writing through the same endpoint between the channel's arming read and the submission.
 
   async function harness(sessionId: string) {
     const app = (booted = await bootApp({ sessionsService: 'fake', harnessDir: null }))
@@ -911,8 +884,6 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
       reload: () => reloads.push(1),
       onState: (state) => states.push(state),
       ids: writeOperationIds<{ expectedStoreRevision: number }>(),
-      // why: the production seat always arms the channel with the open page's project — a
-      // direct factory caller that omits it exercises a path production never takes.
       draftsProject: '_default',
       ...(seats.onAccepted === undefined ? {} : { onAccepted: seats.onAccepted }),
     })
@@ -932,12 +903,9 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     const { app, endpoint } = await harness('ses_conflict')
     const revision = () => observedRevision(endpoint, 'ses_conflict', app.root)
 
-    // why: the page's arming read — the channel carries THIS revision.
     const armed = await revision()
     const seat = channelFor(endpoint, 'ses_conflict', app.root, armed)
 
-    // why: another writer advances the store BETWEEN the page's read and the operator's
-    // submit — the same endpoint, a real write, so the store revision moves under the page.
     const other = await endpoint.milestoneAdd(
       'ses_conflict',
       app.root,
@@ -947,18 +915,12 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     )
     expect(other.ok).toBe(true)
 
-    // why: the operator's write now carries the stale revision — the engine's CAS refusal.
     seat.channel.create({ name: 'Typed draft name', effortSessions: 4, ordinal: 1 })
     await seat.settle()
     expect(seat.channel.refusal).toBeTruthy()
     expect(seat.channel.refusal).toContain('milestone.revision-conflict')
-    // invariant: a revision conflict refreshes the reads — exactly what an input-validation
-    // refusal must never do.
     expect(seat.reloads).toHaveLength(1)
 
-    // why: the refresh re-arms the channel with the NEWLY observed revision, and the resubmission
-    // of the same draft lands — the failure the stale-revision review finding reported was
-    // this retry being refused forever.
     const rearmed = channelFor(endpoint, 'ses_conflict', app.root, await revision())
     rearmed.channel.create({ name: 'Typed draft name', effortSessions: 4, ordinal: 1 })
     await rearmed.settle()
@@ -976,7 +938,6 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     const seat = channelFor(endpoint, 'ses_accept_clear', app.root, await observedRevision(endpoint, 'ses_accept_clear', app.root), {
       onAccepted: (target) => cleared.push(target),
     })
-    // why: the refusal path must NOT clear — the draft is the operator's to fix and resubmit.
     seat.channel.create({ name: 'Refused draft', effortSessions: 0, ordinal: 0 })
     await seat.settle()
     expect(seat.channel.refusal).toContain('milestone.invalid-input')
@@ -988,8 +949,6 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     accepted.channel.create({ name: 'Accepted draft', effortSessions: 2, ordinal: 0 })
     await accepted.settle()
     expect(accepted.channel.refusal).toBeNull()
-    // invariant: the create form's draft key is the project-scoped '_default:create' — the
-    // accepted write clears exactly it.
     expect(cleared).toEqual(['_default:create'])
   })
 
@@ -1026,16 +985,11 @@ describe('a revision conflict refreshes the read, the draft survives, and the re
     const projectA = 'project-alpha'
     const projectB = 'project-beta'
 
-    // why: the form's keystroke effect, mirrored — typing in A's create form writes A's key.
     drafts.write(milestoneDraftTargetKey(projectA, 'create'), { name: 'Typed in project A', effort: '3' })
 
-    // why: B's form seeds from B's key — with the bare 'create' key it would read A's text.
     expect(drafts.read(milestoneDraftTargetKey(projectB, 'create'))).toBeUndefined()
-    // invariant: returning to A re-seeds exactly what was typed there.
     expect(drafts.read(milestoneDraftTargetKey(projectA, 'create'))).toEqual({ name: 'Typed in project A', effort: '3' })
 
-    // invariant: an accepted create in A clears A's entry through the channel's scoped target,
-    // and a draft typed in B meanwhile is untouched.
     const { app, endpoint } = await harness('ses_draft_isolation')
     drafts.write(milestoneDraftTargetKey(projectB, 'create'), { name: 'Typed in project B', effort: '1' })
     const cleared: string[] = []
