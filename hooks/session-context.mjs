@@ -13,30 +13,96 @@ var __esm = (fn, res, err) => () => {
 };
 
 // packages/engine/dist/engine.js
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename as basename2, dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { basename as basename2, dirname as dirname4, isAbsolute as isAbsolute2, join as join4, resolve as resolve4 } from "node:path";
-import { existsSync as existsSync3, mkdirSync as mkdirSync3, readFileSync as readFileSync5, renameSync as renameSync2, unlinkSync, writeFileSync as writeFileSync3 } from "node:fs";
-import { basename as basename4, dirname as dirname5, join as join6, resolve as resolve6 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { basename as basename3, dirname as dirname5, isAbsolute as isAbsolute2, join as join5, resolve as resolve5 } from "node:path";
 import { existsSync as existsSync4, realpathSync as realpathSync3 } from "node:fs";
-import { existsSync as existsSync5, readFileSync as readFileSync6, readdirSync as readdirSync2, realpathSync as realpathSync4 } from "node:fs";
-import { dirname as dirname7, join as join8, resolve as resolve10, sep as sep2 } from "node:path";
+import { existsSync as existsSync5, readFileSync as readFileSync7, readdirSync as readdirSync2, realpathSync as realpathSync4 } from "node:fs";
+import { dirname as dirname7, join as join8, resolve as resolve10, sep as sep3 } from "node:path";
 import { AsyncLocalStorage as AsyncLocalStorage2 } from "node:async_hooks";
 import { existsSync as existsSync13, mkdirSync as mkdirSync5, readdirSync as readdirSync9, readFileSync as readFileSync13, realpathSync as realpathSync7, statSync as statSync4, writeFileSync as writeFileSync6 } from "node:fs";
 import { execFileSync as execFileSync5 } from "node:child_process";
-import { basename as basename8, dirname as dirname13, isAbsolute as isAbsolute6, join as join18, relative as relative3, resolve as resolve15 } from "node:path";
-import { basename as basename9, isAbsolute as isAbsolute8, join as join20, relative as relative4, resolve as resolve16, sep as sep7 } from "node:path";
-import { closeSync, existsSync as existsSync16, fstatSync, openSync, readFileSync as readFileSync17, readdirSync as readdirSync10, statSync as statSync7, unlinkSync as unlinkSync4 } from "node:fs";
-import { dirname as dirname14, isAbsolute as isAbsolute10, join as join22, resolve as resolve18, sep as sep9 } from "node:path";
+import { basename as basename8, dirname as dirname13, isAbsolute as isAbsolute6, join as join18, relative as relative4, resolve as resolve15 } from "node:path";
+import { basename as basename9, isAbsolute as isAbsolute8, join as join20, relative as relative5, resolve as resolve16, sep as sep8 } from "node:path";
+import { closeSync as closeSync2, existsSync as existsSync16, fstatSync as fstatSync2, openSync as openSync2, readFileSync as readFileSync17, readdirSync as readdirSync10, statSync as statSync7, unlinkSync as unlinkSync4 } from "node:fs";
+import { dirname as dirname14, isAbsolute as isAbsolute10, join as join22, resolve as resolve18, sep as sep10 } from "node:path";
 import { createRequire as createRequire2 } from "node:module";
 import { setTimeout as sleep } from "node:timers/promises";
-import { closeSync as closeSync2, existsSync as existsSync17, fstatSync as fstatSync2, fsyncSync, linkSync as linkSync2, lstatSync as lstatSync8, openSync as openSync2, readSync, statSync as statSync8, unlinkSync as unlinkSync5 } from "node:fs";
-import { basename as basename10, dirname as dirname15, join as join23, resolve as resolve19, sep as sep10 } from "node:path";
-function __exportSetter(name, newValue) {
-  this[name] = __returnValue.bind(null, newValue);
+import { closeSync as closeSync3, existsSync as existsSync17, fstatSync as fstatSync3, fsyncSync, linkSync as linkSync2, lstatSync as lstatSync8, openSync as openSync3, readSync, statSync as statSync8, unlinkSync as unlinkSync5 } from "node:fs";
+import { basename as basename10, dirname as dirname15, join as join23, resolve as resolve19, sep as sep11 } from "node:path";
+function readJson(filePath) {
+  if (!existsSync(filePath))
+    return {};
+  const content = readFileSync(filePath, "utf8").trim();
+  if (!content)
+    return {};
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
+  }
+}
+function findRootPackageJson(startDir) {
+  let dir = startDir;
+  for (;; ) {
+    const candidate = resolve(dir, "package.json");
+    try {
+      const pkg = JSON.parse(readFileSync(candidate, "utf8"));
+      if (pkg.name === "morning-star")
+        return candidate;
+    } catch {}
+    const parent = dirname(dir);
+    if (parent === dir)
+      return null;
+    dir = parent;
+  }
+}
+function warnUncheckableNodeFloor() {
+  process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
+}
+function readDeclaredNodeFloor() {
+  const moduleDir = dirname(fileURLToPath(import.meta.url));
+  const root = findRootPackageJson(moduleDir);
+  const candidates = [];
+  let dir = moduleDir;
+  for (let depth = 0;depth < 6; depth += 1) {
+    candidates.push(join(dir, "..", "package.json"), join(dir, "package.json"));
+    if (depth === 1)
+      candidates.push(join(dir, "packages", "engine", "package.json"));
+    const parent = dirname(dir);
+    if (parent === dir)
+      break;
+    dir = parent;
+  }
+  if (root !== null)
+    candidates.push(root);
+  for (const manifestPath of [...new Set(candidates)]) {
+    let parsed;
+    try {
+      parsed = JSON.parse(readFileSync(manifestPath, "utf8"));
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object")
+      continue;
+    const manifest = parsed;
+    const name = manifest["name"];
+    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli" && name !== "@mstar-harness/omp" && name !== "@mstar-harness/dsh" && name !== "@mstar-harness/opencode" && name !== "@mstar-harness/opencode-v2") {
+      continue;
+    }
+    const engines = manifest["engines"];
+    if (engines === null || typeof engines !== "object" || !("node" in engines))
+      continue;
+    const node = engines.node;
+    if (typeof node === "string" && node !== "")
+      return node.replace(/^\D+/, "");
+  }
+  return null;
 }
 function gitProbeTimeoutMs() {
   const raw = process.env.MSTAR_GIT_PROBE_TIMEOUT_MS;
@@ -69,7 +135,7 @@ function realpathOrResolve(target) {
   try {
     return realpathSync(target);
   } catch {
-    return resolve(target);
+    return resolve3(target);
   }
 }
 function parseWorktreeList(out) {
@@ -387,75 +453,6 @@ function validateSnapshotCoordination(value, what = "coordination") {
   }
   return violations;
 }
-function readJson(filePath) {
-  if (!existsSync3(filePath))
-    return {};
-  const content = readFileSync5(filePath, "utf8").trim();
-  if (!content)
-    return {};
-  try {
-    return JSON.parse(content);
-  } catch (error) {
-    throw new Error(`Invalid JSON in ${filePath}: ${error.message}`);
-  }
-}
-function findRootPackageJson(startDir) {
-  let dir = startDir;
-  for (;; ) {
-    const candidate = resolve6(dir, "package.json");
-    try {
-      const pkg = JSON.parse(readFileSync5(candidate, "utf8"));
-      if (pkg.name === "morning-star")
-        return candidate;
-    } catch {}
-    const parent = dirname5(dir);
-    if (parent === dir)
-      return null;
-    dir = parent;
-  }
-}
-function warnUncheckableNodeFloor() {
-  process.stderr.write("mstar: the runtime version floor is uncheckable in this layout - no visible manifest declares `engines.node`, " + "so the Node version is not compared (the native node:sqlite capability check still applies). " + "Recovery: run this from an installed package or a full checkout so the manifest that declares the floor is reachable " + "(`npm i -g @mstar-harness/cli` for the CLI; the harness checkout, not a copied bundle, for a hook entrypoint).\n");
-}
-function readDeclaredNodeFloor() {
-  const moduleDir = dirname5(fileURLToPath(import.meta.url));
-  const root = findRootPackageJson(moduleDir);
-  const candidates = [];
-  let dir = moduleDir;
-  for (let depth = 0;depth < 6; depth += 1) {
-    candidates.push(join6(dir, "..", "package.json"), join6(dir, "package.json"));
-    if (depth === 1)
-      candidates.push(join6(dir, "packages", "engine", "package.json"));
-    const parent = dirname5(dir);
-    if (parent === dir)
-      break;
-    dir = parent;
-  }
-  if (root !== null)
-    candidates.push(root);
-  for (const manifestPath of [...new Set(candidates)]) {
-    let parsed;
-    try {
-      parsed = JSON.parse(readFileSync5(manifestPath, "utf8"));
-    } catch {
-      continue;
-    }
-    if (parsed === null || typeof parsed !== "object")
-      continue;
-    const manifest = parsed;
-    const name = manifest["name"];
-    if (name !== "morning-star" && name !== "@mstar-harness/engine" && name !== "@mstar-harness/cli" && name !== "@mstar-harness/omp" && name !== "@mstar-harness/dsh" && name !== "@mstar-harness/opencode" && name !== "@mstar-harness/opencode-v2") {
-      continue;
-    }
-    const engines = manifest["engines"];
-    if (engines === null || typeof engines !== "object" || !("node" in engines))
-      continue;
-    const node = engines.node;
-    if (typeof node === "string" && node !== "")
-      return node.replace(/^\D+/, "");
-  }
-  return null;
-}
 function readMainWorktree(cwd) {
   const parsed = worktreeList(cwd ?? process.cwd());
   if (parsed === null || parsed.branch === null)
@@ -467,24 +464,45 @@ function readMainWorktree(cwd) {
   }
   return { root: parsed.root, branch: parsed.branch };
 }
-function violation4(severity, code, message, fix) {
+function isReviewOrAuditRound(values) {
+  return classifyReviewOrAuditRound(typeof values.execute_as === "string" ? values.execute_as : "", typeof values.task_category === "string" ? values.task_category : "").roundBounded;
+}
+function isAuditTaskCategory(rawCategory) {
+  const category = rawCategory.replace(/^[*_`"'\s]+/, "").toLowerCase();
+  return /^audit(?![A-Za-z0-9])/.test(category);
+}
+function normalizeAssignmentRole(rawRole) {
+  return rawRole.trim().replace(/^@/, "").toLowerCase().split(/\s+/)[0] ?? "";
+}
+function classifyReviewOrAuditRound(rawRole, rawCategory) {
+  const role = normalizeAssignmentRole(rawRole);
+  const reviewSeat = REVIEW_SEAT_ROLES.includes(role);
+  const auditRound = isAuditTaskCategory(rawCategory);
+  return {
+    role,
+    reviewSeat,
+    auditRound,
+    roundBounded: reviewSeat || auditRound
+  };
+}
+function violation5(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
 function validateNonEmptyString(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
-    violations.push(violation4("high", missingCode, `missing required field: ${field}`));
+    violations.push(violation5("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
-    violations.push(violation4("medium", invalidCode, `${field} must be a non-empty string`));
+    violations.push(violation5("medium", invalidCode, `${field} must be a non-empty string`));
   }
 }
 function validatePlanRow(row) {
   const violations = [];
   if (!isPlainObject(row)) {
-    return { ok: false, violations: [violation4("high", "status.plan-row.invalid", "plan row must be an object")] };
+    return { ok: false, violations: [violation5("high", "status.plan-row.invalid", "plan row must be an object")] };
   }
   const { id, plan_id: planId, title, file, status, metadata } = row;
   if (id === undefined && planId === undefined) {
-    violations.push(violation4("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
+    violations.push(violation5("high", "status.plan-row.missing-id", "missing required field: id (or legacy plan_id)"));
   } else {
     if (id !== undefined) {
       validateNonEmptyString(violations, id, "id", "status.plan-row.missing-id", "status.plan-row.invalid-id");
@@ -493,18 +511,18 @@ function validatePlanRow(row) {
       validateNonEmptyString(violations, planId, "plan_id", "status.plan-row.missing-plan-id", "status.plan-row.invalid-plan-id");
     }
     if (id !== undefined && planId !== undefined && id !== planId) {
-      violations.push(violation4("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
+      violations.push(violation5("medium", "status.plan-row.dual-id", "row has both id and plan_id with different values — write one canonical key (prefer id)"));
     }
   }
   validateNonEmptyString(violations, title, "title", "status.plan-row.missing-title", "status.plan-row.invalid-title");
   validateNonEmptyString(violations, file, "file", "status.plan-row.missing-file", "status.plan-row.invalid-file");
   if (status === undefined) {
-    violations.push(violation4("high", "status.plan-row.missing-status", "missing required field: status"));
+    violations.push(violation5("high", "status.plan-row.missing-status", "missing required field: status"));
   } else if (typeof status !== "string" || !PLAN_STATUSES.includes(status)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
+    violations.push(violation5("medium", "status.plan-row.invalid-status", `status must be one of ${PLAN_STATUSES.join(" | ")} — got ${JSON.stringify(status)}`));
   }
   if (metadata !== undefined && !isPlainObject(metadata)) {
-    violations.push(violation4("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
+    violations.push(violation5("medium", "status.plan-row.invalid-metadata", "metadata must be an object"));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -520,22 +538,22 @@ function validateWorkflowEntry(entry) {
   if (!isPlainObject(entry)) {
     return {
       ok: false,
-      violations: [violation4("high", "status.workflow.invalid", "workflow entry must be an object")]
+      violations: [violation5("high", "status.workflow.invalid", "workflow entry must be an object")]
     };
   }
   validateNonEmptyString(violations, entry.id, "id", "status.workflow.missing-id", "status.workflow.invalid-id");
   if (entry.type === undefined) {
-    violations.push(violation4("high", "status.workflow.missing-type", "missing required field: type"));
+    violations.push(violation5("high", "status.workflow.missing-type", "missing required field: type"));
   } else if (typeof entry.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(entry.type)) {
-    violations.push(violation4("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
+    violations.push(violation5("medium", "status.workflow.invalid-type", `type must be one of ${WORKFLOW_LIFECYCLE_TYPES.join(" | ")} — got ${JSON.stringify(entry.type)}`));
   }
   validateNonEmptyString(violations, entry.started_at, "started_at", "status.workflow.missing-started-at", "status.workflow.invalid-started-at");
   if (entry.dir === undefined) {
-    violations.push(violation4("high", "status.workflow.missing-dir", "missing required field: dir"));
+    violations.push(violation5("high", "status.workflow.missing-dir", "missing required field: dir"));
   } else if (typeof entry.dir !== "string" || entry.dir.trim() === "") {
-    violations.push(violation4("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
+    violations.push(violation5("medium", "status.workflow.invalid-dir", "dir must be a non-empty string"));
   } else if (!isHarnessRelativePath(entry.dir)) {
-    violations.push(violation4("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
+    violations.push(violation5("medium", "status.workflow.invalid-dir", `dir must be a harness-relative path (no absolute paths, no ".." segments) — got ${JSON.stringify(entry.dir)}`));
   }
   return { ok: violations.length === 0, violations };
 }
@@ -549,21 +567,21 @@ function validateStatusV2(docOrPath, opts = {}) {
     } catch (error) {
       return {
         ok: false,
-        violations: [violation4("high", "status.invalid-json", error.message)]
+        violations: [violation5("high", "status.invalid-json", error.message)]
       };
     }
   } else {
     doc = docOrPath;
   }
   if (!isPlainObject(doc)) {
-    return { ok: false, violations: [violation4("high", "status.invalid-doc", "status document must be an object")] };
+    return { ok: false, violations: [violation5("high", "status.invalid-doc", "status document must be an object")] };
   }
   const upgrade = `mstar store upgrade --operator <name> --harness ${harnessDir === undefined ? "<control-root>" : `'${harnessDir.replace(/'/g, "'\\''")}'`}`;
   if (doc.version !== 2) {
     return {
       ok: false,
       violations: [
-        violation4("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+        violation5("high", "status.migration-required", `status.json schema version 2 required — got ${JSON.stringify(doc.version)} (v1 or unknown version); import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -571,7 +589,7 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation4("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+        violation5("high", "status.migration-required", `v1-shaped status.json (root plans[]) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
@@ -579,27 +597,27 @@ function validateStatusV2(docOrPath, opts = {}) {
     return {
       ok: false,
       violations: [
-        violation4("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
+        violation5("high", "status.migration-required", `v1-shaped status.json (root residual_findings) is not a v2 document — import legacy state with \`${upgrade}\``, `run \`${upgrade}\``)
       ]
     };
   }
   const violations = [];
   if (doc.updated_at === undefined) {
-    violations.push(violation4("high", "status.missing-updated-at", "missing required field: updated_at"));
+    violations.push(violation5("high", "status.missing-updated-at", "missing required field: updated_at"));
   } else if (typeof doc.updated_at !== "string" || !DATE_RE.test(doc.updated_at)) {
-    violations.push(violation4("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
+    violations.push(violation5("medium", "status.invalid-updated-at", "updated_at must be YYYY-MM-DD"));
   }
   if (doc.workflows === undefined) {
-    violations.push(violation4("high", "status.missing-workflows", "missing required field: workflows"));
+    violations.push(violation5("high", "status.missing-workflows", "missing required field: workflows"));
   } else if (!Array.isArray(doc.workflows)) {
-    violations.push(violation4("high", "status.invalid-workflows", "workflows must be an array"));
+    violations.push(violation5("high", "status.invalid-workflows", "workflows must be an array"));
   } else {
     const seen = new Set;
     for (const entry of doc.workflows) {
       violations.push(...validateWorkflowEntry(entry).violations);
       if (isPlainObject(entry) && typeof entry.id === "string") {
         if (seen.has(entry.id)) {
-          violations.push(violation4("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
+          violations.push(violation5("medium", "status.workflow.duplicate-id", `duplicate workflow id in workflows[]: ${JSON.stringify(entry.id)}`));
         }
         seen.add(entry.id);
       }
@@ -620,28 +638,28 @@ function validateStatusV2(docOrPath, opts = {}) {
       try {
         physical = realpathSync4(snapshotPath);
       } catch {
-        violations.push(violation4("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
+        violations.push(violation5("high", "status.workflow.snapshot-missing", `workflows[] lists ${JSON.stringify(label)} but its snapshot does not exist at ${JSON.stringify(relSnapshot)} — the root holds active lifecycles only; unregister the id when its snapshot is removed`));
         continue;
       }
-      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep2}`)) {
-        violations.push(violation4("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
+      if (realHarnessDir !== null && physical !== realHarnessDir && !physical.startsWith(`${realHarnessDir}${sep3}`)) {
+        violations.push(violation5("high", "status.workflow.snapshot-outside-harness", `workflows[] lists ${JSON.stringify(label)} but its snapshot resolves outside the harness dir (${JSON.stringify(physical)}) — symlinked snapshot paths are rejected; the snapshot must physically live under ${JSON.stringify(harnessDir)}`));
         continue;
       }
       let snapshot;
       try {
         snapshot = readJson(snapshotPath);
       } catch (error) {
-        violations.push(violation4("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
+        violations.push(violation5("high", "status.workflow.snapshot-invalid", `snapshot at ${JSON.stringify(relSnapshot)} is not valid JSON: ${error.message}`));
         continue;
       }
       if (typeof snapshot.status === "string" && WORKFLOW_TERMINAL_STATUSES.includes(snapshot.status)) {
-        violations.push(violation4("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
+        violations.push(violation5("high", "status.workflow.terminal-listed", `workflows[] lists ${JSON.stringify(label)} whose snapshot status is terminal (${snapshot.status}) — removal-at-terminal: terminal writers unregister AFTER the snapshot write`));
       }
       if (typeof entry.type === "string" && typeof snapshot.type === "string" && entry.type !== snapshot.type) {
-        violations.push(violation4("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
+        violations.push(violation5("medium", "status.workflow.mismatched-type", `workflows[] entry ${JSON.stringify(label)} type ${JSON.stringify(entry.type)} does not match its snapshot type ${JSON.stringify(snapshot.type)} — the root entry mirrors the snapshot; align them`));
       }
       if (typeof entry.started_at === "string" && typeof snapshot.started_at === "string" && entry.started_at !== snapshot.started_at) {
-        violations.push(violation4("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
+        violations.push(violation5("medium", "status.workflow.mismatched-started-at", `workflows[] entry ${JSON.stringify(label)} started_at ${JSON.stringify(entry.started_at)} does not match its snapshot started_at ${JSON.stringify(snapshot.started_at)} — workflow ${JSON.stringify(label)} collided with another writer (e.g. a concurrent/re-run \`mstar workflow register\` with the same workflow id rewrote the snapshot); the root entry mirrors the snapshot — align them or remove the colliding workflow`));
       }
     }
   }
@@ -1070,3505 +1088,6 @@ function storedReceiptFacts(receipt) {
     ...warning === undefined ? {} : { holder_live_warning: warning }
   };
 }
-function ok(value, message) {
-  assert(Boolean(value), false, true, "ok", "Expected value to be truthy", message);
-}
-function assert(bool, actual, expected, operator, defaultMessage, userMessage) {
-  if (!bool) {
-    throw userMessage instanceof Error ? userMessage : new AssertionError(userMessage || defaultMessage, actual, expected, operator, !userMessage);
-  }
-}
-function decodeNamedCharacterReference(value) {
-  return own.call(characterEntities, value) ? characterEntities[value] : false;
-}
-function splice(list, start, remove, items) {
-  const end = list.length;
-  let chunkStart = 0;
-  let parameters;
-  if (start < 0) {
-    start = -start > end ? 0 : end + start;
-  } else {
-    start = start > end ? end : start;
-  }
-  remove = remove > 0 ? remove : 0;
-  if (items.length < constants.v8MaxSafeChunkSize) {
-    parameters = Array.from(items);
-    parameters.unshift(start, remove);
-    list.splice(...parameters);
-  } else {
-    if (remove)
-      list.splice(start, remove);
-    while (chunkStart < items.length) {
-      parameters = items.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize);
-      parameters.unshift(start, 0);
-      list.splice(...parameters);
-      chunkStart += constants.v8MaxSafeChunkSize;
-      start += constants.v8MaxSafeChunkSize;
-    }
-  }
-}
-function push(list, items) {
-  if (list.length > 0) {
-    splice(list, list.length, 0, items);
-    return list;
-  }
-  return items;
-}
-function normalizeIdentifier(value) {
-  return value.replace(/[\t\n\r ]+/g, values.space).replace(/^ | $/g, "").toLowerCase().toUpperCase();
-}
-function asciiControl(code) {
-  return code !== null && (code < codes.space || code === codes.del);
-}
-function markdownLineEnding(code) {
-  return code !== null && code < codes.horizontalTab;
-}
-function markdownLineEndingOrSpace(code) {
-  return code !== null && (code < codes.nul || code === codes.space);
-}
-function markdownSpace(code) {
-  return code === codes.horizontalTab || code === codes.virtualSpace || code === codes.space;
-}
-function regexCheck(regex) {
-  return check;
-  function check(code) {
-    return code !== null && code > -1 && regex.test(String.fromCharCode(code));
-  }
-}
-function factorySpace(effects, ok, type, max) {
-  const limit = max ? max - 1 : Infinity;
-  let size = 0;
-  return start;
-  function start(code) {
-    if (markdownSpace(code)) {
-      effects.enter(type);
-      return prefix(code);
-    }
-    return ok(code);
-  }
-  function prefix(code) {
-    if (markdownSpace(code) && size++ < limit) {
-      effects.consume(code);
-      return prefix;
-    }
-    effects.exit(type);
-    return ok(code);
-  }
-}
-function factorySpaceMinMax(effects, ok, nok, type, min, max) {
-  let size = 0;
-  return start;
-  function start(code) {
-    if (max > 0 && markdownSpace(code)) {
-      effects.enter(type);
-      return prefix(code);
-    }
-    return after(code);
-  }
-  function prefix(code) {
-    if (markdownSpace(code) && size < max) {
-      effects.consume(code);
-      size++;
-      return prefix;
-    }
-    effects.exit(type);
-    return after(code);
-  }
-  function after(code) {
-    return size >= min ? ok(code) : nok(code);
-  }
-}
-function initializeContent(effects) {
-  const contentStart = effects.attempt(this.parser.constructs.contentInitial, afterContentStartConstruct, paragraphInitial);
-  let previous;
-  return contentStart;
-  function afterContentStartConstruct(code) {
-    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
-    if (code === codes.eof) {
-      effects.consume(code);
-      return;
-    }
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return factorySpace(effects, contentStart, types.linePrefix);
-  }
-  function paragraphInitial(code) {
-    ok(code !== codes.eof && !markdownLineEnding(code), "expected anything other than a line ending or EOF");
-    effects.enter(types.paragraph);
-    return lineStart(code);
-  }
-  function lineStart(code) {
-    const token = effects.enter(types.chunkText, {
-      contentType: constants.contentTypeText,
-      previous
-    });
-    if (previous) {
-      previous.next = token;
-    }
-    previous = token;
-    return data(code);
-  }
-  function data(code) {
-    if (code === codes.eof) {
-      effects.exit(types.chunkText);
-      effects.exit(types.paragraph);
-      effects.consume(code);
-      return;
-    }
-    if (markdownLineEnding(code)) {
-      effects.consume(code);
-      effects.exit(types.chunkText);
-      return lineStart;
-    }
-    effects.consume(code);
-    return data;
-  }
-}
-
-class EditMap {
-  constructor() {
-    this.index = new Map;
-    this.map = [];
-  }
-  add(index, remove, add) {
-    addImplementation(this, index, remove, add, false);
-  }
-  addBefore(index, remove, add) {
-    addImplementation(this, index, remove, add, true);
-  }
-  consume(events) {
-    this.map.sort(function(a, b) {
-      return a[0] - b[0];
-    });
-    if (this.map.length === 0) {
-      return;
-    }
-    let index = this.map.length;
-    const vecs = [];
-    while (index > 0) {
-      index -= 1;
-      vecs.push(events.slice(this.map[index][0] + this.map[index][1]), this.map[index][2]);
-      events.length = this.map[index][0];
-    }
-    vecs.push(events.slice());
-    events.length = 0;
-    let slice = vecs.pop();
-    while (slice) {
-      for (const element of slice) {
-        events.push(element);
-      }
-      slice = vecs.pop();
-    }
-    this.map.length = 0;
-    this.index.clear();
-  }
-}
-function addImplementation(editMap, at, remove, add, before) {
-  if (remove === 0 && add.length === 0) {
-    return;
-  }
-  const existing = editMap.index.get(at);
-  if (existing) {
-    existing[1] += remove;
-    if (before) {
-      add.push(...existing[2]);
-      existing[2] = add;
-    } else {
-      existing[2].push(...add);
-    }
-    return;
-  }
-  const change = [at, remove, add];
-  editMap.map.push(change);
-  editMap.index.set(at, change);
-}
-function initializeDocument(effects) {
-  const self = this;
-  const stack = [];
-  let continued = 0;
-  let childFlow;
-  let childToken;
-  let lineStartOffset;
-  return start;
-  function start(code) {
-    if (continued < stack.length) {
-      const item = stack[continued];
-      self.containerState = item[1];
-      ok(item[0].continuation, "expected `continuation` to be defined on container construct");
-      return effects.attempt(item[0].continuation, documentContinue, checkNewContainers)(code);
-    }
-    return checkNewContainers(code);
-  }
-  function documentContinue(code) {
-    ok(self.containerState, "expected `containerState` to be defined after continuation");
-    continued++;
-    if (self.containerState._closeFlow) {
-      self.containerState._closeFlow = undefined;
-      if (childFlow) {
-        closeFlow();
-      }
-      const indexBeforeExits = self.events.length;
-      let indexBeforeFlow = indexBeforeExits;
-      let point;
-      while (indexBeforeFlow--) {
-        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
-          point = self.events[indexBeforeFlow][1].end;
-          break;
-        }
-      }
-      ok(point, "could not find previous flow chunk");
-      exitContainers(continued);
-      let index = indexBeforeExits;
-      while (index < self.events.length) {
-        self.events[index][1].end = { ...point };
-        index++;
-      }
-      const editMap = new EditMap;
-      editMap.add(indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
-      editMap.add(indexBeforeExits, index - indexBeforeExits, []);
-      editMap.consume(self.events);
-      return checkNewContainers(code);
-    }
-    return start(code);
-  }
-  function checkNewContainers(code) {
-    if (continued === stack.length) {
-      if (!childFlow) {
-        return documentContinued(code);
-      }
-      if (childFlow.currentConstruct && childFlow.currentConstruct.concrete) {
-        return flowStart(code);
-      }
-      self.interrupt = Boolean(childFlow.currentConstruct && !childFlow._gfmTableDynamicInterruptHack);
-    }
-    self.containerState = {};
-    return effects.check(containerConstruct, thereIsANewContainer, thereIsNoNewContainer)(code);
-  }
-  function thereIsANewContainer(code) {
-    if (childFlow) {
-      closeFlow();
-    }
-    exitContainers(continued);
-    return documentContinued(code);
-  }
-  function thereIsNoNewContainer(code) {
-    self.parser.lazy[self.now().line] = continued !== stack.length;
-    lineStartOffset = self.now().offset;
-    return flowStart(code);
-  }
-  function documentContinued(code) {
-    self.containerState = {};
-    return effects.attempt(containerConstruct, containerContinue, flowStart)(code);
-  }
-  function containerContinue(code) {
-    ok(self.currentConstruct, "expected `currentConstruct` to be defined on tokenizer");
-    ok(self.containerState, "expected `containerState` to be defined on tokenizer");
-    continued++;
-    stack.push([self.currentConstruct, self.containerState]);
-    return documentContinued(code);
-  }
-  function flowStart(code) {
-    if (code === codes.eof) {
-      if (childFlow) {
-        closeFlow();
-      }
-      exitContainers(0);
-      effects.consume(code);
-      return;
-    }
-    childFlow = childFlow || self.parser.flow(self.now());
-    effects.enter(types.chunkFlow, {
-      _tokenizer: childFlow,
-      contentType: constants.contentTypeFlow,
-      previous: childToken
-    });
-    return flowContinue(code);
-  }
-  function flowContinue(code) {
-    if (code === codes.eof) {
-      writeToChild(effects.exit(types.chunkFlow), true);
-      exitContainers(0);
-      effects.consume(code);
-      return;
-    }
-    if (markdownLineEnding(code)) {
-      effects.consume(code);
-      writeToChild(effects.exit(types.chunkFlow));
-      continued = 0;
-      self.interrupt = undefined;
-      return start;
-    }
-    effects.consume(code);
-    return flowContinue;
-  }
-  function writeToChild(token, endOfFile) {
-    ok(childFlow, "expected `childFlow` to be defined when continuing");
-    const stream = self.sliceStream(token);
-    if (endOfFile) {
-      stream.push(null);
-    }
-    token.previous = childToken;
-    if (childToken) {
-      childToken.next = token;
-    }
-    childToken = token;
-    childFlow.defineSkip(token.start);
-    childFlow.write(stream);
-    if (self.parser.lazy[token.start.line]) {
-      let index = childFlow.events.length;
-      while (index--) {
-        if (childFlow.events[index][1].start.offset < lineStartOffset && (!childFlow.events[index][1].end || childFlow.events[index][1].end.offset > lineStartOffset)) {
-          return;
-        }
-      }
-      const indexBeforeExits = self.events.length;
-      let indexBeforeFlow = indexBeforeExits;
-      let seen;
-      let point;
-      while (indexBeforeFlow--) {
-        if (self.events[indexBeforeFlow][0] === "exit" && self.events[indexBeforeFlow][1].type === types.chunkFlow) {
-          if (seen) {
-            point = self.events[indexBeforeFlow][1].end;
-            break;
-          }
-          seen = true;
-        }
-      }
-      ok(point, "could not find previous flow chunk");
-      exitContainers(continued);
-      index = indexBeforeExits;
-      while (index < self.events.length) {
-        self.events[index][1].end = { ...point };
-        index++;
-      }
-      const editMap = new EditMap;
-      editMap.add(indexBeforeFlow + 1, 0, self.events.slice(indexBeforeExits));
-      editMap.add(indexBeforeExits, index - indexBeforeExits, []);
-      editMap.consume(self.events);
-    }
-  }
-  function exitContainers(size) {
-    let index = stack.length;
-    while (index-- > size) {
-      const entry = stack[index];
-      self.containerState = entry[1];
-      ok(entry[0].exit, "expected `exit` to be defined on container construct");
-      entry[0].exit.call(self, effects);
-    }
-    stack.length = size;
-  }
-  function closeFlow() {
-    ok(self.containerState, "expected `containerState` to be defined when closing flow");
-    ok(childFlow, "expected `childFlow` to be defined when closing it");
-    childFlow.write([codes.eof]);
-    childToken = undefined;
-    childFlow = undefined;
-    self.containerState._closeFlow = undefined;
-  }
-}
-function tokenizeContainer(effects, ok2, nok) {
-  ok(this.parser.constructs.disable.null, "expected `disable.null` to be populated");
-  return factorySpace(effects, effects.attempt(this.parser.constructs.document, ok2, nok), types.linePrefix, this.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize);
-}
-function classifyCharacter(code) {
-  if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-    return constants.characterGroupWhitespace;
-  }
-  if (unicodePunctuation(code)) {
-    return constants.characterGroupPunctuation;
-  }
-}
-function resolveAll(constructs, events, context) {
-  const called = [];
-  let index = -1;
-  while (++index < constructs.length) {
-    const resolve = constructs[index].resolveAll;
-    if (resolve && !called.includes(resolve)) {
-      events = resolve(events, context);
-      called.push(resolve);
-    }
-  }
-  return events;
-}
-function resolveAllAttention(events, context) {
-  let index = -1;
-  let nextEvents;
-  while (++index < events.length) {
-    if (events[index][0] === "enter" && events[index][1].type === "attentionSequence" && events[index][1]._close) {
-      let open = index;
-      while (open--) {
-        if (events[open][0] === "exit" && events[open][1].type === "attentionSequence" && events[open][1]._open && context.sliceSerialize(events[open][1]).charCodeAt(0) === context.sliceSerialize(events[index][1]).charCodeAt(0)) {
-          if ((events[open][1]._close || events[index][1]._open) && (events[index][1].end.offset - events[index][1].start.offset) % 3 && !((events[open][1].end.offset - events[open][1].start.offset + events[index][1].end.offset - events[index][1].start.offset) % 3)) {
-            continue;
-          }
-          const use = events[open][1].end.offset - events[open][1].start.offset > 1 && events[index][1].end.offset - events[index][1].start.offset > 1 ? 2 : 1;
-          const start = { ...events[open][1].end };
-          const end = { ...events[index][1].start };
-          movePoint(start, -use);
-          movePoint(end, use);
-          const openingSequence = {
-            type: use > 1 ? types.strongSequence : types.emphasisSequence,
-            start,
-            end: { ...events[open][1].end }
-          };
-          const closingSequence = {
-            type: use > 1 ? types.strongSequence : types.emphasisSequence,
-            start: { ...events[index][1].start },
-            end
-          };
-          const text = {
-            type: use > 1 ? types.strongText : types.emphasisText,
-            start: { ...events[open][1].end },
-            end: { ...events[index][1].start }
-          };
-          const group = {
-            type: use > 1 ? types.strong : types.emphasis,
-            start: { ...openingSequence.start },
-            end: { ...closingSequence.end }
-          };
-          events[open][1].end = { ...openingSequence.start };
-          events[index][1].start = { ...closingSequence.end };
-          nextEvents = [];
-          if (events[open][1].end.offset - events[open][1].start.offset) {
-            nextEvents = push(nextEvents, [
-              ["enter", events[open][1], context],
-              ["exit", events[open][1], context]
-            ]);
-          }
-          nextEvents = push(nextEvents, [
-            ["enter", group, context],
-            ["enter", openingSequence, context],
-            ["exit", openingSequence, context],
-            ["enter", text, context]
-          ]);
-          ok(context.parser.constructs.insideSpan.null, "expected `insideSpan` to be populated");
-          nextEvents = push(nextEvents, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + 1, index), context));
-          nextEvents = push(nextEvents, [
-            ["exit", text, context],
-            ["enter", closingSequence, context],
-            ["exit", closingSequence, context],
-            ["exit", group, context]
-          ]);
-          let offset = 0;
-          if (events[index][1].end.offset - events[index][1].start.offset) {
-            offset = 2;
-            nextEvents = push(nextEvents, [
-              ["enter", events[index][1], context],
-              ["exit", events[index][1], context]
-            ]);
-          }
-          splice(events, open - 1, index - open + 3, nextEvents);
-          index = open + nextEvents.length - offset - 2;
-          break;
-        }
-      }
-    }
-  }
-  index = -1;
-  while (++index < events.length) {
-    if (events[index][1].type === "attentionSequence") {
-      events[index][1].type = "data";
-    }
-  }
-  return events;
-}
-function tokenizeAttention(effects, ok2) {
-  const attentionMarkers = this.parser.constructs.attentionMarkers.null;
-  const previous = this.previous;
-  const before = classifyCharacter(previous);
-  let marker;
-  return start;
-  function start(code) {
-    ok(code === codes.asterisk || code === codes.underscore, "expected asterisk or underscore");
-    marker = code;
-    effects.enter("attentionSequence");
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === marker) {
-      effects.consume(code);
-      return inside;
-    }
-    const token = effects.exit("attentionSequence");
-    const after = classifyCharacter(code);
-    ok(attentionMarkers, "expected `attentionMarkers` to be populated");
-    const open = !after || after === constants.characterGroupPunctuation && before || attentionMarkers.includes(code) && code !== codes.asterisk && code !== codes.underscore;
-    const close = !before || before === constants.characterGroupPunctuation && after || attentionMarkers.includes(previous) && previous !== codes.asterisk && previous !== codes.underscore;
-    token._open = Boolean(marker === codes.asterisk ? open : open && (before || !close));
-    token._close = Boolean(marker === codes.asterisk ? close : close && (after || !open));
-    return ok2(code);
-  }
-}
-function movePoint(point, offset) {
-  point.column += offset;
-  point.offset += offset;
-  point._bufferIndex += offset;
-}
-function tokenizeAutolink(effects, ok2, nok) {
-  let size = 0;
-  return start;
-  function start(code) {
-    ok(code === codes.lessThan, "expected `<`");
-    effects.enter(types.autolink);
-    effects.enter(types.autolinkMarker);
-    effects.consume(code);
-    effects.exit(types.autolinkMarker);
-    effects.enter(types.autolinkProtocol);
-    return open;
-  }
-  function open(code) {
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return schemeOrEmailAtext;
-    }
-    if (code === codes.atSign) {
-      return nok(code);
-    }
-    return emailAtext(code);
-  }
-  function schemeOrEmailAtext(code) {
-    if (code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) {
-      size = 1;
-      return schemeInsideOrEmailAtext(code);
-    }
-    return emailAtext(code);
-  }
-  function schemeInsideOrEmailAtext(code) {
-    if (code === codes.colon) {
-      effects.consume(code);
-      size = 0;
-      return urlInside;
-    }
-    if ((code === codes.plusSign || code === codes.dash || code === codes.dot || asciiAlphanumeric(code)) && size++ < constants.autolinkSchemeSizeMax) {
-      effects.consume(code);
-      return schemeInsideOrEmailAtext;
-    }
-    size = 0;
-    return emailAtext(code);
-  }
-  function urlInside(code) {
-    if (code === codes.greaterThan) {
-      effects.exit(types.autolinkProtocol);
-      effects.enter(types.autolinkMarker);
-      effects.consume(code);
-      effects.exit(types.autolinkMarker);
-      effects.exit(types.autolink);
-      return ok2;
-    }
-    if (code === codes.eof || code === codes.space || code === codes.lessThan || asciiControl(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return urlInside;
-  }
-  function emailAtext(code) {
-    if (code === codes.atSign) {
-      effects.consume(code);
-      return emailAtSignOrDot;
-    }
-    if (asciiAtext(code)) {
-      effects.consume(code);
-      return emailAtext;
-    }
-    return nok(code);
-  }
-  function emailAtSignOrDot(code) {
-    return asciiAlphanumeric(code) ? emailLabel(code) : nok(code);
-  }
-  function emailLabel(code) {
-    if (code === codes.dot) {
-      effects.consume(code);
-      size = 0;
-      return emailAtSignOrDot;
-    }
-    if (code === codes.greaterThan) {
-      effects.exit(types.autolinkProtocol).type = types.autolinkEmail;
-      effects.enter(types.autolinkMarker);
-      effects.consume(code);
-      effects.exit(types.autolinkMarker);
-      effects.exit(types.autolink);
-      return ok2;
-    }
-    return emailValue(code);
-  }
-  function emailValue(code) {
-    if ((code === codes.dash || asciiAlphanumeric(code)) && size++ < constants.autolinkDomainSizeMax) {
-      const next = code === codes.dash ? emailValue : emailLabel;
-      effects.consume(code);
-      return next;
-    }
-    return nok(code);
-  }
-}
-function tokenizeBlankLine(effects, ok, nok) {
-  return start;
-  function start(code) {
-    return markdownSpace(code) ? factorySpace(effects, after, types.linePrefix)(code) : after(code);
-  }
-  function after(code) {
-    return code === codes.eof || markdownLineEnding(code) ? ok(code) : nok(code);
-  }
-}
-function tokenizeBlockQuoteStart(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (code === codes.greaterThan) {
-      const state = self.containerState;
-      ok(state, "expected `containerState` to be defined in container");
-      if (!state.open) {
-        effects.enter(types.blockQuote, { _container: true });
-        state.open = true;
-      }
-      effects.enter(types.blockQuotePrefix);
-      effects.enter(types.blockQuoteMarker);
-      effects.consume(code);
-      effects.exit(types.blockQuoteMarker);
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    if (markdownSpace(code)) {
-      effects.enter(types.blockQuotePrefixWhitespace);
-      effects.consume(code);
-      effects.exit(types.blockQuotePrefixWhitespace);
-      effects.exit(types.blockQuotePrefix);
-      return ok2;
-    }
-    effects.exit(types.blockQuotePrefix);
-    return ok2(code);
-  }
-}
-function tokenizeBlockQuoteContinuation(effects, ok2, nok) {
-  const self = this;
-  return contStart;
-  function contStart(code) {
-    if (markdownSpace(code)) {
-      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      return factorySpace(effects, contBefore, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
-    }
-    return contBefore(code);
-  }
-  function contBefore(code) {
-    return effects.attempt(blockQuote, ok2, nok)(code);
-  }
-}
-function exit(effects) {
-  effects.exit(types.blockQuote);
-}
-function tokenizeCharacterEscape(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(code === codes.backslash, "expected `\\`");
-    effects.enter(types.characterEscape);
-    effects.enter(types.escapeMarker);
-    effects.consume(code);
-    effects.exit(types.escapeMarker);
-    return inside;
-  }
-  function inside(code) {
-    if (asciiPunctuation(code)) {
-      effects.enter(types.characterEscapeValue);
-      effects.consume(code);
-      effects.exit(types.characterEscapeValue);
-      effects.exit(types.characterEscape);
-      return ok2;
-    }
-    return nok(code);
-  }
-}
-function tokenizeCharacterReference(effects, ok2, nok) {
-  const self = this;
-  let size = 0;
-  let max;
-  let test;
-  return start;
-  function start(code) {
-    ok(code === codes.ampersand, "expected `&`");
-    effects.enter(types.characterReference);
-    effects.enter(types.characterReferenceMarker);
-    effects.consume(code);
-    effects.exit(types.characterReferenceMarker);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.numberSign) {
-      effects.enter(types.characterReferenceMarkerNumeric);
-      effects.consume(code);
-      effects.exit(types.characterReferenceMarkerNumeric);
-      return numeric;
-    }
-    effects.enter(types.characterReferenceValue);
-    max = constants.characterReferenceNamedSizeMax;
-    test = asciiAlphanumeric;
-    return value(code);
-  }
-  function numeric(code) {
-    if (code === codes.uppercaseX || code === codes.lowercaseX) {
-      effects.enter(types.characterReferenceMarkerHexadecimal);
-      effects.consume(code);
-      effects.exit(types.characterReferenceMarkerHexadecimal);
-      effects.enter(types.characterReferenceValue);
-      max = constants.characterReferenceHexadecimalSizeMax;
-      test = asciiHexDigit;
-      return value;
-    }
-    effects.enter(types.characterReferenceValue);
-    max = constants.characterReferenceDecimalSizeMax;
-    test = asciiDigit;
-    return value(code);
-  }
-  function value(code) {
-    if (code === codes.semicolon && size) {
-      const token = effects.exit(types.characterReferenceValue);
-      if (test === asciiAlphanumeric && !decodeNamedCharacterReference(self.sliceSerialize(token))) {
-        return nok(code);
-      }
-      effects.enter(types.characterReferenceMarker);
-      effects.consume(code);
-      effects.exit(types.characterReferenceMarker);
-      effects.exit(types.characterReference);
-      return ok2;
-    }
-    if (test(code) && size++ < max) {
-      effects.consume(code);
-      return value;
-    }
-    return nok(code);
-  }
-}
-function tokenizeNonLazyContinuation(effects, ok2, nok) {
-  const self = this;
-  return start;
-  function start(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return after;
-  }
-  function after(code) {
-    return self.parser.lazy[self.now().line] ? nok(code) : ok2(code);
-  }
-}
-function tokenizeCodeFenced(effects, ok2, nok) {
-  const self = this;
-  const closeStart = { partial: true, tokenize: tokenizeCloseStart };
-  let initialPrefix = 0;
-  let sizeOpen = 0;
-  let marker;
-  return start;
-  function start(code) {
-    return beforeSequenceOpen(code);
-  }
-  function beforeSequenceOpen(code) {
-    ok(code === codes.graveAccent || code === codes.tilde, "expected `` ` `` or `~`");
-    const tail = self.events[self.events.length - 1];
-    initialPrefix = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
-    marker = code;
-    effects.enter(types.codeFenced);
-    effects.enter(types.codeFencedFence);
-    effects.enter(types.codeFencedFenceSequence);
-    return sequenceOpen(code);
-  }
-  function sequenceOpen(code) {
-    if (code === marker) {
-      sizeOpen++;
-      effects.consume(code);
-      return sequenceOpen;
-    }
-    if (sizeOpen < constants.codeFencedSequenceSizeMin) {
-      return nok(code);
-    }
-    effects.exit(types.codeFencedFenceSequence);
-    return markdownSpace(code) ? factorySpace(effects, infoBefore, types.whitespace)(code) : infoBefore(code);
-  }
-  function infoBefore(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.codeFencedFence);
-      return self.interrupt ? ok2(code) : effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
-    }
-    effects.enter(types.codeFencedFenceInfo);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return info(code);
-  }
-  function info(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.chunkString);
-      effects.exit(types.codeFencedFenceInfo);
-      return infoBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.exit(types.chunkString);
-      effects.exit(types.codeFencedFenceInfo);
-      return factorySpace(effects, metaBefore, types.whitespace)(code);
-    }
-    if (code === codes.graveAccent && code === marker) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return info;
-  }
-  function metaBefore(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return infoBefore(code);
-    }
-    effects.enter(types.codeFencedFenceMeta);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return meta(code);
-  }
-  function meta(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.chunkString);
-      effects.exit(types.codeFencedFenceMeta);
-      return infoBefore(code);
-    }
-    if (code === codes.graveAccent && code === marker) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return meta;
-  }
-  function atNonLazyBreak(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    return effects.attempt(closeStart, after, contentBefore)(code);
-  }
-  function contentBefore(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return contentStart;
-  }
-  function contentStart(code) {
-    return initialPrefix > 0 && markdownSpace(code) ? factorySpace(effects, beforeContentChunk, types.linePrefix, initialPrefix + 1)(code) : beforeContentChunk(code);
-  }
-  function beforeContentChunk(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return effects.check(nonLazyContinuation, atNonLazyBreak, after)(code);
-    }
-    effects.enter(types.codeFlowValue);
-    return contentChunk(code);
-  }
-  function contentChunk(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.codeFlowValue);
-      return beforeContentChunk(code);
-    }
-    effects.consume(code);
-    return contentChunk;
-  }
-  function after(code) {
-    effects.exit(types.codeFenced);
-    return ok2(code);
-  }
-  function tokenizeCloseStart(effects, ok2, nok) {
-    let size = 0;
-    return startBefore;
-    function startBefore(code) {
-      ok(markdownLineEnding(code), "expected eol");
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return start;
-    }
-    function start(code) {
-      ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-      effects.enter(types.codeFencedFence);
-      return markdownSpace(code) ? factorySpace(effects, beforeSequenceClose, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : beforeSequenceClose(code);
-    }
-    function beforeSequenceClose(code) {
-      if (code === marker) {
-        effects.enter(types.codeFencedFenceSequence);
-        return sequenceClose(code);
-      }
-      return nok(code);
-    }
-    function sequenceClose(code) {
-      if (code === marker) {
-        size++;
-        effects.consume(code);
-        return sequenceClose;
-      }
-      if (size >= sizeOpen) {
-        effects.exit(types.codeFencedFenceSequence);
-        return markdownSpace(code) ? factorySpace(effects, sequenceCloseAfter, types.whitespace)(code) : sequenceCloseAfter(code);
-      }
-      return nok(code);
-    }
-    function sequenceCloseAfter(code) {
-      if (code === codes.eof || markdownLineEnding(code)) {
-        effects.exit(types.codeFencedFence);
-        return ok2(code);
-      }
-      return nok(code);
-    }
-  }
-}
-function tokenizeCodeIndented(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(markdownSpace(code));
-    effects.enter(types.codeIndented);
-    return factorySpaceMinMax(effects, atBreak, nok, types.linePrefix, constants.tabSize, constants.tabSize)(code);
-  }
-  function atBreak(code) {
-    if (code === codes.eof) {
-      return after(code);
-    }
-    if (markdownLineEnding(code)) {
-      return effects.attempt(furtherStart, atBreak, after)(code);
-    }
-    effects.enter(types.codeFlowValue);
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.codeFlowValue);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    return inside;
-  }
-  function after(code) {
-    effects.exit(types.codeIndented);
-    return ok2(code);
-  }
-}
-function tokenizeFurtherStart(effects, ok, nok) {
-  const self = this;
-  return furtherStart;
-  function furtherStart(code) {
-    if (self.parser.lazy[self.now().line]) {
-      return nok(code);
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return furtherStart;
-    }
-    return factorySpaceMinMax(effects, ok, onNotEnoughPrefix, types.linePrefix, constants.tabSize, constants.tabSize)(code);
-  }
-  function onNotEnoughPrefix(code) {
-    return markdownLineEnding(code) ? furtherStart(code) : nok(code);
-  }
-}
-function resolveCodeText(events) {
-  let tailExitIndex = events.length - 4;
-  let headEnterIndex = 3;
-  let index;
-  let enter;
-  if ((events[headEnterIndex][1].type === types.lineEnding || events[headEnterIndex][1].type === "space") && (events[tailExitIndex][1].type === types.lineEnding || events[tailExitIndex][1].type === "space")) {
-    index = headEnterIndex;
-    while (++index < tailExitIndex) {
-      if (events[index][1].type === types.codeTextData) {
-        events[headEnterIndex][1].type = types.codeTextPadding;
-        events[tailExitIndex][1].type = types.codeTextPadding;
-        headEnterIndex += 2;
-        tailExitIndex -= 2;
-        break;
-      }
-    }
-  }
-  index = headEnterIndex - 1;
-  tailExitIndex++;
-  while (++index <= tailExitIndex) {
-    if (enter === undefined) {
-      if (index !== tailExitIndex && events[index][1].type !== types.lineEnding) {
-        enter = index;
-      }
-    } else if (index === tailExitIndex || events[index][1].type === types.lineEnding) {
-      events[enter][1].type = types.codeTextData;
-      if (index !== enter + 2) {
-        events[enter][1].end = events[index - 1][1].end;
-        events.splice(enter + 2, index - enter - 2);
-        tailExitIndex -= index - enter - 2;
-        index = enter + 2;
-      }
-      enter = undefined;
-    }
-  }
-  return events;
-}
-function previous(code) {
-  return code !== codes.graveAccent || this.events[this.events.length - 1][1].type === types.characterEscape;
-}
-function tokenizeCodeText(effects, ok2, nok) {
-  const self = this;
-  let sizeOpen = 0;
-  let size;
-  let token;
-  return start;
-  function start(code) {
-    ok(code === codes.graveAccent, "expected `` ` ``");
-    ok(previous.call(self, self.previous), "expected correct previous");
-    effects.enter(types.codeText);
-    effects.enter(types.codeTextSequence);
-    return sequenceOpen(code);
-  }
-  function sequenceOpen(code) {
-    if (code === codes.graveAccent) {
-      effects.consume(code);
-      sizeOpen++;
-      return sequenceOpen;
-    }
-    effects.exit(types.codeTextSequence);
-    return between(code);
-  }
-  function between(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.space) {
-      effects.enter("space");
-      effects.consume(code);
-      effects.exit("space");
-      return between;
-    }
-    if (code === codes.graveAccent) {
-      token = effects.enter(types.codeTextSequence);
-      size = 0;
-      return sequenceClose(code);
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return between;
-    }
-    effects.enter(types.codeTextData);
-    return data(code);
-  }
-  function data(code) {
-    if (code === codes.eof || code === codes.space || code === codes.graveAccent || markdownLineEnding(code)) {
-      effects.exit(types.codeTextData);
-      return between(code);
-    }
-    effects.consume(code);
-    return data;
-  }
-  function sequenceClose(code) {
-    if (code === codes.graveAccent) {
-      effects.consume(code);
-      size++;
-      return sequenceClose;
-    }
-    if (size === sizeOpen) {
-      effects.exit(types.codeTextSequence);
-      effects.exit(types.codeText);
-      return ok2(code);
-    }
-    token.type = types.codeTextData;
-    return data(code);
-  }
-}
-
-class SpliceBuffer {
-  constructor(initial) {
-    this.left = initial ? [...initial] : [];
-    this.right = [];
-  }
-  get(index) {
-    if (index < 0 || index >= this.left.length + this.right.length) {
-      throw new RangeError("Cannot access index `" + index + "` in a splice buffer of size `" + (this.left.length + this.right.length) + "`");
-    }
-    if (index < this.left.length)
-      return this.left[index];
-    return this.right[this.right.length - index + this.left.length - 1];
-  }
-  get length() {
-    return this.left.length + this.right.length;
-  }
-  shift() {
-    this.setCursor(0);
-    return this.right.pop();
-  }
-  slice(start, end) {
-    const stop = end === null || end === undefined ? Number.POSITIVE_INFINITY : end;
-    if (stop < this.left.length) {
-      return this.left.slice(start, stop);
-    }
-    if (start > this.left.length) {
-      return this.right.slice(this.right.length - stop + this.left.length, this.right.length - start + this.left.length).reverse();
-    }
-    return this.left.slice(start).concat(this.right.slice(this.right.length - stop + this.left.length).reverse());
-  }
-  splice(start, deleteCount, items) {
-    const count = deleteCount || 0;
-    this.setCursor(Math.trunc(start));
-    const removed = this.right.splice(this.right.length - count, Number.POSITIVE_INFINITY);
-    if (items)
-      chunkedPush(this.left, items);
-    return removed.reverse();
-  }
-  pop() {
-    this.setCursor(Number.POSITIVE_INFINITY);
-    return this.left.pop();
-  }
-  push(item) {
-    this.setCursor(Number.POSITIVE_INFINITY);
-    this.left.push(item);
-  }
-  pushMany(items) {
-    this.setCursor(Number.POSITIVE_INFINITY);
-    chunkedPush(this.left, items);
-  }
-  unshift(item) {
-    this.setCursor(0);
-    this.right.push(item);
-  }
-  unshiftMany(items) {
-    this.setCursor(0);
-    chunkedPush(this.right, items.reverse());
-  }
-  setCursor(n) {
-    if (n === this.left.length || n > this.left.length && this.right.length === 0 || n < 0 && this.left.length === 0)
-      return;
-    if (n < this.left.length) {
-      const removed = this.left.splice(n, Number.POSITIVE_INFINITY);
-      chunkedPush(this.right, removed.reverse());
-    } else {
-      const removed = this.right.splice(this.left.length + this.right.length - n, Number.POSITIVE_INFINITY);
-      chunkedPush(this.left, removed.reverse());
-    }
-  }
-}
-function chunkedPush(list, right) {
-  let chunkStart = 0;
-  if (right.length < constants.v8MaxSafeChunkSize) {
-    list.push(...right);
-  } else {
-    while (chunkStart < right.length) {
-      list.push(...right.slice(chunkStart, chunkStart + constants.v8MaxSafeChunkSize));
-      chunkStart += constants.v8MaxSafeChunkSize;
-    }
-  }
-}
-function subtokenize(eventsArray) {
-  const jumps = {};
-  let index = -1;
-  let event;
-  let lineIndex;
-  let otherIndex;
-  let otherEvent;
-  let parameters;
-  let subevents;
-  let more;
-  const events = new SpliceBuffer(eventsArray);
-  while (++index < events.length) {
-    while (index in jumps) {
-      index = jumps[index];
-    }
-    event = events.get(index);
-    if (index && event[1].type === types.chunkFlow && events.get(index - 1)[1].type === types.listItemPrefix) {
-      ok(event[1]._tokenizer, "expected `_tokenizer` on subtokens");
-      subevents = event[1]._tokenizer.events;
-      otherIndex = 0;
-      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.lineEndingBlank) {
-        otherIndex += 2;
-      }
-      if (otherIndex < subevents.length && subevents[otherIndex][1].type === types.content) {
-        while (++otherIndex < subevents.length) {
-          if (subevents[otherIndex][1].type === types.content) {
-            break;
-          }
-          if (subevents[otherIndex][1].type === types.chunkText) {
-            subevents[otherIndex][1]._isInFirstContentOfListItem = true;
-            otherIndex++;
-          }
-        }
-      }
-    }
-    if (event[0] === "enter") {
-      if (event[1].contentType) {
-        Object.assign(jumps, subcontent(events, index));
-        index = jumps[index];
-        more = true;
-      }
-    } else if (event[1]._container) {
-      otherIndex = index;
-      lineIndex = undefined;
-      while (otherIndex--) {
-        otherEvent = events.get(otherIndex);
-        if (otherEvent[1].type === types.lineEnding || otherEvent[1].type === types.lineEndingBlank) {
-          if (otherEvent[0] === "enter") {
-            if (lineIndex) {
-              events.get(lineIndex)[1].type = types.lineEndingBlank;
-            }
-            otherEvent[1].type = types.lineEnding;
-            lineIndex = otherIndex;
-          }
-        } else if (otherEvent[1].type === types.linePrefix || otherEvent[1].type === types.listItemIndent) {} else {
-          break;
-        }
-      }
-      if (lineIndex) {
-        event[1].end = { ...events.get(lineIndex)[1].start };
-        parameters = events.slice(lineIndex, index);
-        parameters.unshift(event);
-        events.splice(lineIndex, index - lineIndex + 1, parameters);
-      }
-    }
-  }
-  splice(eventsArray, 0, Number.POSITIVE_INFINITY, events.slice(0));
-  return !more;
-}
-function subcontent(events, eventIndex) {
-  const token = events.get(eventIndex)[1];
-  const context = events.get(eventIndex)[2];
-  let startPosition = eventIndex - 1;
-  const startPositions = [];
-  ok(token.contentType, "expected `contentType` on subtokens");
-  let tokenizer = token._tokenizer;
-  if (!tokenizer) {
-    tokenizer = context.parser[token.contentType](token.start);
-    if (token._contentTypeTextTrailing) {
-      tokenizer._contentTypeTextTrailing = true;
-    }
-  }
-  const childEvents = tokenizer.events;
-  const jumps = [];
-  const gaps = {};
-  let stream;
-  let previous;
-  let index = -1;
-  let current = token;
-  let adjust = 0;
-  let start = 0;
-  const breaks = [start];
-  while (current) {
-    while (events.get(++startPosition)[1] !== current) {}
-    ok(!previous || current.previous === previous, "expected previous to match");
-    ok(!previous || previous.next === current, "expected next to match");
-    startPositions.push(startPosition);
-    if (!current._tokenizer) {
-      stream = context.sliceStream(current);
-      if (!current.next) {
-        stream.push(codes.eof);
-      }
-      if (previous) {
-        tokenizer.defineSkip(current.start);
-      }
-      if (current._isInFirstContentOfListItem) {
-        tokenizer._gfmTasklistFirstContentOfListItem = true;
-      }
-      tokenizer.write(stream);
-      if (current._isInFirstContentOfListItem) {
-        tokenizer._gfmTasklistFirstContentOfListItem = undefined;
-      }
-    }
-    previous = current;
-    current = current.next;
-  }
-  current = token;
-  while (++index < childEvents.length) {
-    if (childEvents[index][0] === "exit" && childEvents[index - 1][0] === "enter" && childEvents[index][1].type === childEvents[index - 1][1].type && childEvents[index][1].start.line !== childEvents[index][1].end.line) {
-      ok(current, "expected a current token");
-      start = index + 1;
-      breaks.push(start);
-      current._tokenizer = undefined;
-      current.previous = undefined;
-      current = current.next;
-    }
-  }
-  tokenizer.events = [];
-  if (current) {
-    current._tokenizer = undefined;
-    current.previous = undefined;
-    ok(!current.next, "expected no next token");
-  } else {
-    breaks.pop();
-  }
-  index = breaks.length;
-  while (index--) {
-    const slice = childEvents.slice(breaks[index], breaks[index + 1]);
-    const start = startPositions.pop();
-    ok(start !== undefined, "expected a start position when splicing");
-    jumps.push([start, start + slice.length - 1]);
-    events.splice(start, 2, slice);
-  }
-  jumps.reverse();
-  index = -1;
-  while (++index < jumps.length) {
-    gaps[adjust + jumps[index][0]] = adjust + jumps[index][1];
-    adjust += jumps[index][1] - jumps[index][0] - 1;
-  }
-  return gaps;
-}
-function resolveContent(events) {
-  subtokenize(events);
-  return events;
-}
-function tokenizeContent(effects, ok2) {
-  let previous;
-  return chunkStart;
-  function chunkStart(code) {
-    ok(code !== codes.eof && !markdownLineEnding(code), "expected no eof or eol");
-    effects.enter(types.content);
-    previous = effects.enter(types.chunkContent, {
-      contentType: constants.contentTypeContent
-    });
-    return chunkInside(code);
-  }
-  function chunkInside(code) {
-    if (code === codes.eof) {
-      return contentEnd(code);
-    }
-    if (markdownLineEnding(code)) {
-      return effects.check(continuationConstruct, contentContinue, contentEnd)(code);
-    }
-    effects.consume(code);
-    return chunkInside;
-  }
-  function contentEnd(code) {
-    effects.exit(types.chunkContent);
-    effects.exit(types.content);
-    return ok2(code);
-  }
-  function contentContinue(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    effects.consume(code);
-    effects.exit(types.chunkContent);
-    ok(previous, "expected previous token");
-    previous.next = effects.enter(types.chunkContent, {
-      contentType: constants.contentTypeContent,
-      previous
-    });
-    previous = previous.next;
-    return chunkInside;
-  }
-}
-function tokenizeContinuation(effects, ok2, nok) {
-  const self = this;
-  return startLookahead;
-  function startLookahead(code) {
-    ok(markdownLineEnding(code), "expected a line ending");
-    effects.exit(types.chunkContent);
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return factorySpace(effects, prefixed, types.linePrefix);
-  }
-  function prefixed(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return nok(code);
-    }
-    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    const tail = self.events[self.events.length - 1];
-    if (!self.parser.constructs.disable.null.includes("codeIndented") && tail && tail[1].type === types.linePrefix && tail[2].sliceSerialize(tail[1], true).length >= constants.tabSize) {
-      return ok2(code);
-    }
-    return effects.interrupt(self.parser.constructs.flow, nok, ok2)(code);
-  }
-}
-function factoryDestination(effects, ok, nok, type, literalType, literalMarkerType, rawType, stringType, max) {
-  const limit = max || Number.POSITIVE_INFINITY;
-  let balance = 0;
-  return start;
-  function start(code) {
-    if (code === codes.lessThan) {
-      effects.enter(type);
-      effects.enter(literalType);
-      effects.enter(literalMarkerType);
-      effects.consume(code);
-      effects.exit(literalMarkerType);
-      return enclosedBefore;
-    }
-    if (code === codes.eof || code === codes.space || code === codes.rightParenthesis || asciiControl(code)) {
-      return nok(code);
-    }
-    effects.enter(type);
-    effects.enter(rawType);
-    effects.enter(stringType);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return raw(code);
-  }
-  function enclosedBefore(code) {
-    if (code === codes.greaterThan) {
-      effects.enter(literalMarkerType);
-      effects.consume(code);
-      effects.exit(literalMarkerType);
-      effects.exit(literalType);
-      effects.exit(type);
-      return ok;
-    }
-    effects.enter(stringType);
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return enclosed(code);
-  }
-  function enclosed(code) {
-    if (code === codes.greaterThan) {
-      effects.exit(types.chunkString);
-      effects.exit(stringType);
-      return enclosedBefore(code);
-    }
-    if (code === codes.eof || code === codes.lessThan || markdownLineEnding(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return code === codes.backslash ? enclosedEscape : enclosed;
-  }
-  function enclosedEscape(code) {
-    if (code === codes.lessThan || code === codes.greaterThan || code === codes.backslash) {
-      effects.consume(code);
-      return enclosed;
-    }
-    return enclosed(code);
-  }
-  function raw(code) {
-    if (!balance && (code === codes.eof || code === codes.rightParenthesis || markdownLineEndingOrSpace(code))) {
-      effects.exit(types.chunkString);
-      effects.exit(stringType);
-      effects.exit(rawType);
-      effects.exit(type);
-      return ok(code);
-    }
-    if (balance < limit && code === codes.leftParenthesis) {
-      effects.consume(code);
-      balance++;
-      return raw;
-    }
-    if (code === codes.rightParenthesis) {
-      effects.consume(code);
-      balance--;
-      return raw;
-    }
-    if (code === codes.eof || code === codes.space || code === codes.leftParenthesis || asciiControl(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return code === codes.backslash ? rawEscape : raw;
-  }
-  function rawEscape(code) {
-    if (code === codes.leftParenthesis || code === codes.rightParenthesis || code === codes.backslash) {
-      effects.consume(code);
-      return raw;
-    }
-    return raw(code);
-  }
-}
-function factoryLabel(effects, ok2, nok, type, markerType, stringType) {
-  const self = this;
-  let size = 0;
-  let seen;
-  return start;
-  function start(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    effects.enter(type);
-    effects.enter(markerType);
-    effects.consume(code);
-    effects.exit(markerType);
-    effects.enter(stringType);
-    return atBreak;
-  }
-  function atBreak(code) {
-    if (size > constants.linkReferenceSizeMax || code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket && !seen || code === codes.caret && !size && "_hiddenFootnoteSupport" in self.parser.constructs) {
-      return nok(code);
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.exit(stringType);
-      effects.enter(markerType);
-      effects.consume(code);
-      effects.exit(markerType);
-      effects.exit(type);
-      return ok2;
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return atBreak;
-    }
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return labelInside(code);
-  }
-  function labelInside(code) {
-    if (code === codes.eof || code === codes.leftSquareBracket || code === codes.rightSquareBracket || markdownLineEnding(code) || size++ > constants.linkReferenceSizeMax) {
-      effects.exit(types.chunkString);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    if (!seen)
-      seen = !markdownSpace(code);
-    return code === codes.backslash ? labelEscape : labelInside;
-  }
-  function labelEscape(code) {
-    if (code === codes.leftSquareBracket || code === codes.backslash || code === codes.rightSquareBracket) {
-      effects.consume(code);
-      size++;
-      return labelInside;
-    }
-    return labelInside(code);
-  }
-}
-function factoryTitle(effects, ok, nok, type, markerType, stringType) {
-  let marker;
-  return start;
-  function start(code) {
-    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
-      effects.enter(type);
-      effects.enter(markerType);
-      effects.consume(code);
-      effects.exit(markerType);
-      marker = code === codes.leftParenthesis ? codes.rightParenthesis : code;
-      return begin;
-    }
-    return nok(code);
-  }
-  function begin(code) {
-    if (code === marker) {
-      effects.enter(markerType);
-      effects.consume(code);
-      effects.exit(markerType);
-      effects.exit(type);
-      return ok;
-    }
-    effects.enter(stringType);
-    return atBreak(code);
-  }
-  function atBreak(code) {
-    if (code === marker) {
-      effects.exit(stringType);
-      return begin(marker);
-    }
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      return factorySpace(effects, atBreak, types.linePrefix);
-    }
-    effects.enter(types.chunkString, { contentType: constants.contentTypeString });
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === marker || code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.chunkString);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    return code === codes.backslash ? escape : inside;
-  }
-  function escape(code) {
-    if (code === marker || code === codes.backslash) {
-      effects.consume(code);
-      return inside;
-    }
-    return inside(code);
-  }
-}
-function factoryWhitespace(effects, ok) {
-  let seen;
-  return start;
-  function start(code) {
-    if (markdownLineEnding(code)) {
-      effects.enter(types.lineEnding);
-      effects.consume(code);
-      effects.exit(types.lineEnding);
-      seen = true;
-      return start;
-    }
-    if (markdownSpace(code)) {
-      return factorySpace(effects, start, seen ? types.linePrefix : types.lineSuffix)(code);
-    }
-    return ok(code);
-  }
-}
-function tokenizeDefinition(effects, ok2, nok) {
-  const self = this;
-  let identifier;
-  return start;
-  function start(code) {
-    effects.enter(types.definition);
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    return factoryLabel.call(self, effects, labelAfter, nok, types.definitionLabel, types.definitionLabelMarker, types.definitionLabelString)(code);
-  }
-  function labelAfter(code) {
-    identifier = normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1));
-    if (code === codes.colon) {
-      effects.enter(types.definitionMarker);
-      effects.consume(code);
-      effects.exit(types.definitionMarker);
-      return markerAfter;
-    }
-    return nok(code);
-  }
-  function markerAfter(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, destinationBefore)(code) : destinationBefore(code);
-  }
-  function destinationBefore(code) {
-    return factoryDestination(effects, destinationAfter, nok, types.definitionDestination, types.definitionDestinationLiteral, types.definitionDestinationLiteralMarker, types.definitionDestinationRaw, types.definitionDestinationString)(code);
-  }
-  function destinationAfter(code) {
-    return effects.attempt(titleBefore, after, after)(code);
-  }
-  function after(code) {
-    return markdownSpace(code) ? factorySpace(effects, afterWhitespace, types.whitespace)(code) : afterWhitespace(code);
-  }
-  function afterWhitespace(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.definition);
-      self.parser.defined.push(identifier);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-}
-function tokenizeTitleBefore(effects, ok, nok) {
-  return titleBefore;
-  function titleBefore(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, beforeMarker)(code) : nok(code);
-  }
-  function beforeMarker(code) {
-    return factoryTitle(effects, titleAfter, nok, types.definitionTitle, types.definitionTitleMarker, types.definitionTitleString)(code);
-  }
-  function titleAfter(code) {
-    return markdownSpace(code) ? factorySpace(effects, titleAfterOptionalWhitespace, types.whitespace)(code) : titleAfterOptionalWhitespace(code);
-  }
-  function titleAfterOptionalWhitespace(code) {
-    return code === codes.eof || markdownLineEnding(code) ? ok(code) : nok(code);
-  }
-}
-function tokenizeHardBreakEscape(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(code === codes.backslash, "expected `\\`");
-    effects.enter(types.hardBreakEscape);
-    effects.consume(code);
-    return after;
-  }
-  function after(code) {
-    if (markdownLineEnding(code)) {
-      effects.exit(types.hardBreakEscape);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-}
-function resolveHeadingAtx(events, context) {
-  let contentEnd = events.length - 2;
-  let contentStart = 3;
-  if (events[contentStart][1].type === types.whitespace) {
-    contentStart += 2;
-  }
-  if (contentEnd - 2 > contentStart && events[contentEnd][1].type === types.whitespace) {
-    contentEnd -= 2;
-  }
-  if (events[contentEnd][1].type === types.atxHeadingSequence && (contentStart === contentEnd - 1 || contentEnd - 4 > contentStart && events[contentEnd - 2][1].type === types.whitespace)) {
-    contentEnd -= contentStart + 1 === contentEnd ? 2 : 4;
-  }
-  if (contentEnd > contentStart) {
-    const content = {
-      type: types.atxHeadingText,
-      start: events[contentStart][1].start,
-      end: events[contentEnd][1].end
-    };
-    const text = {
-      type: types.chunkText,
-      start: events[contentStart][1].start,
-      end: events[contentEnd][1].end,
-      contentType: constants.contentTypeText
-    };
-    splice(events, contentStart, contentEnd - contentStart + 1, [
-      ["enter", content, context],
-      ["enter", text, context],
-      ["exit", text, context],
-      ["exit", content, context]
-    ]);
-  }
-  return events;
-}
-function tokenizeHeadingAtx(effects, ok2, nok) {
-  let size = 0;
-  return start;
-  function start(code) {
-    effects.enter(types.atxHeading);
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.numberSign, "expected `#`");
-    effects.enter(types.atxHeadingSequence);
-    return sequenceOpen(code);
-  }
-  function sequenceOpen(code) {
-    if (code === codes.numberSign && size++ < constants.atxHeadingOpeningFenceSizeMax) {
-      effects.consume(code);
-      return sequenceOpen;
-    }
-    if (code === codes.eof || markdownLineEndingOrSpace(code)) {
-      effects.exit(types.atxHeadingSequence);
-      return atBreak(code);
-    }
-    return nok(code);
-  }
-  function atBreak(code) {
-    if (code === codes.numberSign) {
-      effects.enter(types.atxHeadingSequence);
-      return sequenceFurther(code);
-    }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.atxHeading);
-      return ok2(code);
-    }
-    if (markdownSpace(code)) {
-      return factorySpace(effects, atBreak, types.whitespace)(code);
-    }
-    effects.enter(types.atxHeadingText);
-    return data(code);
-  }
-  function sequenceFurther(code) {
-    if (code === codes.numberSign) {
-      effects.consume(code);
-      return sequenceFurther;
-    }
-    effects.exit(types.atxHeadingSequence);
-    return atBreak(code);
-  }
-  function data(code) {
-    if (code === codes.eof || code === codes.numberSign || markdownLineEndingOrSpace(code)) {
-      effects.exit(types.atxHeadingText);
-      return atBreak(code);
-    }
-    effects.consume(code);
-    return data;
-  }
-}
-function resolveToHtmlFlow(events) {
-  let index = events.length;
-  while (index--) {
-    if (events[index][0] === "enter" && events[index][1].type === types.htmlFlow) {
-      break;
-    }
-  }
-  if (index > 1 && events[index - 2][1].type === types.linePrefix) {
-    events[index][1].start = events[index - 2][1].start;
-    events[index + 1][1].start = events[index - 2][1].start;
-    events.splice(index - 2, 2);
-  }
-  return events;
-}
-function tokenizeHtmlFlow(effects, ok2, nok) {
-  const self = this;
-  let marker;
-  let closingTag;
-  let buffer;
-  let index;
-  let markerB;
-  return start;
-  function start(code) {
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.lessThan, "expected `<`");
-    effects.enter(types.htmlFlow);
-    effects.enter(types.htmlFlowData);
-    effects.consume(code);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.exclamationMark) {
-      effects.consume(code);
-      return declarationOpen;
-    }
-    if (code === codes.slash) {
-      effects.consume(code);
-      closingTag = true;
-      return tagCloseStart;
-    }
-    if (code === codes.questionMark) {
-      effects.consume(code);
-      marker = constants.htmlInstruction;
-      return self.interrupt ? ok2 : continuationDeclarationInside;
-    }
-    if (asciiAlpha(code)) {
-      ok(code !== null);
-      effects.consume(code);
-      buffer = String.fromCharCode(code);
-      return tagName;
-    }
-    return nok(code);
-  }
-  function declarationOpen(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      marker = constants.htmlComment;
-      return commentOpenInside;
-    }
-    if (code === codes.leftSquareBracket) {
-      effects.consume(code);
-      marker = constants.htmlCdata;
-      index = 0;
-      return cdataOpenInside;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      marker = constants.htmlDeclaration;
-      return self.interrupt ? ok2 : continuationDeclarationInside;
-    }
-    return nok(code);
-  }
-  function commentOpenInside(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return self.interrupt ? ok2 : continuationDeclarationInside;
-    }
-    return nok(code);
-  }
-  function cdataOpenInside(code) {
-    const value = constants.cdataOpeningString;
-    if (code === value.charCodeAt(index++)) {
-      effects.consume(code);
-      if (index === value.length) {
-        return self.interrupt ? ok2 : continuation;
-      }
-      return cdataOpenInside;
-    }
-    return nok(code);
-  }
-  function tagCloseStart(code) {
-    if (asciiAlpha(code)) {
-      ok(code !== null);
-      effects.consume(code);
-      buffer = String.fromCharCode(code);
-      return tagName;
-    }
-    return nok(code);
-  }
-  function tagName(code) {
-    if (code === codes.eof || code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      const slash = code === codes.slash;
-      const name = buffer.toLowerCase();
-      if (!slash && !closingTag && htmlRawNames.includes(name)) {
-        marker = constants.htmlRaw;
-        return self.interrupt ? ok2(code) : continuation(code);
-      }
-      if (htmlBlockNames.includes(buffer.toLowerCase())) {
-        marker = constants.htmlBasic;
-        if (slash) {
-          effects.consume(code);
-          return basicSelfClosing;
-        }
-        return self.interrupt ? ok2(code) : continuation(code);
-      }
-      marker = constants.htmlComplete;
-      return self.interrupt && !self.parser.lazy[self.now().line] ? nok(code) : closingTag ? completeClosingTagAfter(code) : completeAttributeNameBefore(code);
-    }
-    if (code === codes.dash || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      buffer += String.fromCharCode(code);
-      return tagName;
-    }
-    return nok(code);
-  }
-  function basicSelfClosing(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      return self.interrupt ? ok2 : continuation;
-    }
-    return nok(code);
-  }
-  function completeClosingTagAfter(code) {
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeClosingTagAfter;
-    }
-    return completeEnd(code);
-  }
-  function completeAttributeNameBefore(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      return completeEnd;
-    }
-    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
-      effects.consume(code);
-      return completeAttributeName;
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAttributeNameBefore;
-    }
-    return completeEnd(code);
-  }
-  function completeAttributeName(code) {
-    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return completeAttributeName;
-    }
-    return completeAttributeNameAfter(code);
-  }
-  function completeAttributeNameAfter(code) {
-    if (code === codes.equalsTo) {
-      effects.consume(code);
-      return completeAttributeValueBefore;
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAttributeNameAfter;
-    }
-    return completeAttributeNameBefore(code);
-  }
-  function completeAttributeValueBefore(code) {
-    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
-      return nok(code);
-    }
-    if (code === codes.quotationMark || code === codes.apostrophe) {
-      effects.consume(code);
-      markerB = code;
-      return completeAttributeValueQuoted;
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAttributeValueBefore;
-    }
-    return completeAttributeValueUnquoted(code);
-  }
-  function completeAttributeValueQuoted(code) {
-    if (code === markerB) {
-      effects.consume(code);
-      markerB = null;
-      return completeAttributeValueQuotedAfter;
-    }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return nok(code);
-    }
-    effects.consume(code);
-    return completeAttributeValueQuoted;
-  }
-  function completeAttributeValueUnquoted(code) {
-    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.slash || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent || markdownLineEndingOrSpace(code)) {
-      return completeAttributeNameAfter(code);
-    }
-    effects.consume(code);
-    return completeAttributeValueUnquoted;
-  }
-  function completeAttributeValueQuotedAfter(code) {
-    if (code === codes.slash || code === codes.greaterThan || markdownSpace(code)) {
-      return completeAttributeNameBefore(code);
-    }
-    return nok(code);
-  }
-  function completeEnd(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      return completeAfter;
-    }
-    return nok(code);
-  }
-  function completeAfter(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return continuation(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return completeAfter;
-    }
-    return nok(code);
-  }
-  function continuation(code) {
-    if (code === codes.dash && marker === constants.htmlComment) {
-      effects.consume(code);
-      return continuationCommentInside;
-    }
-    if (code === codes.lessThan && marker === constants.htmlRaw) {
-      effects.consume(code);
-      return continuationRawTagOpen;
-    }
-    if (code === codes.greaterThan && marker === constants.htmlDeclaration) {
-      effects.consume(code);
-      return continuationClose;
-    }
-    if (code === codes.questionMark && marker === constants.htmlInstruction) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    if (code === codes.rightSquareBracket && marker === constants.htmlCdata) {
-      effects.consume(code);
-      return continuationCdataInside;
-    }
-    if (markdownLineEnding(code) && (marker === constants.htmlBasic || marker === constants.htmlComplete)) {
-      effects.exit(types.htmlFlowData);
-      return effects.check(blankLineBefore, continuationAfter, continuationStart)(code);
-    }
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.htmlFlowData);
-      return continuationStart(code);
-    }
-    effects.consume(code);
-    return continuation;
-  }
-  function continuationStart(code) {
-    return effects.check(nonLazyContinuation, continuationStartNonLazy, continuationAfter)(code);
-  }
-  function continuationStartNonLazy(code) {
-    ok(markdownLineEnding(code));
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return continuationBefore;
-  }
-  function continuationBefore(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      return continuationStart(code);
-    }
-    effects.enter(types.htmlFlowData);
-    return continuation(code);
-  }
-  function continuationCommentInside(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    return continuation(code);
-  }
-  function continuationRawTagOpen(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      buffer = "";
-      return continuationRawEndTag;
-    }
-    return continuation(code);
-  }
-  function continuationRawEndTag(code) {
-    if (code === codes.greaterThan) {
-      const name = buffer.toLowerCase();
-      if (htmlRawNames.includes(name)) {
-        effects.consume(code);
-        return continuationClose;
-      }
-      return continuation(code);
-    }
-    if (asciiAlpha(code) && buffer.length < constants.htmlRawSizeMax) {
-      ok(code !== null);
-      effects.consume(code);
-      buffer += String.fromCharCode(code);
-      return continuationRawEndTag;
-    }
-    return continuation(code);
-  }
-  function continuationCdataInside(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    return continuation(code);
-  }
-  function continuationDeclarationInside(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      return continuationClose;
-    }
-    if (code === codes.dash && marker === constants.htmlComment) {
-      effects.consume(code);
-      return continuationDeclarationInside;
-    }
-    return continuation(code);
-  }
-  function continuationClose(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.htmlFlowData);
-      return continuationAfter(code);
-    }
-    effects.consume(code);
-    return continuationClose;
-  }
-  function continuationAfter(code) {
-    effects.exit(types.htmlFlow);
-    return ok2(code);
-  }
-}
-function tokenizeBlankLineBefore(effects, ok2, nok) {
-  return start;
-  function start(code) {
-    ok(markdownLineEnding(code), "expected a line ending");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return effects.attempt(blankLine, ok2, nok);
-  }
-}
-function tokenizeHtmlText(effects, ok2, nok) {
-  const self = this;
-  let marker;
-  let index;
-  let returnState;
-  return start;
-  function start(code) {
-    ok(code === codes.lessThan, "expected `<`");
-    effects.enter(types.htmlText);
-    effects.enter(types.htmlTextData);
-    effects.consume(code);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.exclamationMark) {
-      effects.consume(code);
-      return declarationOpen;
-    }
-    if (code === codes.slash) {
-      effects.consume(code);
-      return tagCloseStart;
-    }
-    if (code === codes.questionMark) {
-      effects.consume(code);
-      return instruction;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return tagOpen;
-    }
-    return nok(code);
-  }
-  function declarationOpen(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentOpenInside;
-    }
-    if (code === codes.leftSquareBracket) {
-      effects.consume(code);
-      index = 0;
-      return cdataOpenInside;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return declaration;
-    }
-    return nok(code);
-  }
-  function commentOpenInside(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentEnd;
-    }
-    return nok(code);
-  }
-  function comment(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentClose;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = comment;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return comment;
-  }
-  function commentClose(code) {
-    if (code === codes.dash) {
-      effects.consume(code);
-      return commentEnd;
-    }
-    return comment(code);
-  }
-  function commentEnd(code) {
-    return code === codes.greaterThan ? end(code) : code === codes.dash ? commentClose(code) : comment(code);
-  }
-  function cdataOpenInside(code) {
-    const value = constants.cdataOpeningString;
-    if (code === value.charCodeAt(index++)) {
-      effects.consume(code);
-      return index === value.length ? cdata : cdataOpenInside;
-    }
-    return nok(code);
-  }
-  function cdata(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return cdataClose;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = cdata;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return cdata;
-  }
-  function cdataClose(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return cdataEnd;
-    }
-    return cdata(code);
-  }
-  function cdataEnd(code) {
-    if (code === codes.greaterThan) {
-      return end(code);
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return cdataEnd;
-    }
-    return cdata(code);
-  }
-  function declaration(code) {
-    if (code === codes.eof || code === codes.greaterThan) {
-      return end(code);
-    }
-    if (markdownLineEnding(code)) {
-      returnState = declaration;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return declaration;
-  }
-  function instruction(code) {
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (code === codes.questionMark) {
-      effects.consume(code);
-      return instructionClose;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = instruction;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return instruction;
-  }
-  function instructionClose(code) {
-    return code === codes.greaterThan ? end(code) : instruction(code);
-  }
-  function tagCloseStart(code) {
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return tagClose;
-    }
-    return nok(code);
-  }
-  function tagClose(code) {
-    if (code === codes.dash || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return tagClose;
-    }
-    return tagCloseBetween(code);
-  }
-  function tagCloseBetween(code) {
-    if (markdownLineEnding(code)) {
-      returnState = tagCloseBetween;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagCloseBetween;
-    }
-    return end(code);
-  }
-  function tagOpen(code) {
-    if (code === codes.dash || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return tagOpen;
-    }
-    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      return tagOpenBetween(code);
-    }
-    return nok(code);
-  }
-  function tagOpenBetween(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      return end;
-    }
-    if (code === codes.colon || code === codes.underscore || asciiAlpha(code)) {
-      effects.consume(code);
-      return tagOpenAttributeName;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenBetween;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagOpenBetween;
-    }
-    return end(code);
-  }
-  function tagOpenAttributeName(code) {
-    if (code === codes.dash || code === codes.dot || code === codes.colon || code === codes.underscore || asciiAlphanumeric(code)) {
-      effects.consume(code);
-      return tagOpenAttributeName;
-    }
-    return tagOpenAttributeNameAfter(code);
-  }
-  function tagOpenAttributeNameAfter(code) {
-    if (code === codes.equalsTo) {
-      effects.consume(code);
-      return tagOpenAttributeValueBefore;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenAttributeNameAfter;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagOpenAttributeNameAfter;
-    }
-    return tagOpenBetween(code);
-  }
-  function tagOpenAttributeValueBefore(code) {
-    if (code === codes.eof || code === codes.lessThan || code === codes.equalsTo || code === codes.greaterThan || code === codes.graveAccent) {
-      return nok(code);
-    }
-    if (code === codes.quotationMark || code === codes.apostrophe) {
-      effects.consume(code);
-      marker = code;
-      return tagOpenAttributeValueQuoted;
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenAttributeValueBefore;
-      return lineEndingBefore(code);
-    }
-    if (markdownSpace(code)) {
-      effects.consume(code);
-      return tagOpenAttributeValueBefore;
-    }
-    effects.consume(code);
-    return tagOpenAttributeValueUnquoted;
-  }
-  function tagOpenAttributeValueQuoted(code) {
-    if (code === marker) {
-      effects.consume(code);
-      marker = undefined;
-      return tagOpenAttributeValueQuotedAfter;
-    }
-    if (code === codes.eof) {
-      return nok(code);
-    }
-    if (markdownLineEnding(code)) {
-      returnState = tagOpenAttributeValueQuoted;
-      return lineEndingBefore(code);
-    }
-    effects.consume(code);
-    return tagOpenAttributeValueQuoted;
-  }
-  function tagOpenAttributeValueUnquoted(code) {
-    if (code === codes.eof || code === codes.quotationMark || code === codes.apostrophe || code === codes.lessThan || code === codes.equalsTo || code === codes.graveAccent) {
-      return nok(code);
-    }
-    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      return tagOpenBetween(code);
-    }
-    effects.consume(code);
-    return tagOpenAttributeValueUnquoted;
-  }
-  function tagOpenAttributeValueQuotedAfter(code) {
-    if (code === codes.slash || code === codes.greaterThan || markdownLineEndingOrSpace(code)) {
-      return tagOpenBetween(code);
-    }
-    return nok(code);
-  }
-  function end(code) {
-    if (code === codes.greaterThan) {
-      effects.consume(code);
-      effects.exit(types.htmlTextData);
-      effects.exit(types.htmlText);
-      return ok2;
-    }
-    return nok(code);
-  }
-  function lineEndingBefore(code) {
-    ok(returnState, "expected return state");
-    ok(markdownLineEnding(code), "expected eol");
-    effects.exit(types.htmlTextData);
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return lineEndingAfter;
-  }
-  function lineEndingAfter(code) {
-    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return markdownSpace(code) ? factorySpace(effects, lineEndingAfterPrefix, types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code) : lineEndingAfterPrefix(code);
-  }
-  function lineEndingAfterPrefix(code) {
-    effects.enter(types.htmlTextData);
-    return returnState(code);
-  }
-}
-function resolveAllLabelEnd(events) {
-  let index = -1;
-  const newEvents = [];
-  while (++index < events.length) {
-    const token = events[index][1];
-    newEvents.push(events[index]);
-    if (token.type === types.labelImage || token.type === types.labelLink || token.type === types.labelEnd) {
-      const offset = token.type === types.labelImage ? 4 : 2;
-      token.type = types.data;
-      index += offset;
-    }
-  }
-  if (events.length !== newEvents.length) {
-    splice(events, 0, events.length, newEvents);
-  }
-  return events;
-}
-function resolveToLabelEnd(events, context) {
-  let index = events.length;
-  let offset = 0;
-  let open;
-  let close;
-  let media;
-  while (index--) {
-    const token = events[index][1];
-    if (open) {
-      if (token.type === types.link || token.type === types.labelLink && token._inactive) {
-        break;
-      }
-      if (events[index][0] === "enter" && token.type === types.labelLink) {
-        token._inactive = true;
-      }
-    } else if (close) {
-      if (events[index][0] === "enter" && (token.type === types.labelImage || token.type === types.labelLink) && !token._balanced) {
-        open = index;
-        if (token.type !== types.labelLink) {
-          offset = 2;
-          break;
-        }
-      }
-    } else if (token.type === types.labelEnd) {
-      close = index;
-    }
-  }
-  ok(open !== undefined, "`open` is supposed to be found");
-  ok(close !== undefined, "`close` is supposed to be found");
-  const group = {
-    type: events[open][1].type === types.labelLink ? types.link : types.image,
-    start: { ...events[open][1].start },
-    end: { ...events[events.length - 1][1].end }
-  };
-  const label = {
-    type: types.label,
-    start: { ...events[open][1].start },
-    end: { ...events[close][1].end }
-  };
-  const text = {
-    type: types.labelText,
-    start: { ...events[open + offset + 2][1].end },
-    end: { ...events[close - 2][1].start }
-  };
-  media = [
-    ["enter", group, context],
-    ["enter", label, context]
-  ];
-  media = push(media, events.slice(open + 1, open + offset + 3));
-  media = push(media, [["enter", text, context]]);
-  ok(context.parser.constructs.insideSpan.null, "expected `insideSpan.null` to be populated");
-  media = push(media, resolveAll(context.parser.constructs.insideSpan.null, events.slice(open + offset + 4, close - 3), context));
-  media = push(media, [
-    ["exit", text, context],
-    events[close - 2],
-    events[close - 1],
-    ["exit", label, context]
-  ]);
-  media = push(media, events.slice(close + 1));
-  media = push(media, [["exit", group, context]]);
-  splice(events, open, events.length, media);
-  return events;
-}
-function tokenizeLabelEnd(effects, ok2, nok) {
-  const self = this;
-  const labelStarts = self._labelStarts;
-  let labelStart;
-  let defined;
-  if (labelStarts) {
-    while (labelStarts.length > 0 && labelStarts[labelStarts.length - 1]._balanced) {
-      labelStarts.pop();
-    }
-    labelStart = labelStarts[labelStarts.length - 1];
-  }
-  return start;
-  function start(code) {
-    ok(code === codes.rightSquareBracket, "expected `]`");
-    if (!labelStart) {
-      return nok(code);
-    }
-    if (labelStart._inactive) {
-      return labelEndNok(code);
-    }
-    defined = self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize({ start: labelStart.end, end: self.now() })));
-    effects.enter(types.labelEnd);
-    effects.enter(types.labelMarker);
-    effects.consume(code);
-    effects.exit(types.labelMarker);
-    effects.exit(types.labelEnd);
-    return after;
-  }
-  function after(code) {
-    if (code === codes.leftParenthesis) {
-      return effects.attempt(resourceConstruct, labelEndOk, defined ? labelEndOk : labelEndNok)(code);
-    }
-    if (code === codes.leftSquareBracket) {
-      return effects.attempt(referenceFullConstruct, labelEndOk, defined ? referenceNotFull : labelEndNok)(code);
-    }
-    return defined ? labelEndOk(code) : labelEndNok(code);
-  }
-  function referenceNotFull(code) {
-    return effects.attempt(referenceCollapsedConstruct, labelEndOk, labelEndNok)(code);
-  }
-  function labelEndOk(code) {
-    ok(labelStarts, "expected `labelStarts` to be populated");
-    labelStarts.pop();
-    return ok2(code);
-  }
-  function labelEndNok(code) {
-    labelStart._balanced = true;
-    return nok(code);
-  }
-}
-function tokenizeResource(effects, ok2, nok) {
-  return resourceStart;
-  function resourceStart(code) {
-    ok(code === codes.leftParenthesis, "expected left paren");
-    effects.enter(types.resource);
-    effects.enter(types.resourceMarker);
-    effects.consume(code);
-    effects.exit(types.resourceMarker);
-    return resourceBefore;
-  }
-  function resourceBefore(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceOpen)(code) : resourceOpen(code);
-  }
-  function resourceOpen(code) {
-    if (code === codes.rightParenthesis) {
-      return resourceEnd(code);
-    }
-    return factoryDestination(effects, resourceDestinationAfter, resourceDestinationMissing, types.resourceDestination, types.resourceDestinationLiteral, types.resourceDestinationLiteralMarker, types.resourceDestinationRaw, types.resourceDestinationString, constants.linkResourceDestinationBalanceMax)(code);
-  }
-  function resourceDestinationAfter(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceBetween)(code) : resourceEnd(code);
-  }
-  function resourceDestinationMissing(code) {
-    return nok(code);
-  }
-  function resourceBetween(code) {
-    if (code === codes.quotationMark || code === codes.apostrophe || code === codes.leftParenthesis) {
-      return factoryTitle(effects, resourceTitleAfter, nok, types.resourceTitle, types.resourceTitleMarker, types.resourceTitleString)(code);
-    }
-    return resourceEnd(code);
-  }
-  function resourceTitleAfter(code) {
-    return markdownLineEndingOrSpace(code) ? factoryWhitespace(effects, resourceEnd)(code) : resourceEnd(code);
-  }
-  function resourceEnd(code) {
-    if (code === codes.rightParenthesis) {
-      effects.enter(types.resourceMarker);
-      effects.consume(code);
-      effects.exit(types.resourceMarker);
-      effects.exit(types.resource);
-      return ok2;
-    }
-    return nok(code);
-  }
-}
-function tokenizeReferenceFull(effects, ok2, nok) {
-  const self = this;
-  return referenceFull;
-  function referenceFull(code) {
-    ok(code === codes.leftSquareBracket, "expected left bracket");
-    return factoryLabel.call(self, effects, referenceFullAfter, referenceFullMissing, types.reference, types.referenceMarker, types.referenceString)(code);
-  }
-  function referenceFullAfter(code) {
-    return self.parser.defined.includes(normalizeIdentifier(self.sliceSerialize(self.events[self.events.length - 1][1]).slice(1, -1))) ? ok2(code) : nok(code);
-  }
-  function referenceFullMissing(code) {
-    return nok(code);
-  }
-}
-function tokenizeReferenceCollapsed(effects, ok2, nok) {
-  return referenceCollapsedStart;
-  function referenceCollapsedStart(code) {
-    ok(code === codes.leftSquareBracket, "expected left bracket");
-    effects.enter(types.reference);
-    effects.enter(types.referenceMarker);
-    effects.consume(code);
-    effects.exit(types.referenceMarker);
-    return referenceCollapsedOpen;
-  }
-  function referenceCollapsedOpen(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.enter(types.referenceMarker);
-      effects.consume(code);
-      effects.exit(types.referenceMarker);
-      effects.exit(types.reference);
-      return ok2;
-    }
-    return nok(code);
-  }
-}
-function tokenizeLabelStartImage(effects, ok2, nok) {
-  const self = this;
-  let labelImage;
-  return start;
-  function start(code) {
-    ok(code === codes.exclamationMark, "expected `!`");
-    effects.enter(types.labelImage);
-    effects.enter(types.labelImageMarker);
-    effects.consume(code);
-    effects.exit(types.labelImageMarker);
-    return open;
-  }
-  function open(code) {
-    if (code === codes.leftSquareBracket) {
-      effects.enter(types.labelMarker);
-      effects.consume(code);
-      effects.exit(types.labelMarker);
-      labelImage = effects.exit(types.labelImage);
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    if (code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs) {
-      return nok(code);
-    }
-    self._labelStarts = self._labelStarts || [];
-    self._labelStarts.push(labelImage);
-    return ok2(code);
-  }
-}
-function tokenizeLabelStartLink(effects, ok2, nok) {
-  const self = this;
-  let labelLink;
-  return start;
-  function start(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    effects.enter(types.labelLink);
-    effects.enter(types.labelMarker);
-    effects.consume(code);
-    effects.exit(types.labelMarker);
-    labelLink = effects.exit(types.labelLink);
-    return after;
-  }
-  function after(code) {
-    if (code === codes.caret && "_hiddenFootnoteSupport" in self.parser.constructs) {
-      return nok(code);
-    }
-    self._labelStarts = self._labelStarts || [];
-    self._labelStarts.push(labelLink);
-    return ok2(code);
-  }
-}
-function tokenizeLineEnding(effects, ok2) {
-  return start;
-  function start(code) {
-    ok(markdownLineEnding(code), "expected eol");
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    return factorySpace(effects, ok2, types.linePrefix);
-  }
-}
-function tokenizeThematicBreak(effects, ok2, nok) {
-  let size = 0;
-  let marker;
-  return start;
-  function start(code) {
-    effects.enter(types.thematicBreak);
-    return before(code);
-  }
-  function before(code) {
-    ok(code === codes.asterisk || code === codes.dash || code === codes.underscore, "expected `*`, `-`, or `_`");
-    marker = code;
-    return atBreak(code);
-  }
-  function atBreak(code) {
-    if (code === marker) {
-      effects.enter(types.thematicBreakSequence);
-      return sequence(code);
-    }
-    if (size >= constants.thematicBreakMarkerCountMin && (code === codes.eof || markdownLineEnding(code))) {
-      effects.exit(types.thematicBreak);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-  function sequence(code) {
-    if (code === marker) {
-      effects.consume(code);
-      size++;
-      return sequence;
-    }
-    effects.exit(types.thematicBreakSequence);
-    return markdownSpace(code) ? factorySpace(effects, atBreak, types.whitespace)(code) : atBreak(code);
-  }
-}
-function tokenizeListStart(effects, ok2, nok) {
-  const self = this;
-  const tail = self.events[self.events.length - 1];
-  let initialSize = tail && tail[1].type === types.linePrefix ? tail[2].sliceSerialize(tail[1], true).length : 0;
-  let size = 0;
-  return start;
-  function start(code) {
-    ok(self.containerState, "expected state");
-    const kind = self.containerState.type || (code === codes.asterisk || code === codes.plusSign || code === codes.dash ? types.listUnordered : types.listOrdered);
-    if (kind === types.listUnordered ? !self.containerState.marker || code === self.containerState.marker : asciiDigit(code)) {
-      if (!self.containerState.type) {
-        self.containerState.type = kind;
-        effects.enter(kind, { _container: true });
-      }
-      if (kind === types.listUnordered) {
-        effects.enter(types.listItemPrefix);
-        return code === codes.asterisk || code === codes.dash ? effects.check(thematicBreak, nok, atMarker)(code) : atMarker(code);
-      }
-      if (!self.interrupt || code === codes.digit1) {
-        effects.enter(types.listItemPrefix);
-        effects.enter(types.listItemValue);
-        return inside(code);
-      }
-    }
-    return nok(code);
-  }
-  function inside(code) {
-    ok(self.containerState, "expected state");
-    if (asciiDigit(code) && ++size < constants.listItemValueSizeMax) {
-      effects.consume(code);
-      return inside;
-    }
-    if ((!self.interrupt || size < 2) && (self.containerState.marker ? code === self.containerState.marker : code === codes.rightParenthesis || code === codes.dot)) {
-      effects.exit(types.listItemValue);
-      return atMarker(code);
-    }
-    return nok(code);
-  }
-  function atMarker(code) {
-    ok(self.containerState, "expected state");
-    ok(code !== codes.eof, "eof (`null`) is not a marker");
-    effects.enter(types.listItemMarker);
-    effects.consume(code);
-    effects.exit(types.listItemMarker);
-    self.containerState.marker = self.containerState.marker || code;
-    return effects.check(blankLine, self.interrupt ? nok : onBlank, effects.attempt(listItemPrefixWhitespaceConstruct, endOfPrefix, otherPrefix));
-  }
-  function onBlank(code) {
-    ok(self.containerState, "expected state");
-    self.containerState.initialBlankLine = true;
-    initialSize++;
-    return endOfPrefix(code);
-  }
-  function otherPrefix(code) {
-    if (markdownSpace(code)) {
-      effects.enter(types.listItemPrefixWhitespace);
-      effects.consume(code);
-      effects.exit(types.listItemPrefixWhitespace);
-      return endOfPrefix;
-    }
-    return nok(code);
-  }
-  function endOfPrefix(code) {
-    ok(self.containerState, "expected state");
-    self.containerState.size = initialSize + self.sliceSerialize(effects.exit(types.listItemPrefix), true).length;
-    return ok2(code);
-  }
-}
-function tokenizeListContinuation(effects, ok2, nok) {
-  const self = this;
-  ok(self.containerState, "expected state");
-  self.containerState._closeFlow = undefined;
-  return effects.check(blankLine, onBlank, notBlank);
-  function onBlank(code) {
-    ok(self.containerState, "expected state");
-    ok(typeof self.containerState.size === "number", "expected size");
-    self.containerState.furtherBlankLines = self.containerState.furtherBlankLines || self.containerState.initialBlankLine;
-    return factorySpace(effects, ok2, types.listItemIndent, self.containerState.size + 1)(code);
-  }
-  function notBlank(code) {
-    ok(self.containerState, "expected state");
-    if (self.containerState.furtherBlankLines || !markdownSpace(code)) {
-      self.containerState.furtherBlankLines = undefined;
-      self.containerState.initialBlankLine = undefined;
-      return notInCurrentItem(code);
-    }
-    self.containerState.furtherBlankLines = undefined;
-    self.containerState.initialBlankLine = undefined;
-    return effects.attempt(indentConstruct, ok2, notInCurrentItem)(code);
-  }
-  function notInCurrentItem(code) {
-    ok(self.containerState, "expected state");
-    self.containerState._closeFlow = true;
-    self.interrupt = undefined;
-    ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-    return factorySpace(effects, effects.attempt(list, ok2, nok), types.linePrefix, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize)(code);
-  }
-}
-function tokenizeIndent(effects, ok2, nok) {
-  const self = this;
-  ok(self.containerState, "expected state");
-  ok(typeof self.containerState.size === "number", "expected size");
-  return factorySpace(effects, afterPrefix, types.listItemIndent, self.containerState.size + 1);
-  function afterPrefix(code) {
-    ok(self.containerState, "expected state");
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === types.listItemIndent && tail[2].sliceSerialize(tail[1], true).length === self.containerState.size ? ok2(code) : nok(code);
-  }
-}
-function tokenizeListEnd(effects) {
-  ok(this.containerState, "expected state");
-  ok(typeof this.containerState.type === "string", "expected type");
-  effects.exit(this.containerState.type);
-}
-function tokenizeListItemPrefixWhitespace(effects, ok2, nok) {
-  const self = this;
-  ok(self.parser.constructs.disable.null, "expected `disable.null` to be populated");
-  return factorySpace(effects, afterPrefix, types.listItemPrefixWhitespace, self.parser.constructs.disable.null.includes("codeIndented") ? undefined : constants.tabSize + 1);
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return !markdownSpace(code) && tail && tail[1].type === types.listItemPrefixWhitespace ? ok2(code) : nok(code);
-  }
-}
-function resolveToSetextUnderline(events, context) {
-  const editMap = new EditMap;
-  let index = events.length;
-  let content;
-  let text;
-  let definition;
-  while (index--) {
-    if (events[index][0] === "enter") {
-      if (events[index][1].type === types.content) {
-        content = index;
-        break;
-      }
-      if (events[index][1].type === types.paragraph) {
-        text = index;
-      }
-    } else {
-      if (events[index][1].type === types.content) {
-        editMap.add(index, 1, []);
-      }
-      if (!definition && events[index][1].type === types.definition) {
-        definition = index;
-      }
-    }
-  }
-  ok(text !== undefined, "expected a `text` index to be found");
-  ok(content !== undefined, "expected a `text` index to be found");
-  ok(events[content][2] === context, "enter context should be same");
-  ok(events[events.length - 1][2] === context, "enter context should be same");
-  const heading = {
-    type: types.setextHeading,
-    start: { ...events[content][1].start },
-    end: { ...events[events.length - 1][1].end }
-  };
-  events[text][1].type = types.setextHeadingText;
-  if (definition) {
-    editMap.add(text, 0, [["enter", heading, context]]);
-    editMap.add(definition + 1, 0, [["exit", events[content][1], context]]);
-    events[content][1].end = { ...events[definition][1].end };
-  } else {
-    events[content][1] = heading;
-  }
-  editMap.add(events.length, 0, [["exit", heading, context]]);
-  editMap.consume(events);
-  return events;
-}
-function tokenizeSetextUnderline(effects, ok2, nok) {
-  const self = this;
-  let marker;
-  return start;
-  function start(code) {
-    let index = self.events.length;
-    let paragraph;
-    ok(code === codes.dash || code === codes.equalsTo, "expected `=` or `-`");
-    while (index--) {
-      if (self.events[index][1].type !== types.lineEnding && self.events[index][1].type !== types.linePrefix && self.events[index][1].type !== types.content) {
-        paragraph = self.events[index][1].type === types.paragraph;
-        break;
-      }
-    }
-    if (!self.parser.lazy[self.now().line] && (self.interrupt || paragraph)) {
-      effects.enter(types.setextHeadingLine);
-      marker = code;
-      return before(code);
-    }
-    return nok(code);
-  }
-  function before(code) {
-    effects.enter(types.setextHeadingLineSequence);
-    return inside(code);
-  }
-  function inside(code) {
-    if (code === marker) {
-      effects.consume(code);
-      return inside;
-    }
-    effects.exit(types.setextHeadingLineSequence);
-    return markdownSpace(code) ? factorySpace(effects, after, types.lineSuffix)(code) : after(code);
-  }
-  function after(code) {
-    if (code === codes.eof || markdownLineEnding(code)) {
-      effects.exit(types.setextHeadingLine);
-      return ok2(code);
-    }
-    return nok(code);
-  }
-}
-function initializeFlow(effects) {
-  const self = this;
-  const initial = effects.attempt(blankLine, atBlankEnding, effects.attempt(this.parser.constructs.flowInitial, afterConstruct, factorySpace(effects, effects.attempt(this.parser.constructs.flow, afterConstruct, effects.attempt(content2, afterConstruct)), types.linePrefix)));
-  return initial;
-  function atBlankEnding(code) {
-    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
-    if (code === codes.eof) {
-      effects.consume(code);
-      return;
-    }
-    effects.enter(types.lineEndingBlank);
-    effects.consume(code);
-    effects.exit(types.lineEndingBlank);
-    self.currentConstruct = undefined;
-    return initial;
-  }
-  function afterConstruct(code) {
-    ok(code === codes.eof || markdownLineEnding(code), "expected eol or eof");
-    if (code === codes.eof) {
-      effects.consume(code);
-      return;
-    }
-    effects.enter(types.lineEnding);
-    effects.consume(code);
-    effects.exit(types.lineEnding);
-    self.currentConstruct = undefined;
-    return initial;
-  }
-}
-function initializeFactory(field) {
-  return {
-    resolveAll: createResolver(field === "text" ? resolveAllLineSuffixes : undefined),
-    tokenize: initializeText
-  };
-  function initializeText(effects) {
-    const self = this;
-    const constructs = this.parser.constructs[field];
-    const text = effects.attempt(constructs, start, notText);
-    return start;
-    function start(code) {
-      return atBreak(code) ? text(code) : notText(code);
-    }
-    function notText(code) {
-      if (code === codes.eof) {
-        effects.consume(code);
-        return;
-      }
-      effects.enter(types.data);
-      effects.consume(code);
-      return data;
-    }
-    function data(code) {
-      if (atBreak(code)) {
-        effects.exit(types.data);
-        return text(code);
-      }
-      effects.consume(code);
-      return data;
-    }
-    function atBreak(code) {
-      if (code === codes.eof) {
-        return true;
-      }
-      const list = constructs[code];
-      let index = -1;
-      if (list) {
-        ok(Array.isArray(list), "expected `disable.null` to be populated");
-        while (++index < list.length) {
-          const item = list[index];
-          if (!item.previous || item.previous.call(self, self.previous)) {
-            return true;
-          }
-        }
-      }
-      return false;
-    }
-  }
-}
-function createResolver(extraResolver) {
-  return resolveAllText;
-  function resolveAllText(events, context) {
-    let index = -1;
-    let enter;
-    while (++index <= events.length) {
-      if (enter === undefined) {
-        if (events[index] && events[index][1].type === types.data) {
-          enter = index;
-          index++;
-        }
-      } else if (!events[index] || events[index][1].type !== types.data) {
-        if (index !== enter + 2) {
-          events[enter][1].end = events[index - 1][1].end;
-          events.splice(enter + 2, index - enter - 2);
-          index = enter + 2;
-        }
-        enter = undefined;
-      }
-    }
-    return extraResolver ? extraResolver(events, context) : events;
-  }
-}
-function resolveAllLineSuffixes(events, context) {
-  const editMap = new EditMap;
-  let eventIndex = 0;
-  while (++eventIndex <= events.length) {
-    if ((eventIndex === events.length || events[eventIndex][1].type === types.lineEnding) && events[eventIndex - 1][1].type === types.data) {
-      const data = events[eventIndex - 1][1];
-      const chunks = context.sliceStream(data);
-      let index = chunks.length;
-      let bufferIndex = -1;
-      let size = 0;
-      let tabs;
-      while (index--) {
-        const chunk = chunks[index];
-        if (typeof chunk === "string") {
-          bufferIndex = chunk.length;
-          while (chunk.charCodeAt(bufferIndex - 1) === codes.space) {
-            size++;
-            bufferIndex--;
-          }
-          if (bufferIndex) {
-            break;
-          }
-          bufferIndex = -1;
-        } else if (chunk === codes.horizontalTab) {
-          tabs = true;
-          size++;
-        } else if (chunk === codes.virtualSpace) {} else {
-          index++;
-          break;
-        }
-      }
-      if (context._contentTypeTextTrailing && eventIndex === events.length) {
-        size = 0;
-      }
-      if (size) {
-        const token = {
-          type: eventIndex === events.length || tabs || size < constants.hardBreakPrefixSizeMin ? types.lineSuffix : types.hardBreakTrailing,
-          start: {
-            _bufferIndex: index ? bufferIndex : data.start._bufferIndex + bufferIndex,
-            _index: data.start._index + index,
-            line: data.end.line,
-            column: data.end.column - size,
-            offset: data.end.offset - size
-          },
-          end: { ...data.end }
-        };
-        data.end = { ...token.start };
-        if (data.start.offset === data.end.offset) {
-          Object.assign(data, token);
-        } else {
-          editMap.add(eventIndex, 0, [
-            ["enter", token, context],
-            ["exit", token, context]
-          ]);
-        }
-      }
-      eventIndex++;
-    }
-  }
-  editMap.consume(events);
-  return events;
-}
-function createDebug(namespace) {
-  const debug = () => {
-    return;
-  };
-  debug.enabled = false;
-  debug.namespace = namespace;
-  debug.extend = (child) => createDebug(`${namespace}:${child}`);
-  debug.destroy = () => true;
-  debug.diff = 0;
-  debug.color = undefined;
-  return debug;
-}
-function footnoteReferencePeek() {
-  return "[";
-}
-function footnoteReference(node, _, state, info) {
-  const tracker = state.createTracker(info);
-  let value = tracker.move("[^");
-  const exit = state.enter("footnoteReference");
-  const subexit = state.enter("reference");
-  value += tracker.move(state.safe(state.associationId(node), { after: "]", before: value }));
-  subexit();
-  exit();
-  value += tracker.move("]");
-  return value;
-}
-function handleDelete(node, _, state, info) {
-  const tracker = state.createTracker(info);
-  const sequence = state.stack.includes("strikethrough") ? "~" : "~~";
-  const exit = state.enter("strikethrough");
-  let value = tracker.move(sequence);
-  value += state.containerPhrasing(node, {
-    ...tracker.current(),
-    before: value,
-    after: "~"
-  });
-  value += tracker.move(sequence);
-  exit();
-  return value;
-}
-function attentionDelete() {
-  return { construct: "strikethrough", markers: ["~"], sizes: [2, 1] };
-}
-function peekDelete() {
-  return "~";
-}
-function tokenizeEmailAutolink(effects, ok, nok) {
-  const self = this;
-  let dot;
-  let data;
-  return start;
-  function start(code) {
-    if (!gfmAtext(code) || !previousEmail.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code);
-    }
-    effects.enter("literalAutolink");
-    effects.enter("literalAutolinkEmail");
-    return atext(code);
-  }
-  function atext(code) {
-    if (gfmAtext(code)) {
-      effects.consume(code);
-      return atext;
-    }
-    if (code === codes.atSign) {
-      effects.consume(code);
-      return emailDomain;
-    }
-    return nok(code);
-  }
-  function emailDomain(code) {
-    if (code === codes.dot) {
-      return effects.check(emailDomainDotTrail, emailDomainAfter, emailDomainDot)(code);
-    }
-    if (code === codes.dash || code === codes.underscore || asciiAlphanumeric(code)) {
-      data = true;
-      effects.consume(code);
-      return emailDomain;
-    }
-    return emailDomainAfter(code);
-  }
-  function emailDomainDot(code) {
-    effects.consume(code);
-    dot = true;
-    return emailDomain;
-  }
-  function emailDomainAfter(code) {
-    if (data && dot && asciiAlpha(self.previous)) {
-      effects.exit("literalAutolinkEmail");
-      effects.exit("literalAutolink");
-      return ok(code);
-    }
-    return nok(code);
-  }
-}
-function tokenizeWwwAutolink(effects, ok, nok) {
-  const self = this;
-  return wwwStart;
-  function wwwStart(code) {
-    if (code !== codes.uppercaseW && code !== codes.lowercaseW || !previousWww.call(self, self.previous) || previousUnbalanced(self.events)) {
-      return nok(code);
-    }
-    effects.enter("literalAutolink");
-    effects.enter("literalAutolinkWww");
-    return effects.check(wwwPrefix, effects.attempt(domain, effects.attempt(path, wwwAfter), nok), nok)(code);
-  }
-  function wwwAfter(code) {
-    effects.exit("literalAutolinkWww");
-    effects.exit("literalAutolink");
-    return ok(code);
-  }
-}
-function tokenizeProtocolAutolink(effects, ok, nok) {
-  const self = this;
-  let buffer = "";
-  let seen = false;
-  return protocolStart;
-  function protocolStart(code) {
-    if ((code === codes.uppercaseH || code === codes.lowercaseH) && previousProtocol.call(self, self.previous) && !previousUnbalanced(self.events)) {
-      effects.enter("literalAutolink");
-      effects.enter("literalAutolinkHttp");
-      buffer += String.fromCodePoint(code);
-      effects.consume(code);
-      return protocolPrefixInside;
-    }
-    return nok(code);
-  }
-  function protocolPrefixInside(code) {
-    if (asciiAlpha(code) && buffer.length < 5) {
-      buffer += String.fromCodePoint(code);
-      effects.consume(code);
-      return protocolPrefixInside;
-    }
-    if (code === codes.colon) {
-      const protocol = buffer.toLowerCase();
-      if (protocol === "http" || protocol === "https") {
-        effects.consume(code);
-        return protocolSlashesInside;
-      }
-    }
-    return nok(code);
-  }
-  function protocolSlashesInside(code) {
-    if (code === codes.slash) {
-      effects.consume(code);
-      if (seen) {
-        return afterProtocol;
-      }
-      seen = true;
-      return protocolSlashesInside;
-    }
-    return nok(code);
-  }
-  function afterProtocol(code) {
-    return code === codes.eof || asciiControl(code) || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || unicodePunctuation(code) ? nok(code) : effects.attempt(domain, effects.attempt(path, protocolAfter), nok)(code);
-  }
-  function protocolAfter(code) {
-    effects.exit("literalAutolinkHttp");
-    effects.exit("literalAutolink");
-    return ok(code);
-  }
-}
-function tokenizeWwwPrefix(effects, ok, nok) {
-  let size = 0;
-  return wwwPrefixInside;
-  function wwwPrefixInside(code) {
-    if ((code === codes.uppercaseW || code === codes.lowercaseW) && size < 3) {
-      size++;
-      effects.consume(code);
-      return wwwPrefixInside;
-    }
-    if (code === codes.dot && size === 3) {
-      effects.consume(code);
-      return wwwPrefixAfter;
-    }
-    return nok(code);
-  }
-  function wwwPrefixAfter(code) {
-    return code === codes.eof ? nok(code) : ok(code);
-  }
-}
-function tokenizeDomain(effects, ok, nok) {
-  let underscoreInLastSegment;
-  let underscoreInLastLastSegment;
-  let seen;
-  return domainInside;
-  function domainInside(code) {
-    if (code === codes.dot || code === codes.underscore) {
-      return effects.check(trail, domainAfter, domainAtPunctuation)(code);
-    }
-    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code) || code !== codes.dash && unicodePunctuation(code)) {
-      return domainAfter(code);
-    }
-    seen = true;
-    effects.consume(code);
-    return domainInside;
-  }
-  function domainAtPunctuation(code) {
-    if (code === codes.underscore) {
-      underscoreInLastSegment = true;
-    } else {
-      underscoreInLastLastSegment = underscoreInLastSegment;
-      underscoreInLastSegment = undefined;
-    }
-    effects.consume(code);
-    return domainInside;
-  }
-  function domainAfter(code) {
-    if (underscoreInLastLastSegment || underscoreInLastSegment || !seen) {
-      return nok(code);
-    }
-    return ok(code);
-  }
-}
-function tokenizePath(effects, ok) {
-  let sizeOpen = 0;
-  let sizeClose = 0;
-  return pathInside;
-  function pathInside(code) {
-    if (code === codes.leftParenthesis) {
-      sizeOpen++;
-      effects.consume(code);
-      return pathInside;
-    }
-    if (code === codes.rightParenthesis && sizeClose < sizeOpen) {
-      return pathAtPunctuation(code);
-    }
-    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.ampersand || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.lessThan || code === codes.questionMark || code === codes.rightSquareBracket || code === codes.underscore || code === codes.tilde) {
-      return effects.check(trail, ok, pathAtPunctuation)(code);
-    }
-    if (code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok(code);
-    }
-    effects.consume(code);
-    return pathInside;
-  }
-  function pathAtPunctuation(code) {
-    if (code === codes.rightParenthesis) {
-      sizeClose++;
-    }
-    effects.consume(code);
-    return pathInside;
-  }
-}
-function tokenizeTrail(effects, ok, nok) {
-  return trail;
-  function trail(code) {
-    if (code === codes.exclamationMark || code === codes.quotationMark || code === codes.apostrophe || code === codes.rightParenthesis || code === codes.asterisk || code === codes.comma || code === codes.dot || code === codes.colon || code === codes.semicolon || code === codes.questionMark || code === codes.underscore || code === codes.tilde) {
-      effects.consume(code);
-      return trail;
-    }
-    if (code === codes.ampersand) {
-      effects.consume(code);
-      return trailCharacterReferenceStart;
-    }
-    if (code === codes.rightSquareBracket) {
-      effects.consume(code);
-      return trailBracketAfter;
-    }
-    if (code === codes.lessThan || code === codes.eof || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok(code);
-    }
-    return nok(code);
-  }
-  function trailBracketAfter(code) {
-    if (code === codes.eof || code === codes.leftParenthesis || code === codes.leftSquareBracket || markdownLineEndingOrSpace(code) || unicodeWhitespace(code)) {
-      return ok(code);
-    }
-    return trail(code);
-  }
-  function trailCharacterReferenceStart(code) {
-    return asciiAlpha(code) ? trailCharacterReferenceInside(code) : nok(code);
-  }
-  function trailCharacterReferenceInside(code) {
-    if (code === codes.semicolon) {
-      effects.consume(code);
-      return trail;
-    }
-    if (asciiAlpha(code)) {
-      effects.consume(code);
-      return trailCharacterReferenceInside;
-    }
-    return nok(code);
-  }
-}
-function tokenizeEmailDomainDotTrail(effects, ok, nok) {
-  return start;
-  function start(code) {
-    effects.consume(code);
-    return after;
-  }
-  function after(code) {
-    return asciiAlphanumeric(code) ? nok(code) : ok(code);
-  }
-}
-function previousWww(code) {
-  return code === codes.eof || code === codes.leftParenthesis || code === codes.asterisk || code === codes.underscore || code === codes.leftSquareBracket || code === codes.rightSquareBracket || code === codes.tilde || markdownLineEndingOrSpace(code);
-}
-function previousProtocol(code) {
-  return !asciiAlpha(code);
-}
-function previousEmail(code) {
-  return !(code === codes.slash || gfmAtext(code));
-}
-function gfmAtext(code) {
-  return code === codes.plusSign || code === codes.dash || code === codes.dot || code === codes.underscore || asciiAlphanumeric(code);
-}
-function previousUnbalanced(events) {
-  let index = events.length;
-  let result = false;
-  while (index--) {
-    const token = events[index][1];
-    if ((token.type === "labelLink" || token.type === "labelImage") && !token._balanced) {
-      result = true;
-      break;
-    }
-    if (token._gfmAutolinkLiteralWalkedInto) {
-      result = false;
-      break;
-    }
-  }
-  if (events.length > 0 && !result) {
-    events[events.length - 1][1]._gfmAutolinkLiteralWalkedInto = true;
-  }
-  return result;
-}
-function tokenizeIndent2(effects, ok, nok) {
-  const self = this;
-  return factorySpace(effects, afterPrefix, "gfmFootnoteDefinitionIndent", constants.tabSize + 1);
-  function afterPrefix(code) {
-    const tail = self.events[self.events.length - 1];
-    return tail && tail[1].type === "gfmFootnoteDefinitionIndent" && tail[2].sliceSerialize(tail[1], true).length === constants.tabSize ? ok(code) : nok(code);
-  }
-}
-function tokenizeTasklistCheck(effects, ok2, nok) {
-  const self = this;
-  return open;
-  function open(code) {
-    ok(code === codes.leftSquareBracket, "expected `[`");
-    if (self.previous !== codes.eof || !self._gfmTasklistFirstContentOfListItem) {
-      return nok(code);
-    }
-    effects.enter("taskListCheck");
-    effects.enter("taskListCheckMarker");
-    effects.consume(code);
-    effects.exit("taskListCheckMarker");
-    return inside;
-  }
-  function inside(code) {
-    if (markdownLineEndingOrSpace(code)) {
-      effects.enter("taskListCheckValueUnchecked");
-      effects.consume(code);
-      effects.exit("taskListCheckValueUnchecked");
-      return close;
-    }
-    if (code === codes.uppercaseX || code === codes.lowercaseX) {
-      effects.enter("taskListCheckValueChecked");
-      effects.consume(code);
-      effects.exit("taskListCheckValueChecked");
-      return close;
-    }
-    return nok(code);
-  }
-  function close(code) {
-    if (code === codes.rightSquareBracket) {
-      effects.enter("taskListCheckMarker");
-      effects.consume(code);
-      effects.exit("taskListCheckMarker");
-      effects.exit("taskListCheck");
-      return after;
-    }
-    return nok(code);
-  }
-  function after(code) {
-    if (markdownLineEnding(code)) {
-      return ok2(code);
-    }
-    if (markdownSpace(code)) {
-      return effects.check({ tokenize: spaceThenNonSpace }, ok2, nok)(code);
-    }
-    return nok(code);
-  }
-}
-function spaceThenNonSpace(effects, ok, nok) {
-  return factorySpace(effects, after, types.whitespace);
-  function after(code) {
-    return code === codes.eof ? nok(code) : ok(code);
-  }
-}
 function vocabularyMap(values) {
   return Object.fromEntries(values.map((value) => [value, true]));
 }
@@ -4641,7 +1160,7 @@ function defaultWorkspaceRoot(startDir) {
   return startDir;
 }
 function isAtOrBelow3(dir, root) {
-  const rel = relative3(root, dir);
+  const rel = relative4(root, dir);
   return rel === "" || !rel.startsWith("..") && !isAbsolute6(rel);
 }
 function canonicalizeNearestExisting(path) {
@@ -4680,15 +1199,15 @@ function validateIntegrationMergeLease(lease) {
       ]
     };
   }
-  validateNonEmptyString4(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
+  validateNonEmptyString3(violations, lease.holder, "holder", "lease.merge-lease.missing-holder", "lease.merge-lease.invalid-holder");
   if (lease.claimed_at === undefined) {
     violations.push(violation8("high", "lease.merge-lease.missing-claimed-at", "missing required field: claimed_at"));
   } else if (typeof lease.claimed_at !== "string" || !(RFC3339_Z_RE.test(lease.claimed_at) || DATE_ONLY_RE.test(lease.claimed_at))) {
     violations.push(violation8("medium", "lease.merge-lease.invalid-claimed-at", "claimed_at must be an RFC 3339 UTC timestamp with explicit Z (e.g. 2026-07-22T04:00:00Z) or a YYYY-MM-DD date"));
   }
-  validateNonEmptyString4(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
-  validateNonEmptyString4(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
-  validateNonEmptyString4(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
+  validateNonEmptyString3(violations, lease.plan_id, "plan_id", "lease.merge-lease.missing-plan-id", "lease.merge-lease.invalid-plan-id");
+  validateNonEmptyString3(violations, lease.source_branch, "source_branch", "lease.merge-lease.missing-source-branch", "lease.merge-lease.invalid-source-branch");
+  validateNonEmptyString3(violations, lease.target_branch, "target_branch", "lease.merge-lease.missing-target-branch", "lease.merge-lease.invalid-target-branch");
   if (lease.session_label !== undefined && typeof lease.session_label !== "string") {
     violations.push(violation8("medium", "lease.merge-lease.invalid-session-label", "session_label must be a string (display only — never used for ownership comparison)"));
   }
@@ -4712,7 +1231,7 @@ function rowValidationRoute(snapshot, row) {
 function violation8(severity, code, message, fix) {
   return { ok: false, severity, code, message, fix };
 }
-function validateNonEmptyString4(violations, value, field, missingCode, invalidCode) {
+function validateNonEmptyString3(violations, value, field, missingCode, invalidCode) {
   if (value === undefined) {
     violations.push(violation8("high", missingCode, `missing required field: ${field}`));
   } else if (typeof value !== "string" || value.trim() === "") {
@@ -4795,7 +1314,7 @@ function validateWorkflowSnapshot(doc) {
   if (doc.version !== undefined) {
     violations.push(violation8("medium", "workflow.snapshot.reserved-version", `top-level version is reserved for the root status.json discriminator — snapshots use schema_version; remove the version key (got ${JSON.stringify(doc.version)})`, "remove the version key from the snapshot"));
   }
-  validateNonEmptyString4(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
+  validateNonEmptyString3(violations, doc.id, "id", "workflow.snapshot.missing-id", "workflow.snapshot.invalid-id");
   if (doc.type === undefined) {
     violations.push(violation8("high", "workflow.snapshot.missing-type", "missing required field: type"));
   } else if (typeof doc.type !== "string" || !WORKFLOW_LIFECYCLE_TYPES.includes(doc.type)) {
@@ -4806,10 +1325,10 @@ function validateWorkflowSnapshot(doc) {
   } else if (typeof doc.status !== "string" || !WORKFLOW_LIFECYCLE_STATUSES.includes(doc.status)) {
     violations.push(violation8("medium", "workflow.snapshot.invalid-status", `status must be one of ${WORKFLOW_LIFECYCLE_STATUSES.join(" | ")} — got ${JSON.stringify(doc.status)}`));
   }
-  validateNonEmptyString4(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
-  validateNonEmptyString4(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
+  validateNonEmptyString3(violations, doc.started_at, "started_at", "workflow.snapshot.missing-started-at", "workflow.snapshot.invalid-started-at");
+  validateNonEmptyString3(violations, doc.updated_at, "updated_at", "workflow.snapshot.missing-updated-at", "workflow.snapshot.invalid-updated-at");
   if (doc.ended_at !== undefined) {
-    validateNonEmptyString4(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
+    validateNonEmptyString3(violations, doc.ended_at, "ended_at", "workflow.snapshot.missing-ended-at", "workflow.snapshot.invalid-ended-at");
   }
   if (doc.phase !== undefined && typeof doc.phase !== "string") {
     violations.push(violation8("medium", "workflow.snapshot.invalid-phase", "phase must be a string (free-form phase machine label)"));
@@ -4868,7 +1387,7 @@ function validateWorkflowSnapshot(doc) {
     violations.push(violation8("medium", "workflow.snapshot.invalid-legacy-metadata", "legacy_metadata must be an object"));
   }
   if (doc.compass_ref !== undefined) {
-    validateNonEmptyString4(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
+    validateNonEmptyString3(violations, doc.compass_ref, "compass_ref", "workflow.snapshot.missing-compass-ref", "workflow.snapshot.invalid-compass-ref");
   }
   if (doc.delivery_kind !== undefined) {
     if (typeof doc.delivery_kind !== "string" || !WORKFLOW_DELIVERY_KINDS.includes(doc.delivery_kind)) {
@@ -4876,10 +1395,10 @@ function validateWorkflowSnapshot(doc) {
     }
   }
   if (doc.project !== undefined) {
-    validateNonEmptyString4(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
+    validateNonEmptyString3(violations, doc.project, "project", "workflow.snapshot.missing-project", "workflow.snapshot.invalid-project");
   }
   if (doc.completion_policy !== undefined) {
-    validateNonEmptyString4(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
+    validateNonEmptyString3(violations, doc.completion_policy, "completion_policy", "workflow.snapshot.missing-completion-policy", "workflow.snapshot.invalid-completion-policy");
   }
   if (doc.delivery !== undefined) {
     violations.push(...deliveryEvidenceViolations(storedDeliveryEvidence(doc.delivery), "delivery"));
@@ -5039,7 +1558,7 @@ async function connect(dbPath, mode, timeout = DEFAULT_BUSY_TIMEOUT_MS, options 
   return openConnection(dbPath, mode, DatabaseSync, timeout, options);
 }
 function sqliteUriPath(dbPath) {
-  return resolve19(dbPath).split(sep10).map(encodeURIComponent).join("/");
+  return resolve19(dbPath).split(sep11).map(encodeURIComponent).join("/");
 }
 function existingOnlyUri(dbPath) {
   return `file:${sqliteUriPath(dbPath)}?mode=rw`;
@@ -5086,23 +1605,23 @@ function ensureJournalForRead(dbPath) {
     return;
   let journal;
   try {
-    journal = openSync2(`${dbPath}-wal`, "wx");
+    journal = openSync3(`${dbPath}-wal`, "wx");
   } catch {
     return;
   }
-  closeSync2(journal);
+  closeSync3(journal);
 }
 function walShapedStoreFile(dbPath) {
   const header = Buffer.alloc(DATABASE_HEADER_BYTES);
   try {
-    const source = openSync2(dbPath, "r");
+    const source = openSync3(dbPath, "r");
     try {
-      const bytes = fstatSync2(source).size;
+      const bytes = fstatSync3(source).size;
       if (readSync(source, header, 0, header.length, 0) < header.length)
         return false;
       return isWalFormatDatabase(header, bytes);
     } finally {
-      closeSync2(source);
+      closeSync3(source);
     }
   } catch {
     return false;
@@ -5946,12 +2465,12 @@ function members(proto, table) {
       defineBound(proto, key, desc.value);
   }
 }
-function own3(inst, key, value, enumerable = true) {
+function own(inst, key, value, enumerable = true) {
   Object.defineProperty(inst, key, { configurable: true, writable: true, enumerable, value });
   return value;
 }
 function hide(inst, key, value) {
-  return own3(inst, key, value, false);
+  return own(inst, key, value, false);
 }
 function derived(computes, table) {
   for (const key in computes) {
@@ -5960,10 +2479,10 @@ function derived(computes, table) {
       configurable: true,
       enumerable: true,
       get() {
-        return own3(this, key, compute(this));
+        return own(this, key, compute(this));
       },
       set(value) {
-        own3(this, key, value);
+        own(this, key, value);
       }
     });
   }
@@ -5973,10 +2492,10 @@ function defineBound(proto, key, fn) {
   Object.defineProperty(proto, key, {
     configurable: true,
     get() {
-      return this == null ? fn : own3(this, key, fn.bind(this));
+      return this == null ? fn : own(this, key, fn.bind(this));
     },
     set(value) {
-      own3(this, key, value);
+      own(this, key, value);
     }
   });
 }
@@ -6147,7 +2666,7 @@ function _getMessage() {
 function _setMessage(value) {
   this._zod.message = value;
 }
-function node2(obj, key, make) {
+function node(obj, key, make) {
   if (!Object.prototype.hasOwnProperty.call(obj, key)) {
     if (key === "__proto__") {
       Object.defineProperty(obj, key, { value: make(), writable: true, enumerable: true, configurable: true });
@@ -6162,7 +2681,7 @@ function flattenError(error, mapper = (issue) => issue.message) {
   const formErrors = [];
   for (const sub of error.issues) {
     if (sub.path.length > 0) {
-      node2(fieldErrors, sub.path[0], () => []).push(mapper(sub));
+      node(fieldErrors, sub.path[0], () => []).push(mapper(sub));
     } else {
       formErrors.push(mapper(sub));
     }
@@ -7982,7 +4501,7 @@ function _ensureDefaultMemoizer() {
   if (!globalConfig.memoizer)
     config({ memoizer: memoizer() });
 }
-function string4(params) {
+function string2(params) {
   return _string(ZodString, params);
 }
 function number2(params) {
@@ -8115,15 +4634,7 @@ function refine(fn, _params = {}) {
 function superRefine(fn, params) {
   return _superRefine(fn, params);
 }
-var __defProp, __returnValue = (v) => v, __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, {
-      get: all[name],
-      enumerable: true,
-      configurable: true,
-      set: __exportSetter.bind(all, name)
-    });
-}, __esm2 = (fn, res, err) => () => {
+var __esm2 = (fn, res, err) => () => {
   if (fn)
     try {
       res = fn(fn = 0);
@@ -8133,20 +4644,10 @@ var __defProp, __returnValue = (v) => v, __export = (target, all) => {
   if (err)
     throw err[0];
   return res;
-}, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, LINEAR_ID, CANONICAL_SHA256, GIT_OBJECT_ID, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, SEVERITY_ORDER, init_core, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, TASK_BUDGET_LABELS, ASSIGNMENT_ENFORCEMENT_BOLD_RE, ASSIGNMENT_ENFORCEMENT_PLAIN_RE, COMPASS_ENFORCEMENT_RE, ASSIGNMENT_BODY_START_RE, ASSIGNMENT_HEADING_RE, ASSIGNMENT_FIELD_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, COMPOSITE_KINDS, RECOVERABLE_CODES, init_collaboration_operations, MilestoneError, OTHER_RETIRED_DISPOSITION_SQL, MILESTONE_TRANSITIONS, init_milestone_store, init_dist = () => {}, codesWarned, AssertionError, init_development, emptyOptions, init_lib, init_mdast_util_to_string, characterEntities, init_character_entities, own, init_decode_named_character_reference, codes, init_codes, constants, init_constants, types, init_types, values, init_values, init_default, init_dev, hasOwnProperty, init_micromark_util_combine_extensions, init_dev2, init_dev3, asciiAlpha, asciiAlphanumeric, asciiAtext, asciiDigit, asciiHexDigit, asciiPunctuation, unicodePunctuation, unicodeWhitespace, init_dev4, init_dev5, content, init_content, document, containerConstruct, init_document, init_dev6, attention, init_attention, autolink, init_autolink, blankLine, init_blank_line, blockQuote, init_block_quote, characterEscape, init_character_escape, characterReference, init_character_reference, nonLazyContinuation, init_partial_non_lazy_continuation, codeFenced, init_code_fenced, codeIndented, furtherStart, init_code_indented, codeText, init_code_text, init_splice_buffer, init_dev7, content2, continuationConstruct, init_content2, init_dev8, init_dev9, init_dev10, init_dev11, definition, titleBefore, init_definition, hardBreakEscape, init_hard_break_escape, headingAtx, init_heading_atx, htmlBlockNames, htmlRawNames, init_micromark_util_html_tag_name, htmlFlow, blankLineBefore, init_html_flow, htmlText, init_html_text, labelEnd, resourceConstruct, referenceFullConstruct, referenceCollapsedConstruct, init_label_end, labelStartImage, init_label_start_image, labelStartLink, init_label_start_link, lineEnding, init_line_ending, thematicBreak, init_thematic_break, list, listItemPrefixWhitespaceConstruct, indentConstruct, init_list, setextUnderline, init_setext_underline, init_dev12, flow, init_flow, resolver, string, text2, init_text, exports_constructs, document2, contentInitial, flowInitial, flow2, string2, text3, insideSpan, attentionMarkers, disable, init_constructs, debug, init_create_tokenizer, init_parse, init_postprocess, search, init_preprocess, init_dev13, characterEscapeOrReference, init_dev14, init_unist_util_stringify_position = () => {}, own2, init_lib2, init_dev15, init_unist_util_is = () => {}, empty, init_lib3, init_unist_util_visit_parents, init_lib4, init_mdast_util_find_and_replace, init_lib5, init_mdast_util_gfm_autolink_literal, init_lib6, init_mdast_util_gfm_footnote, init_lib7, init_mdast_util_gfm_strikethrough, init_lib8, init_mdast_util_gfm_table, init_lib9, init_mdast_util_gfm_task_list_item, init_lib10, init_mdast_util_gfm, wwwPrefix, domain, path, trail, emailDomainDotTrail, wwwAutolink, protocolAutolink, emailAutolink, text4, code, init_syntax, init_dev16, indent, init_syntax2, init_dev17, init_syntax3, init_dev18, init_infer, init_syntax4, init_dev19, tasklistCheck, init_syntax5, init_dev20, init_micromark_extension_gfm, ROADMAP_STATUSES, DATE_RE3, init_roadmap_content, PROVIDER_ISSUE_ID, SEVERITY_RANK, TERMINAL, init_collaboration_remote_read, ISSUE_MOVE_ROUTES, PROVIDER_ISSUE_ID2, MOVE_TRANSITIONS, MOVE_COLUMNS, CARRIED_ISSUE_COLUMNS, DOCUMENT_PHASE, init_cross_authority_move, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_RELATIONS, ISSUE_PROVENANCE_KINDS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL2, init_issue, SOURCE_SCHEMA_FLOOR, LIVE_SESSION_STATES, LEDGER_COLUMNS, init_collaboration_cutover, RCF3339, SHA256, GIT_OBJECT_ID2, LINEAR_ID2, UUID, CAPABILITY_KEYS, URL_TOKEN, HOME_PATH, URL_CREDENTIAL_KEY, EMBEDDED_PATH, CREDENTIAL_SHAPE, AUTHORIZATION_HEADER, CREDENTIAL_ASSIGNMENT, NEGATIVE_OUTCOME_CODES, CATALOG_KINDS, CATALOG_RELATIONS, MSTAR_FIELD_KEYS, OCCURRENCE_KEYS, TRANSITION_KEYS, TRANSITION_EVIDENCE_KEYS, IMPORTED_RECORD_FIELDS, IMPORTED_RECORD_KEYS, RELATION_KEYS, PROVENANCE_KEYS, PROJECT_MOVE_KEYS, ADOPTION_CAPTURE_KEYS, ADOPTION_RETAIN_KEYS, REMOTE_UNSETTLED_STATES, REMOTE_CHANGE_KINDS, REMOTE_INTENT_STATES, INTENT_STATES, SETTLED_CLAIM_KEYS, RECEIPT_OUTCOME_KINDS, RECONCILE_OUTCOME_KINDS, ISSUE_HISTORY_KEYS, init_collaboration_remote, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, CatalogError, init_catalog, DATE_RE4, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
+}, SEVERITY_ORDER, init_core, MSTARC_PLAN_DIR_KEY = "plan_dir", MSTARC_SDD_DIR_KEY = "sdd_dir", MSTARC_ITERATION_DIR_KEY = "iteration_dir", MSTARC_KNOWLEDGE_DIR_KEY = "knowledge_dir", MSTARC_SPECS_DIR_KEY = "specs_dir", MSTARC_ADR_DIR_KEY = "adr_dir", MSTARC_WORKFLOW_DIR_KEY = "workflow_dir", MSTARC_PROJECT_DIR_KEY = "project_dir", MSTARC_REVIEW_DIR_KEY = "review_dir", MSTARC_ENFORCEMENT_KEY = "enforcement", CONFIG_KEYS, LINEAR_MAPPING_FACETS, BOOLEAN_TRUE, BOOLEAN_FALSE, init_mstarc, DEFAULT_PROBE_TIMEOUT_MS = 1e4, init_git_probe = () => {}, AUTHORITY_REF = "refs/heads/mstar-collaboration-authority", CollaborationIdentityError, SAFE_SEGMENT, SAFE_REPO_ID, DEFAULT_PORT, SAFE_HOST, SELECTOR_ABSENT_RECOVERY, LINEAR_ID, CANONICAL_SHA256, GIT_OBJECT_ID, RESERVED_AUTHORITY_BASENAMES, init_collaboration_identity, CoordinationError, writeAuthorizations, PLAN_PROGRESS_STATUSES, SHA256_HEX, GIT_SHA, HASH_RE, init_coordination_write, AUDIT_PRIORITIES, AUDIT_EFFORTS, AUDIT_RISKS, AUDIT_CONFIDENCES, AUDIT_CATEGORIES, WHOLE_MATCH_PATTERNS, VALUE_PATTERNS, NEVER_COMMIT_FILENAMES, CI_IAC_LEAK_SHAPES, SAFE_PLACEHOLDER_SHAPES, SAFE_PLACEHOLDER_VALUES, ACTIONS_ENV_KEY, LOCKFILE_NAMES, AUDIT_FINGERPRINT_RE, AUDIT_SEVERITY_ORDER, DEFAULT_IGNORABLE_RE, LONE_SURROGATE_RE, init_audit, PLAN_OPERATION_SEMANTICS, WORKFLOW_OPERATION_SEMANTICS, init_recovery_intent, DocumentFrontmatterError, BARE_KEY, init_document_frontmatter, deliveryAnchorFlags, QC_ALIGNMENT_FIELDS, init_worktree, init_path_check, ROUND_TEXT_FIELDS, ASSIGNMENT_SCHEMA, BRIEF_SCHEMA, ACCEPTANCE_SCHEMA, ISO_DATETIME_RE, init_document_schema, REQUIRED_FIELDS, REVIEW_SEAT_ROLES, BUDGET_LABELS, RETURN_SHAPE_LABELS, ASSIGNMENT_FIELD_RE, ASSIGNMENT_POINTER_RE, init_dispatch, WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA, STATUS_V2_PAYLOAD_SCHEMA, init_persist_payload_schemas, DATE_RE, PLAN_STATUSES, RESIDUAL_DECISIONS, validateStatus, init_status, COMPASS_STATUSES, DATE_RE2, COMPLETENESS_ROOTS, GAP_CODE, init_iteration, ENTITY_KINDS, ROOT_KINDS, DOCUMENT_KINDS, LIFECYCLES, RELATIONS, ORDINARY_FILES, CatalogImportError, init_catalog_import, init_activation_provisioning, LEGACY_ISSUE_KIND = "review-obligation", StoreMigrationError, MIGRATION_VOCABULARY, LEGACY_REQUIRED_FIELDS, HISTORY_ONLY_ABSENT_FIELDS, init_store_migrate, StoreActivationError, EXECUTION_MIGRATION_VERSION, DECLINE_KEYS, EFFECT_KEYS, CONSUMER_KINDS, DISPOSITIONS, SESSION_STATES, CUTOVER_HANDLE_KINDS, init_store_activation, ExecutionError, KIND_KEY_LENGTHS, TOKEN_PREFIX = "exec-v1", STORE_UUID_RE, DECIMAL_RE, BASE64URL_RE, TOKEN_KEY_DECODER, ownedTransactions, OPERATION_ID_RE, EXECUTION_SESSION_STATES, init_execution_store, COMPOSITE_KINDS, RECOVERABLE_CODES, init_collaboration_operations, MilestoneError, OTHER_RETIRED_DISPOSITION_SQL, MILESTONE_TRANSITIONS, init_milestone_store, PROVIDER_ISSUE_ID, SEVERITY_RANK, TERMINAL, init_collaboration_remote_read, ISSUE_MOVE_ROUTES, PROVIDER_ISSUE_ID2, MOVE_TRANSITIONS, MOVE_COLUMNS, CARRIED_ISSUE_COLUMNS, DOCUMENT_PHASE, init_cross_authority_move, ISSUE_KINDS, ISSUE_SEVERITIES, TERMINAL_DISPOSITIONS, ISSUE_DISPOSITIONS, ISSUE_RELATIONS, ISSUE_PROVENANCE_KINDS, ISSUE_PAYLOAD_SCHEMAS, ISSUE_ACTIONS, ISSUE_ACTION_NAMES, IssueError, DISPOSITIONS2, ISSUE_KIND_MAP, ISSUE_SEVERITY_MAP, RELATIONS2, PROVENANCE_KINDS, TERMINAL2, init_issue, SOURCE_SCHEMA_FLOOR, LIVE_SESSION_STATES, LEDGER_COLUMNS, init_collaboration_cutover, RCF3339, SHA256, GIT_OBJECT_ID2, LINEAR_ID2, UUID, CAPABILITY_KEYS, URL_TOKEN, HOME_PATH, URL_CREDENTIAL_KEY, EMBEDDED_PATH, CREDENTIAL_SHAPE, AUTHORIZATION_HEADER, CREDENTIAL_ASSIGNMENT, NEGATIVE_OUTCOME_CODES, CATALOG_KINDS, CATALOG_RELATIONS, MSTAR_FIELD_KEYS, OCCURRENCE_KEYS, TRANSITION_KEYS, TRANSITION_EVIDENCE_KEYS, IMPORTED_RECORD_FIELDS, IMPORTED_RECORD_KEYS, RELATION_KEYS, PROVENANCE_KEYS, PROJECT_MOVE_KEYS, ADOPTION_CAPTURE_KEYS, ADOPTION_RETAIN_KEYS, REMOTE_UNSETTLED_STATES, REMOTE_CHANGE_KINDS, REMOTE_INTENT_STATES, INTENT_STATES, SETTLED_CLAIM_KEYS, RECEIPT_OUTCOME_KINDS, RECONCILE_OUTCOME_KINDS, ISSUE_HISTORY_KEYS, init_collaboration_remote, DOCUMENT_KIND_NAMES, ENTITY_KINDS2, ROOT_KINDS2, DOCUMENT_KINDS2, LIFECYCLES2, RELATIONS3, CatalogError, init_catalog, DATE_RE3, FindingsEvidenceError, BindingError, init_project, HarnessRootRetiredError, REVIEW_RUN_LEVELS, REVIEW_DATE_RE, SCAFFOLD_DIRS, ADR_BUCKETS, GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 # Tracked results live under .agents/ and .mstarc declares the layout.
 .mstar/
-`, GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) — legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-!.agents/adr/
-!.agents/adr/**
-`, GITIGNORE_PROCESS_ENTRIES, GITIGNORE_PROCESS_ENTRIES_AGENTS, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_HEADERS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, REMOTE_CACHE_RECOVERY, NO_JOURNAL_LANE, init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID3, UNFINISHED_GIT_OPERATIONS, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, MIGRATION_1_SQL = `
+`, GITIGNORE_PROCESS_ENTRIES, HARNESS_ROOT_DECLARATION, init_path, PlanPathError, PLAN_CONSULTED_KEYS, init_plan_path, WORKFLOW_SNAPSHOT_FILE = "snapshot.json", WORKFLOW_LIFECYCLE_STATUSES, WORKFLOW_TERMINAL_STATUSES, WORKFLOW_LIFECYCLE_TYPES, WORKFLOW_DELIVERY_KINDS, WORKFLOW_COMPOUND_OUTCOMES, DATE_PART, RFC3339_Z_RE, DATE_ONLY_RE, DELIVERY_COMMIT_RE, WorkflowSnapshotValidationError, init_workflow, IMPLEMENTED_OPERATIONS, OPERATION_NAMES, NON_COMPLETION_OPERATIONS, PROGRESS_TRANSITIONS, init_coordination_transitions, CatalogRegistrationError, ENTITY_KINDS3, ROOT_KINDS3, DOCUMENT_KINDS3, RELATIONS4, REMOTE_CACHE_RECOVERY, NO_JOURNAL_LANE, init_catalog_registration, MSTAR_REVIEW_V1_PAYLOAD_SCHEMA, init_qcreview_schema, PERSIST_PAYLOAD_CONTRACTS, EXECUTION_PIN_CONFLICT_CODE = "catalog.execution-pin-conflict", ExecutionPinConflictError, FROZEN_ROW_FIELDS, FROZEN_METADATA_FIELDS, GIT_OBJECT_ID3, UNFINISHED_GIT_OPERATIONS, GIT_READ_MAX_BUFFER, PLAN_PARALLELISM_VALUES, init_coordination, DEFAULT_BUSY_TIMEOUT_MS = 5000, StoreError, RUNTIME_GLOBAL, MAX_BUSY_TIMEOUT_MS = 2147483647, DATABASE_HEADER_BYTES = 100, SQLITE_FORMAT_MAGIC = "SQLite format 3\x00", WAL_FILE_FORMAT_VERSION = 2, MIGRATION_1_SQL = `
 create table store_meta(
   id integer primary key check (id = 1),
   store_id text not null,
@@ -9546,7 +6047,46 @@ alter table project_milestones add column effort_sessions integer check (
   (typeof(effort_sessions) = 'integer' and effort_sessions >= 1)
 );
 alter table project_milestones drop column target;
-`, COLLABORATION_MILESTONE_EFFORT_SCHEMA, COLLABORATION_MIGRATIONS, COLLABORATION_REMOTE_TABLES, COLLABORATION_OUTBOX_TABLES, COLLABORATION_TABLES, COLLABORATION_V1_COLUMNS, COLLABORATION_COLUMNS, COLLABORATION_V2_COLUMNS, COLLABORATION_OUTBOX_COLUMNS, COLLABORATION_MOVE_COLUMNS, COLLABORATION_ROUTE_COLUMNS, COLLABORATION_V3_COLUMNS, COLLABORATION_V4_COLUMNS, COLLABORATION_V5_ROUTE_COLUMNS, COLLABORATION_CURRENT_COLUMNS, COLLABORATION_KEY_LAYOUT_V2, COLLABORATION_KEY_LAYOUT_OUTBOX, COLLABORATION_KEY_LAYOUT, COLLABORATION_KEY_LAYOUT_MOVE, COLLABORATION_KEY_LAYOUT_ROUTE, COLLABORATION_KEY_LAYOUT_CURRENT, COLLABORATION_MOVE_TABLES, COLLABORATION_V3_TABLES, COLLABORATION_V2_TABLES, COLLABORATION_V1_TABLES, COLLABORATION_CUTOVER_TABLES, PASS_THROUGH_STORE_CODES, TRANSACTION_CONTROL_KEYWORDS, CARRIED_BINDING_COLUMNS, CARRIED_INTENT_COLUMNS, REMOTE_CACHE_REBUILD_ROUTE, SELECTOR_COMMIT, REMOTE_CACHE_RECOVERY_TABLES, RECOVERY_FORBIDDEN_FORM, RECOVERY_FORBIDDEN_REPLACE, init_collaboration_store, RoadmapError, init_roadmap_store, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]", POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+", COMMENT_SHAPES, POINTER_PATH_RE, URL_SPAN_RE, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
+`, COLLABORATION_MILESTONE_EFFORT_SCHEMA, COLLABORATION_ROADMAP_TABLE = "project_roadmaps", COLLABORATION_ROADMAP_REMOVAL_SQL = `
+pragma defer_foreign_keys = ON;
+drop table project_roadmaps;
+create table catalog_links_roadmap_stage as select * from catalog_links;
+create table project_milestones_roadmap_stage as select * from project_milestones;
+delete from catalog_links;
+delete from project_milestones;
+create table catalog_entities_roadmap_stage(
+  kind text not null check (kind in ('project','iteration','plan','document')),
+  id text not null,
+  title text not null,
+  description text,
+  root_kind text not null check (root_kind in ('repository','harness','plans','iterations','specs','knowledge','projects')),
+  relative_path text not null,
+  document_kind text check (document_kind in ('spec','knowledge','guide','compass','plan','review','other')),
+  lifecycle text not null default 'active' check (lifecycle in ('active','archived','superseded')),
+  revision integer not null default 1 check (revision > 0),
+  registered_at text not null,
+  updated_at text not null,
+  source_hash text,
+  primary key (kind, id),
+  check (document_kind is null or kind = 'document')
+);
+insert into catalog_entities_roadmap_stage(
+  kind, id, title, description, root_kind, relative_path, document_kind, lifecycle, revision, registered_at,
+  updated_at, source_hash
+)
+select kind, id, title, description, root_kind, relative_path,
+       case when document_kind = 'roadmap' then 'other' else document_kind end,
+       lifecycle, revision, registered_at, updated_at, source_hash
+from catalog_entities;
+drop table catalog_entities;
+alter table catalog_entities_roadmap_stage rename to catalog_entities;
+create unique index catalog_entities_location on catalog_entities(kind, root_kind, relative_path);
+create index catalog_entities_document_kind on catalog_entities(document_kind) where document_kind is not null;
+insert into catalog_links select * from catalog_links_roadmap_stage;
+insert into project_milestones select * from project_milestones_roadmap_stage;
+drop table catalog_links_roadmap_stage;
+drop table project_milestones_roadmap_stage;
+`, COLLABORATION_ROADMAP_REMOVAL_SCHEMA, COLLABORATION_MIGRATIONS, COLLABORATION_REMOTE_TABLES, COLLABORATION_OUTBOX_TABLES, COLLABORATION_TABLES, COLLABORATION_V1_COLUMNS, COLLABORATION_COLUMNS, COLLABORATION_V2_COLUMNS, COLLABORATION_OUTBOX_COLUMNS, COLLABORATION_MOVE_COLUMNS, COLLABORATION_ROUTE_COLUMNS, COLLABORATION_V3_COLUMNS, COLLABORATION_V4_COLUMNS, COLLABORATION_V5_ROUTE_COLUMNS, COLLABORATION_V6_COLUMNS, COLLABORATION_CURRENT_COLUMNS, COLLABORATION_KEY_LAYOUT_V2, COLLABORATION_KEY_LAYOUT_OUTBOX, COLLABORATION_KEY_LAYOUT, COLLABORATION_KEY_LAYOUT_MOVE, COLLABORATION_KEY_LAYOUT_ROUTE, COLLABORATION_KEY_LAYOUT_CURRENT, COLLABORATION_MOVE_TABLES, COLLABORATION_V6_TABLES, COLLABORATION_V3_TABLES, COLLABORATION_V2_TABLES, COLLABORATION_V1_TABLES, COLLABORATION_CUTOVER_TABLES, COLLABORATION_SOURCE_DROP_TABLES, PASS_THROUGH_STORE_CODES, TRANSACTION_CONTROL_KEYWORDS, CARRIED_BINDING_COLUMNS, CARRIED_INTENT_COLUMNS, REMOTE_CACHE_REBUILD_ROUTE, SELECTOR_COMMIT, REMOTE_CACHE_RECOVERY_TABLES, RECOVERY_FORBIDDEN_FORM, RECOVERY_FORBIDDEN_REPLACE, init_collaboration_store, GIT_CAPTURE_MAX_BYTES, MAX_STATUS_CONTENT_LENGTH, STORE_AUTHORITY_FILES, STORE_AUTHORITY_NAMES, KNOWLEDGE_BUG_PROBLEM_TYPES, KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES, KNOWLEDGE_PROBLEM_TYPES, WALK_SKIP_DIRS, REMOVAL_PATH_PATTERNS, TODO_TRACKING_PATTERNS, TODO_NON_OWNER_WORDS, POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]", POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+", COMMENT_SHAPES, POINTER_PATH_RE, URL_SPAN_RE, DATED_SLUG_TOKEN_SOURCE = "\\b20\\d{6}-[a-z0-9][a-z0-9-]*\\b(?!\\.\\d)", DATED_SLUG_TOKEN_RE, MERGE_CLASSES, MUST_FIX_FIRST = 45, MUST_FIX_EACH_ADDITIONAL = 15, SHOULD_FIX_FIRST = 12, SHOULD_FIX_STEP = 3, SHOULD_FIX_MIN = 2, MAY_FIX_FIRST = 6, MAY_FIX_STEP = 2, MAY_FIX_MIN = 1, MAY_FIX_CAP = 15, NIT_FIRST = 2, NIT_EACH_ADDITIONAL = 1, NIT_CAP = 8, PR_SCORE_SCHEDULE_HINT, TALLY_COUNT_KEYS, ENVELOPE_TALLY_COUNT_KEYS, PR_REVIEW_TIER_BUDGETS, PR_REVIEW_NUDGE_CADENCE, EFFORT_ENUM_RE, RISK_ENUM_RE, CONFIDENCE_ENUM_RE, MERGE_CLASS_ENUM_RE, fsStoreInstances, UNPARSEABLE_JSON, SESSION_DECODER, ISSUE_KIND_MAP2, ISSUE_SEVERITY_MAP2, ISSUE_DISPOSITION_MAP, ISSUE_LAST_ACTIVITY_SQL = `(select max(ts) from (
   select issues.registered_at as ts
   union all select o.discovered_at from occurrences o where o.issue_id = issues.id
   union all select t.occurred_at from issue_transitions t where t.issue_id = issues.id
@@ -10122,9 +6662,11 @@ alter table project_milestones drop column target;
       return this.issues.length === 0;
     }
   });
-}, ZodRealError, parse3, parseAsync, safeParse, safeParseAsync, encode, decode2, encodeAsync, decodeAsync, safeEncode, safeDecode, safeEncodeAsync, safeDecodeAsync, ZodType, _ZodString, ZodString, ZodStringFormat, ZodISODateTime, ZodISODate, ZodISOTime, ZodISODuration, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodNumber, ZodNumberFormat, ZodBoolean, ZodUnknown, ZodNever, ZodArray, ZodObject, ZodUnion, ZodIntersection, ZodEnum, ZodLiteral, ZodTransform, ZodOptional, ZodExactOptional, ZodNullable, ZodDefault, ZodPrefault, ZodNonOptional, ZodCatch, ZodPipe, ZodReadonly, ZodCustom, gitObjectId, providerId2, rfc3339, sha256Digest, issueRef, providerScope, providerIssueIdentity, scopeCapabilities, scopeOutcome2, scopeCheck2, mstarSubjectFields, occurrenceRecord, closureEvidence, importedRecordSpellings, importedRecord2, transitionRecord, relationRecord, provenanceKinds2, provenanceRecord2, projectMoveRecord, subjectHistory, issueSubject, portableSubject, remoteIssue2, milestoneDocument, roadmapDocument, catalogEntityDocument, catalogLinkDocument, projectDocument, remoteSnapshot, frozenEvent2, remoteBindDocumentSchema, remoteObserveDocumentSchema, remoteAdoptionDocumentSchema, confirmedOutcome, unconfirmedOutcome, conflictOutcome, notSentOutcome, receiptEnvelopeFields, remoteReceiptDocumentSchema, remoteReconcileDocumentSchema, remoteResolutionDocumentSchema, remoteForkObservationDocumentSchema, moveHandoffDocumentSchema, DISPOSITIONS3, KINDS, SEVERITIES, AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)", CREDENTIAL, AUTH_VALUE, DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`, DIGEST_VALUE, DIGEST_BARE, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, EXECUTION_MIGRATION_VERSION2, EXECUTION_COVERAGE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, EXECUTION_INTENTS_MIGRATION_VERSION;
+}, ZodRealError, parse2, parseAsync, safeParse, safeParseAsync, encode, decode, encodeAsync, decodeAsync, safeEncode, safeDecode, safeEncodeAsync, safeDecodeAsync, ZodType, _ZodString, ZodString, ZodStringFormat, ZodISODateTime, ZodISODate, ZodISOTime, ZodISODuration, ZodEmail, ZodGUID, ZodUUID, ZodURL, ZodEmoji, ZodNanoID, ZodCUID, ZodCUID2, ZodULID, ZodXID, ZodKSUID, ZodIPv4, ZodIPv6, ZodCIDRv4, ZodCIDRv6, ZodBase64, ZodBase64URL, ZodE164, ZodJWT, ZodNumber, ZodNumberFormat, ZodBoolean, ZodUnknown, ZodNever, ZodArray, ZodObject, ZodUnion, ZodIntersection, ZodEnum, ZodLiteral, ZodTransform, ZodOptional, ZodExactOptional, ZodNullable, ZodDefault, ZodPrefault, ZodNonOptional, ZodCatch, ZodPipe, ZodReadonly, ZodCustom, gitObjectId, providerId2, rfc3339, sha256Digest, issueRef, providerScope, providerIssueIdentity, scopeCapabilities, scopeOutcome2, scopeCheck2, mstarSubjectFields, occurrenceRecord, closureEvidence, importedRecordSpellings, importedRecord2, transitionRecord, relationRecord, provenanceKinds2, provenanceRecord2, projectMoveRecord, subjectHistory, issueSubject, portableSubject, remoteIssue2, milestoneDocument, catalogEntityDocument, catalogLinkDocument, projectDocument, remoteSnapshot, frozenEvent2, remoteBindDocumentSchema, remoteObserveDocumentSchema, remoteAdoptionDocumentSchema, confirmedOutcome, unconfirmedOutcome, conflictOutcome, notSentOutcome, receiptEnvelopeFields, remoteReceiptDocumentSchema, remoteReconcileDocumentSchema, remoteResolutionDocumentSchema, remoteForkObservationDocumentSchema, moveHandoffDocumentSchema, POINTER = "mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", ISSUE_LINE, ISSUE_POINTER, HAS_ISSUE_POINTER, ISSUE_REF, LANE_REFUSAL_CODES, DISPOSITIONS3, KINDS, SEVERITIES, AUTH_SCHEME = "(?:Bearer|Basic|Token|Digest)", CREDENTIAL, AUTH_VALUE, DIGEST_PARAM = `[A-Za-z][\\w-]*\\s*=\\s*(?:"[^"]*"|'[^']*'|[^\\s,]+)`, DIGEST_VALUE, DIGEST_BARE, NOTE_KEYS, NOTE_KEY_ORDER, MARKER_KEYS, MARKER_KEY_ORDER, DROPPED_KEYS, DROPPED_KEY_ORDER, EXECUTION_MIGRATION_VERSION2, EXECUTION_COVERAGE_MIGRATION_VERSION, DSH_MIGRATION_VERSION, EXECUTION_COORDINATOR_ONLY_MIGRATION_VERSION, DSH_LEGACY_PROVENANCE_MIGRATION_VERSION, EXECUTION_INTENTS_MIGRATION_VERSION;
 var init_engine = __esm(() => {
-  __defProp = Object.defineProperty;
+  init_core = __esm2(() => {
+    SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+  });
   init_mstarc = __esm2(() => {
     CONFIG_KEYS = {
       [MSTARC_PLAN_DIR_KEY]: "planDir",
@@ -10159,6 +6701,7 @@ var init_engine = __esm(() => {
     SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
     DEFAULT_PORT = { "https:": "443", "http:": "80", "ssh:": "22" };
     SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
+    SELECTOR_ABSENT_RECOVERY = `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin, then re-run; this checkout keeps the observation ` + `it recorded, so a mode change alone does not clear the fence and the reviewed and observe verbs cannot bind a ref ` + `the origin does not publish`;
     LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
     GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
@@ -10299,8 +6842,22 @@ var init_engine = __esm(() => {
       "compass-ref": ["workflowId", "operation.kind", "operation.compassPath", "operation.reason"]
     };
   });
-  init_core = __esm2(() => {
-    SEVERITY_ORDER = ["critical", "high", "medium", "low", "nit"];
+  init_document_frontmatter = __esm2(() => {
+    DocumentFrontmatterError = class DocumentFrontmatterError extends Error {
+      source;
+      line;
+      lineText;
+      fix;
+      constructor(source, line, lineText, reason, fix) {
+        super(`${source}:${line}: ${reason}: ${JSON.stringify(lineText)} (fix: ${fix})`);
+        this.name = "DocumentFrontmatterError";
+        this.source = source;
+        this.line = line;
+        this.lineText = lineText;
+        this.fix = fix;
+      }
+    };
+    BARE_KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/;
   });
   init_worktree = __esm2(() => {
     init_git_probe();
@@ -10322,26 +6879,109 @@ var init_engine = __esm(() => {
     init_git_probe();
     init_worktree();
   });
+  init_document_schema = __esm2(() => {
+    init_document_frontmatter();
+    init_dispatch();
+    init_workflow();
+    ROUND_TEXT_FIELDS = { task_budget: true, budget: true, return_shape: true };
+    ASSIGNMENT_SCHEMA = {
+      kind: "assignment",
+      required: [
+        { name: "execute_as" },
+        { name: "delegation" },
+        { name: "task_category" },
+        { name: "budget", requiredWhen: isReviewOrAuditRound },
+        { name: "return_shape", requiredWhen: isReviewOrAuditRound },
+        { name: "task_budget", requiredWhen: (values) => !isReviewOrAuditRound(values) }
+      ],
+      optional: [
+        { name: "execution_mode" },
+        { name: "sdd_implementer_session" },
+        { name: "sdd_dir" },
+        { name: "sdd_context_file" },
+        { name: "skill_presets" },
+        { name: "qc_mode" },
+        { name: "review_package_path" },
+        { name: "qc_report_path" },
+        { name: "who_runs_this_turn" },
+        { name: "primary" },
+        { name: "dev_routing" },
+        { name: "parallelism" },
+        { name: "additional_gates" },
+        { name: "phase_gate_checklist" },
+        { name: "working_branch" },
+        { name: "branch_policy" },
+        { name: "control_harness_root" },
+        { name: "review_cwd" },
+        { name: "review_range" },
+        { name: "diff_basis" },
+        { name: "worktree_path" },
+        { name: "write_domain", enum: ["control", "work"] },
+        { name: "control_write_paths", type: "list" },
+        { name: "main_worktree_branch" },
+        { name: "acceptance_gate" },
+        { name: "acceptance_gate_reason" },
+        { name: "findings_cleanup" },
+        { name: "why_this_agent" },
+        { name: "pm_task_board_coverage" },
+        { name: "roadmap_deferred_scope" },
+        { name: "task" },
+        { name: "inputs" },
+        { name: "severity_bar" },
+        { name: "input_provenance" },
+        { name: "deliverables" },
+        { name: "acceptance_criteria" },
+        { name: "evidence_required" },
+        { name: "constraints" },
+        { name: "effort" },
+        { name: "plan_scope" },
+        { name: "checkpoint_comment_rule" },
+        { name: "why_batching_is_safe" },
+        { name: "scope" },
+        { name: "orchestration_guard" },
+        { name: "plan_path" },
+        { name: "report_format" },
+        { name: "execution_evidence" },
+        { name: "enforcement", enum: ["hard"] },
+        { name: "plan_id" },
+        { name: "iteration_id" },
+        { name: "workflow_id" }
+      ]
+    };
+    BRIEF_SCHEMA = {
+      kind: "sdd-brief",
+      required: [{ name: "plan_id" }, { name: "task", type: "integer" }],
+      optional: [{ name: "files", type: "list" }]
+    };
+    ACCEPTANCE_SCHEMA = {
+      kind: "pm-acceptance",
+      required: [
+        { name: "plan_id" },
+        { name: "gate", enum: ["pm-acceptance"] },
+        { name: "verdict", enum: ["Approve", "Approve with residuals", "Request Changes", "Needs Discussion"] },
+        { name: "generated_at", type: "iso-datetime" }
+      ],
+      optional: []
+    };
+    ISO_DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+  });
   init_dispatch = __esm2(() => {
     init_path();
     init_path_check();
     init_worktree();
     init_core();
+    init_document_frontmatter();
+    init_document_schema();
     REQUIRED_FIELDS = [
-      { key: "executeAs", label: "Execute as", code: "execute-as" },
-      { key: "delegation", label: "Delegation", code: "delegation" },
-      { key: "taskCategory", label: "Task category", code: "task-category" }
+      { key: "executeAs", label: "execute_as", code: "execute-as" },
+      { key: "delegation", label: "delegation", code: "delegation" },
+      { key: "taskCategory", label: "task_category", code: "task-category" }
     ];
     REVIEW_SEAT_ROLES = ["qc-specialist", "qc-specialist-2", "qc-specialist-3", "code-reviewer"];
     BUDGET_LABELS = ["Budget (review / QC seats)", "Budget"];
     RETURN_SHAPE_LABELS = ["Return shape (review / QC seats)", "Return shape"];
-    TASK_BUDGET_LABELS = ["Task budget (implement / ops rounds)", "Task budget"];
-    ASSIGNMENT_ENFORCEMENT_BOLD_RE = /^[ \t]*(?:[-*][ \t]+)?\*\*\s*Enforcement\s*\*\*\s*:\s*(.*)$/m;
-    ASSIGNMENT_ENFORCEMENT_PLAIN_RE = /^[ \t]*(?:[-*][ \t]+)?Enforcement\s*:\s*(.*)$/m;
-    COMPASS_ENFORCEMENT_RE = /^enforcement\s*:\s*(.*)$/m;
-    ASSIGNMENT_BODY_START_RE = /^(?:#{1,6}[ \t]+Task\b|-{3,}[ \t]*$|#[ \t])/m;
-    ASSIGNMENT_HEADING_RE = /^#{1,6}\s+Assignment\s*$/m;
-    ASSIGNMENT_FIELD_RE = /^[ \t]*(?:[-*][ \t]+)?\*{0,2}(Execute as|Delegation|Task category)\*{0,2}[ \t]*:[ \t]*(\S.*)$/gm;
+    ASSIGNMENT_FIELD_RE = /^[ \t]*["']?(?:execute_as|delegation|task_category)["']?\s*:/m;
+    ASSIGNMENT_POINTER_RE = /^[ \t]*Assignment file:[ \t]*(\S[^\r\n]*?)[ \t]*$/;
   });
   init_persist_payload_schemas = __esm2(() => {
     WORKFLOW_SNAPSHOT_PAYLOAD_SCHEMA = {
@@ -10364,6 +7004,7 @@ var init_engine = __esm(() => {
     init_core();
     init_path();
     init_coordination_write();
+    init_document_frontmatter();
     init_dispatch();
     init_issue();
     init_mstarc();
@@ -10375,6 +7016,7 @@ var init_engine = __esm(() => {
     validateStatus = validateStatusV2;
   });
   init_iteration = __esm2(() => {
+    init_document_frontmatter();
     init_catalog();
     init_store_db();
     init_collaboration_store();
@@ -10414,7 +7056,6 @@ var init_engine = __esm(() => {
       guide: true,
       compass: true,
       plan: true,
-      roadmap: true,
       review: true,
       other: true
     };
@@ -10611,3285 +7252,13 @@ var init_engine = __esm(() => {
     OTHER_RETIRED_DISPOSITION_SQL = TERMINAL_DISPOSITIONS.filter((value) => value !== "resolved").map((value) => `'${value}'`).join(",");
     MILESTONE_TRANSITIONS = { planned: ["planned", "active", "dropped"], active: ["active", "planned", "delivered", "dropped"], delivered: ["delivered", "active"], dropped: ["dropped", "active"] };
   });
-  init_development = __esm2(() => {
-    init_dist();
-    codesWarned = new Set;
-    AssertionError = class AssertionError extends Error {
-      name = "Assertion";
-      code = "ERR_ASSERTION";
-      constructor(message, actual, expected, operator, generated) {
-        super(message);
-        if (Error.captureStackTrace) {
-          Error.captureStackTrace(this, this.constructor);
-        }
-        this.actual = actual;
-        this.expected = expected;
-        this.generated = generated;
-        this.operator = operator;
-      }
-    };
-  });
-  init_lib = __esm2(() => {
-    emptyOptions = {};
-  });
-  init_mdast_util_to_string = __esm2(() => {
-    init_lib();
-  });
-  init_character_entities = __esm2(() => {
-    characterEntities = {
-      AElig: "Æ",
-      AMP: "&",
-      Aacute: "Á",
-      Abreve: "Ă",
-      Acirc: "Â",
-      Acy: "А",
-      Afr: "\uD835\uDD04",
-      Agrave: "À",
-      Alpha: "Α",
-      Amacr: "Ā",
-      And: "⩓",
-      Aogon: "Ą",
-      Aopf: "\uD835\uDD38",
-      ApplyFunction: "⁡",
-      Aring: "Å",
-      Ascr: "\uD835\uDC9C",
-      Assign: "≔",
-      Atilde: "Ã",
-      Auml: "Ä",
-      Backslash: "∖",
-      Barv: "⫧",
-      Barwed: "⌆",
-      Bcy: "Б",
-      Because: "∵",
-      Bernoullis: "ℬ",
-      Beta: "Β",
-      Bfr: "\uD835\uDD05",
-      Bopf: "\uD835\uDD39",
-      Breve: "˘",
-      Bscr: "ℬ",
-      Bumpeq: "≎",
-      CHcy: "Ч",
-      COPY: "©",
-      Cacute: "Ć",
-      Cap: "⋒",
-      CapitalDifferentialD: "ⅅ",
-      Cayleys: "ℭ",
-      Ccaron: "Č",
-      Ccedil: "Ç",
-      Ccirc: "Ĉ",
-      Cconint: "∰",
-      Cdot: "Ċ",
-      Cedilla: "¸",
-      CenterDot: "·",
-      Cfr: "ℭ",
-      Chi: "Χ",
-      CircleDot: "⊙",
-      CircleMinus: "⊖",
-      CirclePlus: "⊕",
-      CircleTimes: "⊗",
-      ClockwiseContourIntegral: "∲",
-      CloseCurlyDoubleQuote: "”",
-      CloseCurlyQuote: "’",
-      Colon: "∷",
-      Colone: "⩴",
-      Congruent: "≡",
-      Conint: "∯",
-      ContourIntegral: "∮",
-      Copf: "ℂ",
-      Coproduct: "∐",
-      CounterClockwiseContourIntegral: "∳",
-      Cross: "⨯",
-      Cscr: "\uD835\uDC9E",
-      Cup: "⋓",
-      CupCap: "≍",
-      DD: "ⅅ",
-      DDotrahd: "⤑",
-      DJcy: "Ђ",
-      DScy: "Ѕ",
-      DZcy: "Џ",
-      Dagger: "‡",
-      Darr: "↡",
-      Dashv: "⫤",
-      Dcaron: "Ď",
-      Dcy: "Д",
-      Del: "∇",
-      Delta: "Δ",
-      Dfr: "\uD835\uDD07",
-      DiacriticalAcute: "´",
-      DiacriticalDot: "˙",
-      DiacriticalDoubleAcute: "˝",
-      DiacriticalGrave: "`",
-      DiacriticalTilde: "˜",
-      Diamond: "⋄",
-      DifferentialD: "ⅆ",
-      Dopf: "\uD835\uDD3B",
-      Dot: "¨",
-      DotDot: "⃜",
-      DotEqual: "≐",
-      DoubleContourIntegral: "∯",
-      DoubleDot: "¨",
-      DoubleDownArrow: "⇓",
-      DoubleLeftArrow: "⇐",
-      DoubleLeftRightArrow: "⇔",
-      DoubleLeftTee: "⫤",
-      DoubleLongLeftArrow: "⟸",
-      DoubleLongLeftRightArrow: "⟺",
-      DoubleLongRightArrow: "⟹",
-      DoubleRightArrow: "⇒",
-      DoubleRightTee: "⊨",
-      DoubleUpArrow: "⇑",
-      DoubleUpDownArrow: "⇕",
-      DoubleVerticalBar: "∥",
-      DownArrow: "↓",
-      DownArrowBar: "⤓",
-      DownArrowUpArrow: "⇵",
-      DownBreve: "̑",
-      DownLeftRightVector: "⥐",
-      DownLeftTeeVector: "⥞",
-      DownLeftVector: "↽",
-      DownLeftVectorBar: "⥖",
-      DownRightTeeVector: "⥟",
-      DownRightVector: "⇁",
-      DownRightVectorBar: "⥗",
-      DownTee: "⊤",
-      DownTeeArrow: "↧",
-      Downarrow: "⇓",
-      Dscr: "\uD835\uDC9F",
-      Dstrok: "Đ",
-      ENG: "Ŋ",
-      ETH: "Ð",
-      Eacute: "É",
-      Ecaron: "Ě",
-      Ecirc: "Ê",
-      Ecy: "Э",
-      Edot: "Ė",
-      Efr: "\uD835\uDD08",
-      Egrave: "È",
-      Element: "∈",
-      Emacr: "Ē",
-      EmptySmallSquare: "◻",
-      EmptyVerySmallSquare: "▫",
-      Eogon: "Ę",
-      Eopf: "\uD835\uDD3C",
-      Epsilon: "Ε",
-      Equal: "⩵",
-      EqualTilde: "≂",
-      Equilibrium: "⇌",
-      Escr: "ℰ",
-      Esim: "⩳",
-      Eta: "Η",
-      Euml: "Ë",
-      Exists: "∃",
-      ExponentialE: "ⅇ",
-      Fcy: "Ф",
-      Ffr: "\uD835\uDD09",
-      FilledSmallSquare: "◼",
-      FilledVerySmallSquare: "▪",
-      Fopf: "\uD835\uDD3D",
-      ForAll: "∀",
-      Fouriertrf: "ℱ",
-      Fscr: "ℱ",
-      GJcy: "Ѓ",
-      GT: ">",
-      Gamma: "Γ",
-      Gammad: "Ϝ",
-      Gbreve: "Ğ",
-      Gcedil: "Ģ",
-      Gcirc: "Ĝ",
-      Gcy: "Г",
-      Gdot: "Ġ",
-      Gfr: "\uD835\uDD0A",
-      Gg: "⋙",
-      Gopf: "\uD835\uDD3E",
-      GreaterEqual: "≥",
-      GreaterEqualLess: "⋛",
-      GreaterFullEqual: "≧",
-      GreaterGreater: "⪢",
-      GreaterLess: "≷",
-      GreaterSlantEqual: "⩾",
-      GreaterTilde: "≳",
-      Gscr: "\uD835\uDCA2",
-      Gt: "≫",
-      HARDcy: "Ъ",
-      Hacek: "ˇ",
-      Hat: "^",
-      Hcirc: "Ĥ",
-      Hfr: "ℌ",
-      HilbertSpace: "ℋ",
-      Hopf: "ℍ",
-      HorizontalLine: "─",
-      Hscr: "ℋ",
-      Hstrok: "Ħ",
-      HumpDownHump: "≎",
-      HumpEqual: "≏",
-      IEcy: "Е",
-      IJlig: "Ĳ",
-      IOcy: "Ё",
-      Iacute: "Í",
-      Icirc: "Î",
-      Icy: "И",
-      Idot: "İ",
-      Ifr: "ℑ",
-      Igrave: "Ì",
-      Im: "ℑ",
-      Imacr: "Ī",
-      ImaginaryI: "ⅈ",
-      Implies: "⇒",
-      Int: "∬",
-      Integral: "∫",
-      Intersection: "⋂",
-      InvisibleComma: "⁣",
-      InvisibleTimes: "⁢",
-      Iogon: "Į",
-      Iopf: "\uD835\uDD40",
-      Iota: "Ι",
-      Iscr: "ℐ",
-      Itilde: "Ĩ",
-      Iukcy: "І",
-      Iuml: "Ï",
-      Jcirc: "Ĵ",
-      Jcy: "Й",
-      Jfr: "\uD835\uDD0D",
-      Jopf: "\uD835\uDD41",
-      Jscr: "\uD835\uDCA5",
-      Jsercy: "Ј",
-      Jukcy: "Є",
-      KHcy: "Х",
-      KJcy: "Ќ",
-      Kappa: "Κ",
-      Kcedil: "Ķ",
-      Kcy: "К",
-      Kfr: "\uD835\uDD0E",
-      Kopf: "\uD835\uDD42",
-      Kscr: "\uD835\uDCA6",
-      LJcy: "Љ",
-      LT: "<",
-      Lacute: "Ĺ",
-      Lambda: "Λ",
-      Lang: "⟪",
-      Laplacetrf: "ℒ",
-      Larr: "↞",
-      Lcaron: "Ľ",
-      Lcedil: "Ļ",
-      Lcy: "Л",
-      LeftAngleBracket: "⟨",
-      LeftArrow: "←",
-      LeftArrowBar: "⇤",
-      LeftArrowRightArrow: "⇆",
-      LeftCeiling: "⌈",
-      LeftDoubleBracket: "⟦",
-      LeftDownTeeVector: "⥡",
-      LeftDownVector: "⇃",
-      LeftDownVectorBar: "⥙",
-      LeftFloor: "⌊",
-      LeftRightArrow: "↔",
-      LeftRightVector: "⥎",
-      LeftTee: "⊣",
-      LeftTeeArrow: "↤",
-      LeftTeeVector: "⥚",
-      LeftTriangle: "⊲",
-      LeftTriangleBar: "⧏",
-      LeftTriangleEqual: "⊴",
-      LeftUpDownVector: "⥑",
-      LeftUpTeeVector: "⥠",
-      LeftUpVector: "↿",
-      LeftUpVectorBar: "⥘",
-      LeftVector: "↼",
-      LeftVectorBar: "⥒",
-      Leftarrow: "⇐",
-      Leftrightarrow: "⇔",
-      LessEqualGreater: "⋚",
-      LessFullEqual: "≦",
-      LessGreater: "≶",
-      LessLess: "⪡",
-      LessSlantEqual: "⩽",
-      LessTilde: "≲",
-      Lfr: "\uD835\uDD0F",
-      Ll: "⋘",
-      Lleftarrow: "⇚",
-      Lmidot: "Ŀ",
-      LongLeftArrow: "⟵",
-      LongLeftRightArrow: "⟷",
-      LongRightArrow: "⟶",
-      Longleftarrow: "⟸",
-      Longleftrightarrow: "⟺",
-      Longrightarrow: "⟹",
-      Lopf: "\uD835\uDD43",
-      LowerLeftArrow: "↙",
-      LowerRightArrow: "↘",
-      Lscr: "ℒ",
-      Lsh: "↰",
-      Lstrok: "Ł",
-      Lt: "≪",
-      Map: "⤅",
-      Mcy: "М",
-      MediumSpace: " ",
-      Mellintrf: "ℳ",
-      Mfr: "\uD835\uDD10",
-      MinusPlus: "∓",
-      Mopf: "\uD835\uDD44",
-      Mscr: "ℳ",
-      Mu: "Μ",
-      NJcy: "Њ",
-      Nacute: "Ń",
-      Ncaron: "Ň",
-      Ncedil: "Ņ",
-      Ncy: "Н",
-      NegativeMediumSpace: "​",
-      NegativeThickSpace: "​",
-      NegativeThinSpace: "​",
-      NegativeVeryThinSpace: "​",
-      NestedGreaterGreater: "≫",
-      NestedLessLess: "≪",
-      NewLine: `
-`,
-      Nfr: "\uD835\uDD11",
-      NoBreak: "⁠",
-      NonBreakingSpace: " ",
-      Nopf: "ℕ",
-      Not: "⫬",
-      NotCongruent: "≢",
-      NotCupCap: "≭",
-      NotDoubleVerticalBar: "∦",
-      NotElement: "∉",
-      NotEqual: "≠",
-      NotEqualTilde: "≂̸",
-      NotExists: "∄",
-      NotGreater: "≯",
-      NotGreaterEqual: "≱",
-      NotGreaterFullEqual: "≧̸",
-      NotGreaterGreater: "≫̸",
-      NotGreaterLess: "≹",
-      NotGreaterSlantEqual: "⩾̸",
-      NotGreaterTilde: "≵",
-      NotHumpDownHump: "≎̸",
-      NotHumpEqual: "≏̸",
-      NotLeftTriangle: "⋪",
-      NotLeftTriangleBar: "⧏̸",
-      NotLeftTriangleEqual: "⋬",
-      NotLess: "≮",
-      NotLessEqual: "≰",
-      NotLessGreater: "≸",
-      NotLessLess: "≪̸",
-      NotLessSlantEqual: "⩽̸",
-      NotLessTilde: "≴",
-      NotNestedGreaterGreater: "⪢̸",
-      NotNestedLessLess: "⪡̸",
-      NotPrecedes: "⊀",
-      NotPrecedesEqual: "⪯̸",
-      NotPrecedesSlantEqual: "⋠",
-      NotReverseElement: "∌",
-      NotRightTriangle: "⋫",
-      NotRightTriangleBar: "⧐̸",
-      NotRightTriangleEqual: "⋭",
-      NotSquareSubset: "⊏̸",
-      NotSquareSubsetEqual: "⋢",
-      NotSquareSuperset: "⊐̸",
-      NotSquareSupersetEqual: "⋣",
-      NotSubset: "⊂⃒",
-      NotSubsetEqual: "⊈",
-      NotSucceeds: "⊁",
-      NotSucceedsEqual: "⪰̸",
-      NotSucceedsSlantEqual: "⋡",
-      NotSucceedsTilde: "≿̸",
-      NotSuperset: "⊃⃒",
-      NotSupersetEqual: "⊉",
-      NotTilde: "≁",
-      NotTildeEqual: "≄",
-      NotTildeFullEqual: "≇",
-      NotTildeTilde: "≉",
-      NotVerticalBar: "∤",
-      Nscr: "\uD835\uDCA9",
-      Ntilde: "Ñ",
-      Nu: "Ν",
-      OElig: "Œ",
-      Oacute: "Ó",
-      Ocirc: "Ô",
-      Ocy: "О",
-      Odblac: "Ő",
-      Ofr: "\uD835\uDD12",
-      Ograve: "Ò",
-      Omacr: "Ō",
-      Omega: "Ω",
-      Omicron: "Ο",
-      Oopf: "\uD835\uDD46",
-      OpenCurlyDoubleQuote: "“",
-      OpenCurlyQuote: "‘",
-      Or: "⩔",
-      Oscr: "\uD835\uDCAA",
-      Oslash: "Ø",
-      Otilde: "Õ",
-      Otimes: "⨷",
-      Ouml: "Ö",
-      OverBar: "‾",
-      OverBrace: "⏞",
-      OverBracket: "⎴",
-      OverParenthesis: "⏜",
-      PartialD: "∂",
-      Pcy: "П",
-      Pfr: "\uD835\uDD13",
-      Phi: "Φ",
-      Pi: "Π",
-      PlusMinus: "±",
-      Poincareplane: "ℌ",
-      Popf: "ℙ",
-      Pr: "⪻",
-      Precedes: "≺",
-      PrecedesEqual: "⪯",
-      PrecedesSlantEqual: "≼",
-      PrecedesTilde: "≾",
-      Prime: "″",
-      Product: "∏",
-      Proportion: "∷",
-      Proportional: "∝",
-      Pscr: "\uD835\uDCAB",
-      Psi: "Ψ",
-      QUOT: '"',
-      Qfr: "\uD835\uDD14",
-      Qopf: "ℚ",
-      Qscr: "\uD835\uDCAC",
-      RBarr: "⤐",
-      REG: "®",
-      Racute: "Ŕ",
-      Rang: "⟫",
-      Rarr: "↠",
-      Rarrtl: "⤖",
-      Rcaron: "Ř",
-      Rcedil: "Ŗ",
-      Rcy: "Р",
-      Re: "ℜ",
-      ReverseElement: "∋",
-      ReverseEquilibrium: "⇋",
-      ReverseUpEquilibrium: "⥯",
-      Rfr: "ℜ",
-      Rho: "Ρ",
-      RightAngleBracket: "⟩",
-      RightArrow: "→",
-      RightArrowBar: "⇥",
-      RightArrowLeftArrow: "⇄",
-      RightCeiling: "⌉",
-      RightDoubleBracket: "⟧",
-      RightDownTeeVector: "⥝",
-      RightDownVector: "⇂",
-      RightDownVectorBar: "⥕",
-      RightFloor: "⌋",
-      RightTee: "⊢",
-      RightTeeArrow: "↦",
-      RightTeeVector: "⥛",
-      RightTriangle: "⊳",
-      RightTriangleBar: "⧐",
-      RightTriangleEqual: "⊵",
-      RightUpDownVector: "⥏",
-      RightUpTeeVector: "⥜",
-      RightUpVector: "↾",
-      RightUpVectorBar: "⥔",
-      RightVector: "⇀",
-      RightVectorBar: "⥓",
-      Rightarrow: "⇒",
-      Ropf: "ℝ",
-      RoundImplies: "⥰",
-      Rrightarrow: "⇛",
-      Rscr: "ℛ",
-      Rsh: "↱",
-      RuleDelayed: "⧴",
-      SHCHcy: "Щ",
-      SHcy: "Ш",
-      SOFTcy: "Ь",
-      Sacute: "Ś",
-      Sc: "⪼",
-      Scaron: "Š",
-      Scedil: "Ş",
-      Scirc: "Ŝ",
-      Scy: "С",
-      Sfr: "\uD835\uDD16",
-      ShortDownArrow: "↓",
-      ShortLeftArrow: "←",
-      ShortRightArrow: "→",
-      ShortUpArrow: "↑",
-      Sigma: "Σ",
-      SmallCircle: "∘",
-      Sopf: "\uD835\uDD4A",
-      Sqrt: "√",
-      Square: "□",
-      SquareIntersection: "⊓",
-      SquareSubset: "⊏",
-      SquareSubsetEqual: "⊑",
-      SquareSuperset: "⊐",
-      SquareSupersetEqual: "⊒",
-      SquareUnion: "⊔",
-      Sscr: "\uD835\uDCAE",
-      Star: "⋆",
-      Sub: "⋐",
-      Subset: "⋐",
-      SubsetEqual: "⊆",
-      Succeeds: "≻",
-      SucceedsEqual: "⪰",
-      SucceedsSlantEqual: "≽",
-      SucceedsTilde: "≿",
-      SuchThat: "∋",
-      Sum: "∑",
-      Sup: "⋑",
-      Superset: "⊃",
-      SupersetEqual: "⊇",
-      Supset: "⋑",
-      THORN: "Þ",
-      TRADE: "™",
-      TSHcy: "Ћ",
-      TScy: "Ц",
-      Tab: "\t",
-      Tau: "Τ",
-      Tcaron: "Ť",
-      Tcedil: "Ţ",
-      Tcy: "Т",
-      Tfr: "\uD835\uDD17",
-      Therefore: "∴",
-      Theta: "Θ",
-      ThickSpace: "  ",
-      ThinSpace: " ",
-      Tilde: "∼",
-      TildeEqual: "≃",
-      TildeFullEqual: "≅",
-      TildeTilde: "≈",
-      Topf: "\uD835\uDD4B",
-      TripleDot: "⃛",
-      Tscr: "\uD835\uDCAF",
-      Tstrok: "Ŧ",
-      Uacute: "Ú",
-      Uarr: "↟",
-      Uarrocir: "⥉",
-      Ubrcy: "Ў",
-      Ubreve: "Ŭ",
-      Ucirc: "Û",
-      Ucy: "У",
-      Udblac: "Ű",
-      Ufr: "\uD835\uDD18",
-      Ugrave: "Ù",
-      Umacr: "Ū",
-      UnderBar: "_",
-      UnderBrace: "⏟",
-      UnderBracket: "⎵",
-      UnderParenthesis: "⏝",
-      Union: "⋃",
-      UnionPlus: "⊎",
-      Uogon: "Ų",
-      Uopf: "\uD835\uDD4C",
-      UpArrow: "↑",
-      UpArrowBar: "⤒",
-      UpArrowDownArrow: "⇅",
-      UpDownArrow: "↕",
-      UpEquilibrium: "⥮",
-      UpTee: "⊥",
-      UpTeeArrow: "↥",
-      Uparrow: "⇑",
-      Updownarrow: "⇕",
-      UpperLeftArrow: "↖",
-      UpperRightArrow: "↗",
-      Upsi: "ϒ",
-      Upsilon: "Υ",
-      Uring: "Ů",
-      Uscr: "\uD835\uDCB0",
-      Utilde: "Ũ",
-      Uuml: "Ü",
-      VDash: "⊫",
-      Vbar: "⫫",
-      Vcy: "В",
-      Vdash: "⊩",
-      Vdashl: "⫦",
-      Vee: "⋁",
-      Verbar: "‖",
-      Vert: "‖",
-      VerticalBar: "∣",
-      VerticalLine: "|",
-      VerticalSeparator: "❘",
-      VerticalTilde: "≀",
-      VeryThinSpace: " ",
-      Vfr: "\uD835\uDD19",
-      Vopf: "\uD835\uDD4D",
-      Vscr: "\uD835\uDCB1",
-      Vvdash: "⊪",
-      Wcirc: "Ŵ",
-      Wedge: "⋀",
-      Wfr: "\uD835\uDD1A",
-      Wopf: "\uD835\uDD4E",
-      Wscr: "\uD835\uDCB2",
-      Xfr: "\uD835\uDD1B",
-      Xi: "Ξ",
-      Xopf: "\uD835\uDD4F",
-      Xscr: "\uD835\uDCB3",
-      YAcy: "Я",
-      YIcy: "Ї",
-      YUcy: "Ю",
-      Yacute: "Ý",
-      Ycirc: "Ŷ",
-      Ycy: "Ы",
-      Yfr: "\uD835\uDD1C",
-      Yopf: "\uD835\uDD50",
-      Yscr: "\uD835\uDCB4",
-      Yuml: "Ÿ",
-      ZHcy: "Ж",
-      Zacute: "Ź",
-      Zcaron: "Ž",
-      Zcy: "З",
-      Zdot: "Ż",
-      ZeroWidthSpace: "​",
-      Zeta: "Ζ",
-      Zfr: "ℨ",
-      Zopf: "ℤ",
-      Zscr: "\uD835\uDCB5",
-      aacute: "á",
-      abreve: "ă",
-      ac: "∾",
-      acE: "∾̳",
-      acd: "∿",
-      acirc: "â",
-      acute: "´",
-      acy: "а",
-      aelig: "æ",
-      af: "⁡",
-      afr: "\uD835\uDD1E",
-      agrave: "à",
-      alefsym: "ℵ",
-      aleph: "ℵ",
-      alpha: "α",
-      amacr: "ā",
-      amalg: "⨿",
-      amp: "&",
-      and: "∧",
-      andand: "⩕",
-      andd: "⩜",
-      andslope: "⩘",
-      andv: "⩚",
-      ang: "∠",
-      ange: "⦤",
-      angle: "∠",
-      angmsd: "∡",
-      angmsdaa: "⦨",
-      angmsdab: "⦩",
-      angmsdac: "⦪",
-      angmsdad: "⦫",
-      angmsdae: "⦬",
-      angmsdaf: "⦭",
-      angmsdag: "⦮",
-      angmsdah: "⦯",
-      angrt: "∟",
-      angrtvb: "⊾",
-      angrtvbd: "⦝",
-      angsph: "∢",
-      angst: "Å",
-      angzarr: "⍼",
-      aogon: "ą",
-      aopf: "\uD835\uDD52",
-      ap: "≈",
-      apE: "⩰",
-      apacir: "⩯",
-      ape: "≊",
-      apid: "≋",
-      apos: "'",
-      approx: "≈",
-      approxeq: "≊",
-      aring: "å",
-      ascr: "\uD835\uDCB6",
-      ast: "*",
-      asymp: "≈",
-      asympeq: "≍",
-      atilde: "ã",
-      auml: "ä",
-      awconint: "∳",
-      awint: "⨑",
-      bNot: "⫭",
-      backcong: "≌",
-      backepsilon: "϶",
-      backprime: "‵",
-      backsim: "∽",
-      backsimeq: "⋍",
-      barvee: "⊽",
-      barwed: "⌅",
-      barwedge: "⌅",
-      bbrk: "⎵",
-      bbrktbrk: "⎶",
-      bcong: "≌",
-      bcy: "б",
-      bdquo: "„",
-      becaus: "∵",
-      because: "∵",
-      bemptyv: "⦰",
-      bepsi: "϶",
-      bernou: "ℬ",
-      beta: "β",
-      beth: "ℶ",
-      between: "≬",
-      bfr: "\uD835\uDD1F",
-      bigcap: "⋂",
-      bigcirc: "◯",
-      bigcup: "⋃",
-      bigodot: "⨀",
-      bigoplus: "⨁",
-      bigotimes: "⨂",
-      bigsqcup: "⨆",
-      bigstar: "★",
-      bigtriangledown: "▽",
-      bigtriangleup: "△",
-      biguplus: "⨄",
-      bigvee: "⋁",
-      bigwedge: "⋀",
-      bkarow: "⤍",
-      blacklozenge: "⧫",
-      blacksquare: "▪",
-      blacktriangle: "▴",
-      blacktriangledown: "▾",
-      blacktriangleleft: "◂",
-      blacktriangleright: "▸",
-      blank: "␣",
-      blk12: "▒",
-      blk14: "░",
-      blk34: "▓",
-      block: "█",
-      bne: "=⃥",
-      bnequiv: "≡⃥",
-      bnot: "⌐",
-      bopf: "\uD835\uDD53",
-      bot: "⊥",
-      bottom: "⊥",
-      bowtie: "⋈",
-      boxDL: "╗",
-      boxDR: "╔",
-      boxDl: "╖",
-      boxDr: "╓",
-      boxH: "═",
-      boxHD: "╦",
-      boxHU: "╩",
-      boxHd: "╤",
-      boxHu: "╧",
-      boxUL: "╝",
-      boxUR: "╚",
-      boxUl: "╜",
-      boxUr: "╙",
-      boxV: "║",
-      boxVH: "╬",
-      boxVL: "╣",
-      boxVR: "╠",
-      boxVh: "╫",
-      boxVl: "╢",
-      boxVr: "╟",
-      boxbox: "⧉",
-      boxdL: "╕",
-      boxdR: "╒",
-      boxdl: "┐",
-      boxdr: "┌",
-      boxh: "─",
-      boxhD: "╥",
-      boxhU: "╨",
-      boxhd: "┬",
-      boxhu: "┴",
-      boxminus: "⊟",
-      boxplus: "⊞",
-      boxtimes: "⊠",
-      boxuL: "╛",
-      boxuR: "╘",
-      boxul: "┘",
-      boxur: "└",
-      boxv: "│",
-      boxvH: "╪",
-      boxvL: "╡",
-      boxvR: "╞",
-      boxvh: "┼",
-      boxvl: "┤",
-      boxvr: "├",
-      bprime: "‵",
-      breve: "˘",
-      brvbar: "¦",
-      bscr: "\uD835\uDCB7",
-      bsemi: "⁏",
-      bsim: "∽",
-      bsime: "⋍",
-      bsol: "\\",
-      bsolb: "⧅",
-      bsolhsub: "⟈",
-      bull: "•",
-      bullet: "•",
-      bump: "≎",
-      bumpE: "⪮",
-      bumpe: "≏",
-      bumpeq: "≏",
-      cacute: "ć",
-      cap: "∩",
-      capand: "⩄",
-      capbrcup: "⩉",
-      capcap: "⩋",
-      capcup: "⩇",
-      capdot: "⩀",
-      caps: "∩︀",
-      caret: "⁁",
-      caron: "ˇ",
-      ccaps: "⩍",
-      ccaron: "č",
-      ccedil: "ç",
-      ccirc: "ĉ",
-      ccups: "⩌",
-      ccupssm: "⩐",
-      cdot: "ċ",
-      cedil: "¸",
-      cemptyv: "⦲",
-      cent: "¢",
-      centerdot: "·",
-      cfr: "\uD835\uDD20",
-      chcy: "ч",
-      check: "✓",
-      checkmark: "✓",
-      chi: "χ",
-      cir: "○",
-      cirE: "⧃",
-      circ: "ˆ",
-      circeq: "≗",
-      circlearrowleft: "↺",
-      circlearrowright: "↻",
-      circledR: "®",
-      circledS: "Ⓢ",
-      circledast: "⊛",
-      circledcirc: "⊚",
-      circleddash: "⊝",
-      cire: "≗",
-      cirfnint: "⨐",
-      cirmid: "⫯",
-      cirscir: "⧂",
-      clubs: "♣",
-      clubsuit: "♣",
-      colon: ":",
-      colone: "≔",
-      coloneq: "≔",
-      comma: ",",
-      commat: "@",
-      comp: "∁",
-      compfn: "∘",
-      complement: "∁",
-      complexes: "ℂ",
-      cong: "≅",
-      congdot: "⩭",
-      conint: "∮",
-      copf: "\uD835\uDD54",
-      coprod: "∐",
-      copy: "©",
-      copysr: "℗",
-      crarr: "↵",
-      cross: "✗",
-      cscr: "\uD835\uDCB8",
-      csub: "⫏",
-      csube: "⫑",
-      csup: "⫐",
-      csupe: "⫒",
-      ctdot: "⋯",
-      cudarrl: "⤸",
-      cudarrr: "⤵",
-      cuepr: "⋞",
-      cuesc: "⋟",
-      cularr: "↶",
-      cularrp: "⤽",
-      cup: "∪",
-      cupbrcap: "⩈",
-      cupcap: "⩆",
-      cupcup: "⩊",
-      cupdot: "⊍",
-      cupor: "⩅",
-      cups: "∪︀",
-      curarr: "↷",
-      curarrm: "⤼",
-      curlyeqprec: "⋞",
-      curlyeqsucc: "⋟",
-      curlyvee: "⋎",
-      curlywedge: "⋏",
-      curren: "¤",
-      curvearrowleft: "↶",
-      curvearrowright: "↷",
-      cuvee: "⋎",
-      cuwed: "⋏",
-      cwconint: "∲",
-      cwint: "∱",
-      cylcty: "⌭",
-      dArr: "⇓",
-      dHar: "⥥",
-      dagger: "†",
-      daleth: "ℸ",
-      darr: "↓",
-      dash: "‐",
-      dashv: "⊣",
-      dbkarow: "⤏",
-      dblac: "˝",
-      dcaron: "ď",
-      dcy: "д",
-      dd: "ⅆ",
-      ddagger: "‡",
-      ddarr: "⇊",
-      ddotseq: "⩷",
-      deg: "°",
-      delta: "δ",
-      demptyv: "⦱",
-      dfisht: "⥿",
-      dfr: "\uD835\uDD21",
-      dharl: "⇃",
-      dharr: "⇂",
-      diam: "⋄",
-      diamond: "⋄",
-      diamondsuit: "♦",
-      diams: "♦",
-      die: "¨",
-      digamma: "ϝ",
-      disin: "⋲",
-      div: "÷",
-      divide: "÷",
-      divideontimes: "⋇",
-      divonx: "⋇",
-      djcy: "ђ",
-      dlcorn: "⌞",
-      dlcrop: "⌍",
-      dollar: "$",
-      dopf: "\uD835\uDD55",
-      dot: "˙",
-      doteq: "≐",
-      doteqdot: "≑",
-      dotminus: "∸",
-      dotplus: "∔",
-      dotsquare: "⊡",
-      doublebarwedge: "⌆",
-      downarrow: "↓",
-      downdownarrows: "⇊",
-      downharpoonleft: "⇃",
-      downharpoonright: "⇂",
-      drbkarow: "⤐",
-      drcorn: "⌟",
-      drcrop: "⌌",
-      dscr: "\uD835\uDCB9",
-      dscy: "ѕ",
-      dsol: "⧶",
-      dstrok: "đ",
-      dtdot: "⋱",
-      dtri: "▿",
-      dtrif: "▾",
-      duarr: "⇵",
-      duhar: "⥯",
-      dwangle: "⦦",
-      dzcy: "џ",
-      dzigrarr: "⟿",
-      eDDot: "⩷",
-      eDot: "≑",
-      eacute: "é",
-      easter: "⩮",
-      ecaron: "ě",
-      ecir: "≖",
-      ecirc: "ê",
-      ecolon: "≕",
-      ecy: "э",
-      edot: "ė",
-      ee: "ⅇ",
-      efDot: "≒",
-      efr: "\uD835\uDD22",
-      eg: "⪚",
-      egrave: "è",
-      egs: "⪖",
-      egsdot: "⪘",
-      el: "⪙",
-      elinters: "⏧",
-      ell: "ℓ",
-      els: "⪕",
-      elsdot: "⪗",
-      emacr: "ē",
-      empty: "∅",
-      emptyset: "∅",
-      emptyv: "∅",
-      emsp13: " ",
-      emsp14: " ",
-      emsp: " ",
-      eng: "ŋ",
-      ensp: " ",
-      eogon: "ę",
-      eopf: "\uD835\uDD56",
-      epar: "⋕",
-      eparsl: "⧣",
-      eplus: "⩱",
-      epsi: "ε",
-      epsilon: "ε",
-      epsiv: "ϵ",
-      eqcirc: "≖",
-      eqcolon: "≕",
-      eqsim: "≂",
-      eqslantgtr: "⪖",
-      eqslantless: "⪕",
-      equals: "=",
-      equest: "≟",
-      equiv: "≡",
-      equivDD: "⩸",
-      eqvparsl: "⧥",
-      erDot: "≓",
-      erarr: "⥱",
-      escr: "ℯ",
-      esdot: "≐",
-      esim: "≂",
-      eta: "η",
-      eth: "ð",
-      euml: "ë",
-      euro: "€",
-      excl: "!",
-      exist: "∃",
-      expectation: "ℰ",
-      exponentiale: "ⅇ",
-      fallingdotseq: "≒",
-      fcy: "ф",
-      female: "♀",
-      ffilig: "ﬃ",
-      fflig: "ﬀ",
-      ffllig: "ﬄ",
-      ffr: "\uD835\uDD23",
-      filig: "ﬁ",
-      fjlig: "fj",
-      flat: "♭",
-      fllig: "ﬂ",
-      fltns: "▱",
-      fnof: "ƒ",
-      fopf: "\uD835\uDD57",
-      forall: "∀",
-      fork: "⋔",
-      forkv: "⫙",
-      fpartint: "⨍",
-      frac12: "½",
-      frac13: "⅓",
-      frac14: "¼",
-      frac15: "⅕",
-      frac16: "⅙",
-      frac18: "⅛",
-      frac23: "⅔",
-      frac25: "⅖",
-      frac34: "¾",
-      frac35: "⅗",
-      frac38: "⅜",
-      frac45: "⅘",
-      frac56: "⅚",
-      frac58: "⅝",
-      frac78: "⅞",
-      frasl: "⁄",
-      frown: "⌢",
-      fscr: "\uD835\uDCBB",
-      gE: "≧",
-      gEl: "⪌",
-      gacute: "ǵ",
-      gamma: "γ",
-      gammad: "ϝ",
-      gap: "⪆",
-      gbreve: "ğ",
-      gcirc: "ĝ",
-      gcy: "г",
-      gdot: "ġ",
-      ge: "≥",
-      gel: "⋛",
-      geq: "≥",
-      geqq: "≧",
-      geqslant: "⩾",
-      ges: "⩾",
-      gescc: "⪩",
-      gesdot: "⪀",
-      gesdoto: "⪂",
-      gesdotol: "⪄",
-      gesl: "⋛︀",
-      gesles: "⪔",
-      gfr: "\uD835\uDD24",
-      gg: "≫",
-      ggg: "⋙",
-      gimel: "ℷ",
-      gjcy: "ѓ",
-      gl: "≷",
-      glE: "⪒",
-      gla: "⪥",
-      glj: "⪤",
-      gnE: "≩",
-      gnap: "⪊",
-      gnapprox: "⪊",
-      gne: "⪈",
-      gneq: "⪈",
-      gneqq: "≩",
-      gnsim: "⋧",
-      gopf: "\uD835\uDD58",
-      grave: "`",
-      gscr: "ℊ",
-      gsim: "≳",
-      gsime: "⪎",
-      gsiml: "⪐",
-      gt: ">",
-      gtcc: "⪧",
-      gtcir: "⩺",
-      gtdot: "⋗",
-      gtlPar: "⦕",
-      gtquest: "⩼",
-      gtrapprox: "⪆",
-      gtrarr: "⥸",
-      gtrdot: "⋗",
-      gtreqless: "⋛",
-      gtreqqless: "⪌",
-      gtrless: "≷",
-      gtrsim: "≳",
-      gvertneqq: "≩︀",
-      gvnE: "≩︀",
-      hArr: "⇔",
-      hairsp: " ",
-      half: "½",
-      hamilt: "ℋ",
-      hardcy: "ъ",
-      harr: "↔",
-      harrcir: "⥈",
-      harrw: "↭",
-      hbar: "ℏ",
-      hcirc: "ĥ",
-      hearts: "♥",
-      heartsuit: "♥",
-      hellip: "…",
-      hercon: "⊹",
-      hfr: "\uD835\uDD25",
-      hksearow: "⤥",
-      hkswarow: "⤦",
-      hoarr: "⇿",
-      homtht: "∻",
-      hookleftarrow: "↩",
-      hookrightarrow: "↪",
-      hopf: "\uD835\uDD59",
-      horbar: "―",
-      hscr: "\uD835\uDCBD",
-      hslash: "ℏ",
-      hstrok: "ħ",
-      hybull: "⁃",
-      hyphen: "‐",
-      iacute: "í",
-      ic: "⁣",
-      icirc: "î",
-      icy: "и",
-      iecy: "е",
-      iexcl: "¡",
-      iff: "⇔",
-      ifr: "\uD835\uDD26",
-      igrave: "ì",
-      ii: "ⅈ",
-      iiiint: "⨌",
-      iiint: "∭",
-      iinfin: "⧜",
-      iiota: "℩",
-      ijlig: "ĳ",
-      imacr: "ī",
-      image: "ℑ",
-      imagline: "ℐ",
-      imagpart: "ℑ",
-      imath: "ı",
-      imof: "⊷",
-      imped: "Ƶ",
-      in: "∈",
-      incare: "℅",
-      infin: "∞",
-      infintie: "⧝",
-      inodot: "ı",
-      int: "∫",
-      intcal: "⊺",
-      integers: "ℤ",
-      intercal: "⊺",
-      intlarhk: "⨗",
-      intprod: "⨼",
-      iocy: "ё",
-      iogon: "į",
-      iopf: "\uD835\uDD5A",
-      iota: "ι",
-      iprod: "⨼",
-      iquest: "¿",
-      iscr: "\uD835\uDCBE",
-      isin: "∈",
-      isinE: "⋹",
-      isindot: "⋵",
-      isins: "⋴",
-      isinsv: "⋳",
-      isinv: "∈",
-      it: "⁢",
-      itilde: "ĩ",
-      iukcy: "і",
-      iuml: "ï",
-      jcirc: "ĵ",
-      jcy: "й",
-      jfr: "\uD835\uDD27",
-      jmath: "ȷ",
-      jopf: "\uD835\uDD5B",
-      jscr: "\uD835\uDCBF",
-      jsercy: "ј",
-      jukcy: "є",
-      kappa: "κ",
-      kappav: "ϰ",
-      kcedil: "ķ",
-      kcy: "к",
-      kfr: "\uD835\uDD28",
-      kgreen: "ĸ",
-      khcy: "х",
-      kjcy: "ќ",
-      kopf: "\uD835\uDD5C",
-      kscr: "\uD835\uDCC0",
-      lAarr: "⇚",
-      lArr: "⇐",
-      lAtail: "⤛",
-      lBarr: "⤎",
-      lE: "≦",
-      lEg: "⪋",
-      lHar: "⥢",
-      lacute: "ĺ",
-      laemptyv: "⦴",
-      lagran: "ℒ",
-      lambda: "λ",
-      lang: "⟨",
-      langd: "⦑",
-      langle: "⟨",
-      lap: "⪅",
-      laquo: "«",
-      larr: "←",
-      larrb: "⇤",
-      larrbfs: "⤟",
-      larrfs: "⤝",
-      larrhk: "↩",
-      larrlp: "↫",
-      larrpl: "⤹",
-      larrsim: "⥳",
-      larrtl: "↢",
-      lat: "⪫",
-      latail: "⤙",
-      late: "⪭",
-      lates: "⪭︀",
-      lbarr: "⤌",
-      lbbrk: "❲",
-      lbrace: "{",
-      lbrack: "[",
-      lbrke: "⦋",
-      lbrksld: "⦏",
-      lbrkslu: "⦍",
-      lcaron: "ľ",
-      lcedil: "ļ",
-      lceil: "⌈",
-      lcub: "{",
-      lcy: "л",
-      ldca: "⤶",
-      ldquo: "“",
-      ldquor: "„",
-      ldrdhar: "⥧",
-      ldrushar: "⥋",
-      ldsh: "↲",
-      le: "≤",
-      leftarrow: "←",
-      leftarrowtail: "↢",
-      leftharpoondown: "↽",
-      leftharpoonup: "↼",
-      leftleftarrows: "⇇",
-      leftrightarrow: "↔",
-      leftrightarrows: "⇆",
-      leftrightharpoons: "⇋",
-      leftrightsquigarrow: "↭",
-      leftthreetimes: "⋋",
-      leg: "⋚",
-      leq: "≤",
-      leqq: "≦",
-      leqslant: "⩽",
-      les: "⩽",
-      lescc: "⪨",
-      lesdot: "⩿",
-      lesdoto: "⪁",
-      lesdotor: "⪃",
-      lesg: "⋚︀",
-      lesges: "⪓",
-      lessapprox: "⪅",
-      lessdot: "⋖",
-      lesseqgtr: "⋚",
-      lesseqqgtr: "⪋",
-      lessgtr: "≶",
-      lesssim: "≲",
-      lfisht: "⥼",
-      lfloor: "⌊",
-      lfr: "\uD835\uDD29",
-      lg: "≶",
-      lgE: "⪑",
-      lhard: "↽",
-      lharu: "↼",
-      lharul: "⥪",
-      lhblk: "▄",
-      ljcy: "љ",
-      ll: "≪",
-      llarr: "⇇",
-      llcorner: "⌞",
-      llhard: "⥫",
-      lltri: "◺",
-      lmidot: "ŀ",
-      lmoust: "⎰",
-      lmoustache: "⎰",
-      lnE: "≨",
-      lnap: "⪉",
-      lnapprox: "⪉",
-      lne: "⪇",
-      lneq: "⪇",
-      lneqq: "≨",
-      lnsim: "⋦",
-      loang: "⟬",
-      loarr: "⇽",
-      lobrk: "⟦",
-      longleftarrow: "⟵",
-      longleftrightarrow: "⟷",
-      longmapsto: "⟼",
-      longrightarrow: "⟶",
-      looparrowleft: "↫",
-      looparrowright: "↬",
-      lopar: "⦅",
-      lopf: "\uD835\uDD5D",
-      loplus: "⨭",
-      lotimes: "⨴",
-      lowast: "∗",
-      lowbar: "_",
-      loz: "◊",
-      lozenge: "◊",
-      lozf: "⧫",
-      lpar: "(",
-      lparlt: "⦓",
-      lrarr: "⇆",
-      lrcorner: "⌟",
-      lrhar: "⇋",
-      lrhard: "⥭",
-      lrm: "‎",
-      lrtri: "⊿",
-      lsaquo: "‹",
-      lscr: "\uD835\uDCC1",
-      lsh: "↰",
-      lsim: "≲",
-      lsime: "⪍",
-      lsimg: "⪏",
-      lsqb: "[",
-      lsquo: "‘",
-      lsquor: "‚",
-      lstrok: "ł",
-      lt: "<",
-      ltcc: "⪦",
-      ltcir: "⩹",
-      ltdot: "⋖",
-      lthree: "⋋",
-      ltimes: "⋉",
-      ltlarr: "⥶",
-      ltquest: "⩻",
-      ltrPar: "⦖",
-      ltri: "◃",
-      ltrie: "⊴",
-      ltrif: "◂",
-      lurdshar: "⥊",
-      luruhar: "⥦",
-      lvertneqq: "≨︀",
-      lvnE: "≨︀",
-      mDDot: "∺",
-      macr: "¯",
-      male: "♂",
-      malt: "✠",
-      maltese: "✠",
-      map: "↦",
-      mapsto: "↦",
-      mapstodown: "↧",
-      mapstoleft: "↤",
-      mapstoup: "↥",
-      marker: "▮",
-      mcomma: "⨩",
-      mcy: "м",
-      mdash: "—",
-      measuredangle: "∡",
-      mfr: "\uD835\uDD2A",
-      mho: "℧",
-      micro: "µ",
-      mid: "∣",
-      midast: "*",
-      midcir: "⫰",
-      middot: "·",
-      minus: "−",
-      minusb: "⊟",
-      minusd: "∸",
-      minusdu: "⨪",
-      mlcp: "⫛",
-      mldr: "…",
-      mnplus: "∓",
-      models: "⊧",
-      mopf: "\uD835\uDD5E",
-      mp: "∓",
-      mscr: "\uD835\uDCC2",
-      mstpos: "∾",
-      mu: "μ",
-      multimap: "⊸",
-      mumap: "⊸",
-      nGg: "⋙̸",
-      nGt: "≫⃒",
-      nGtv: "≫̸",
-      nLeftarrow: "⇍",
-      nLeftrightarrow: "⇎",
-      nLl: "⋘̸",
-      nLt: "≪⃒",
-      nLtv: "≪̸",
-      nRightarrow: "⇏",
-      nVDash: "⊯",
-      nVdash: "⊮",
-      nabla: "∇",
-      nacute: "ń",
-      nang: "∠⃒",
-      nap: "≉",
-      napE: "⩰̸",
-      napid: "≋̸",
-      napos: "ŉ",
-      napprox: "≉",
-      natur: "♮",
-      natural: "♮",
-      naturals: "ℕ",
-      nbsp: " ",
-      nbump: "≎̸",
-      nbumpe: "≏̸",
-      ncap: "⩃",
-      ncaron: "ň",
-      ncedil: "ņ",
-      ncong: "≇",
-      ncongdot: "⩭̸",
-      ncup: "⩂",
-      ncy: "н",
-      ndash: "–",
-      ne: "≠",
-      neArr: "⇗",
-      nearhk: "⤤",
-      nearr: "↗",
-      nearrow: "↗",
-      nedot: "≐̸",
-      nequiv: "≢",
-      nesear: "⤨",
-      nesim: "≂̸",
-      nexist: "∄",
-      nexists: "∄",
-      nfr: "\uD835\uDD2B",
-      ngE: "≧̸",
-      nge: "≱",
-      ngeq: "≱",
-      ngeqq: "≧̸",
-      ngeqslant: "⩾̸",
-      nges: "⩾̸",
-      ngsim: "≵",
-      ngt: "≯",
-      ngtr: "≯",
-      nhArr: "⇎",
-      nharr: "↮",
-      nhpar: "⫲",
-      ni: "∋",
-      nis: "⋼",
-      nisd: "⋺",
-      niv: "∋",
-      njcy: "њ",
-      nlArr: "⇍",
-      nlE: "≦̸",
-      nlarr: "↚",
-      nldr: "‥",
-      nle: "≰",
-      nleftarrow: "↚",
-      nleftrightarrow: "↮",
-      nleq: "≰",
-      nleqq: "≦̸",
-      nleqslant: "⩽̸",
-      nles: "⩽̸",
-      nless: "≮",
-      nlsim: "≴",
-      nlt: "≮",
-      nltri: "⋪",
-      nltrie: "⋬",
-      nmid: "∤",
-      nopf: "\uD835\uDD5F",
-      not: "¬",
-      notin: "∉",
-      notinE: "⋹̸",
-      notindot: "⋵̸",
-      notinva: "∉",
-      notinvb: "⋷",
-      notinvc: "⋶",
-      notni: "∌",
-      notniva: "∌",
-      notnivb: "⋾",
-      notnivc: "⋽",
-      npar: "∦",
-      nparallel: "∦",
-      nparsl: "⫽⃥",
-      npart: "∂̸",
-      npolint: "⨔",
-      npr: "⊀",
-      nprcue: "⋠",
-      npre: "⪯̸",
-      nprec: "⊀",
-      npreceq: "⪯̸",
-      nrArr: "⇏",
-      nrarr: "↛",
-      nrarrc: "⤳̸",
-      nrarrw: "↝̸",
-      nrightarrow: "↛",
-      nrtri: "⋫",
-      nrtrie: "⋭",
-      nsc: "⊁",
-      nsccue: "⋡",
-      nsce: "⪰̸",
-      nscr: "\uD835\uDCC3",
-      nshortmid: "∤",
-      nshortparallel: "∦",
-      nsim: "≁",
-      nsime: "≄",
-      nsimeq: "≄",
-      nsmid: "∤",
-      nspar: "∦",
-      nsqsube: "⋢",
-      nsqsupe: "⋣",
-      nsub: "⊄",
-      nsubE: "⫅̸",
-      nsube: "⊈",
-      nsubset: "⊂⃒",
-      nsubseteq: "⊈",
-      nsubseteqq: "⫅̸",
-      nsucc: "⊁",
-      nsucceq: "⪰̸",
-      nsup: "⊅",
-      nsupE: "⫆̸",
-      nsupe: "⊉",
-      nsupset: "⊃⃒",
-      nsupseteq: "⊉",
-      nsupseteqq: "⫆̸",
-      ntgl: "≹",
-      ntilde: "ñ",
-      ntlg: "≸",
-      ntriangleleft: "⋪",
-      ntrianglelefteq: "⋬",
-      ntriangleright: "⋫",
-      ntrianglerighteq: "⋭",
-      nu: "ν",
-      num: "#",
-      numero: "№",
-      numsp: " ",
-      nvDash: "⊭",
-      nvHarr: "⤄",
-      nvap: "≍⃒",
-      nvdash: "⊬",
-      nvge: "≥⃒",
-      nvgt: ">⃒",
-      nvinfin: "⧞",
-      nvlArr: "⤂",
-      nvle: "≤⃒",
-      nvlt: "<⃒",
-      nvltrie: "⊴⃒",
-      nvrArr: "⤃",
-      nvrtrie: "⊵⃒",
-      nvsim: "∼⃒",
-      nwArr: "⇖",
-      nwarhk: "⤣",
-      nwarr: "↖",
-      nwarrow: "↖",
-      nwnear: "⤧",
-      oS: "Ⓢ",
-      oacute: "ó",
-      oast: "⊛",
-      ocir: "⊚",
-      ocirc: "ô",
-      ocy: "о",
-      odash: "⊝",
-      odblac: "ő",
-      odiv: "⨸",
-      odot: "⊙",
-      odsold: "⦼",
-      oelig: "œ",
-      ofcir: "⦿",
-      ofr: "\uD835\uDD2C",
-      ogon: "˛",
-      ograve: "ò",
-      ogt: "⧁",
-      ohbar: "⦵",
-      ohm: "Ω",
-      oint: "∮",
-      olarr: "↺",
-      olcir: "⦾",
-      olcross: "⦻",
-      oline: "‾",
-      olt: "⧀",
-      omacr: "ō",
-      omega: "ω",
-      omicron: "ο",
-      omid: "⦶",
-      ominus: "⊖",
-      oopf: "\uD835\uDD60",
-      opar: "⦷",
-      operp: "⦹",
-      oplus: "⊕",
-      or: "∨",
-      orarr: "↻",
-      ord: "⩝",
-      order: "ℴ",
-      orderof: "ℴ",
-      ordf: "ª",
-      ordm: "º",
-      origof: "⊶",
-      oror: "⩖",
-      orslope: "⩗",
-      orv: "⩛",
-      oscr: "ℴ",
-      oslash: "ø",
-      osol: "⊘",
-      otilde: "õ",
-      otimes: "⊗",
-      otimesas: "⨶",
-      ouml: "ö",
-      ovbar: "⌽",
-      par: "∥",
-      para: "¶",
-      parallel: "∥",
-      parsim: "⫳",
-      parsl: "⫽",
-      part: "∂",
-      pcy: "п",
-      percnt: "%",
-      period: ".",
-      permil: "‰",
-      perp: "⊥",
-      pertenk: "‱",
-      pfr: "\uD835\uDD2D",
-      phi: "φ",
-      phiv: "ϕ",
-      phmmat: "ℳ",
-      phone: "☎",
-      pi: "π",
-      pitchfork: "⋔",
-      piv: "ϖ",
-      planck: "ℏ",
-      planckh: "ℎ",
-      plankv: "ℏ",
-      plus: "+",
-      plusacir: "⨣",
-      plusb: "⊞",
-      pluscir: "⨢",
-      plusdo: "∔",
-      plusdu: "⨥",
-      pluse: "⩲",
-      plusmn: "±",
-      plussim: "⨦",
-      plustwo: "⨧",
-      pm: "±",
-      pointint: "⨕",
-      popf: "\uD835\uDD61",
-      pound: "£",
-      pr: "≺",
-      prE: "⪳",
-      prap: "⪷",
-      prcue: "≼",
-      pre: "⪯",
-      prec: "≺",
-      precapprox: "⪷",
-      preccurlyeq: "≼",
-      preceq: "⪯",
-      precnapprox: "⪹",
-      precneqq: "⪵",
-      precnsim: "⋨",
-      precsim: "≾",
-      prime: "′",
-      primes: "ℙ",
-      prnE: "⪵",
-      prnap: "⪹",
-      prnsim: "⋨",
-      prod: "∏",
-      profalar: "⌮",
-      profline: "⌒",
-      profsurf: "⌓",
-      prop: "∝",
-      propto: "∝",
-      prsim: "≾",
-      prurel: "⊰",
-      pscr: "\uD835\uDCC5",
-      psi: "ψ",
-      puncsp: " ",
-      qfr: "\uD835\uDD2E",
-      qint: "⨌",
-      qopf: "\uD835\uDD62",
-      qprime: "⁗",
-      qscr: "\uD835\uDCC6",
-      quaternions: "ℍ",
-      quatint: "⨖",
-      quest: "?",
-      questeq: "≟",
-      quot: '"',
-      rAarr: "⇛",
-      rArr: "⇒",
-      rAtail: "⤜",
-      rBarr: "⤏",
-      rHar: "⥤",
-      race: "∽̱",
-      racute: "ŕ",
-      radic: "√",
-      raemptyv: "⦳",
-      rang: "⟩",
-      rangd: "⦒",
-      range: "⦥",
-      rangle: "⟩",
-      raquo: "»",
-      rarr: "→",
-      rarrap: "⥵",
-      rarrb: "⇥",
-      rarrbfs: "⤠",
-      rarrc: "⤳",
-      rarrfs: "⤞",
-      rarrhk: "↪",
-      rarrlp: "↬",
-      rarrpl: "⥅",
-      rarrsim: "⥴",
-      rarrtl: "↣",
-      rarrw: "↝",
-      ratail: "⤚",
-      ratio: "∶",
-      rationals: "ℚ",
-      rbarr: "⤍",
-      rbbrk: "❳",
-      rbrace: "}",
-      rbrack: "]",
-      rbrke: "⦌",
-      rbrksld: "⦎",
-      rbrkslu: "⦐",
-      rcaron: "ř",
-      rcedil: "ŗ",
-      rceil: "⌉",
-      rcub: "}",
-      rcy: "р",
-      rdca: "⤷",
-      rdldhar: "⥩",
-      rdquo: "”",
-      rdquor: "”",
-      rdsh: "↳",
-      real: "ℜ",
-      realine: "ℛ",
-      realpart: "ℜ",
-      reals: "ℝ",
-      rect: "▭",
-      reg: "®",
-      rfisht: "⥽",
-      rfloor: "⌋",
-      rfr: "\uD835\uDD2F",
-      rhard: "⇁",
-      rharu: "⇀",
-      rharul: "⥬",
-      rho: "ρ",
-      rhov: "ϱ",
-      rightarrow: "→",
-      rightarrowtail: "↣",
-      rightharpoondown: "⇁",
-      rightharpoonup: "⇀",
-      rightleftarrows: "⇄",
-      rightleftharpoons: "⇌",
-      rightrightarrows: "⇉",
-      rightsquigarrow: "↝",
-      rightthreetimes: "⋌",
-      ring: "˚",
-      risingdotseq: "≓",
-      rlarr: "⇄",
-      rlhar: "⇌",
-      rlm: "‏",
-      rmoust: "⎱",
-      rmoustache: "⎱",
-      rnmid: "⫮",
-      roang: "⟭",
-      roarr: "⇾",
-      robrk: "⟧",
-      ropar: "⦆",
-      ropf: "\uD835\uDD63",
-      roplus: "⨮",
-      rotimes: "⨵",
-      rpar: ")",
-      rpargt: "⦔",
-      rppolint: "⨒",
-      rrarr: "⇉",
-      rsaquo: "›",
-      rscr: "\uD835\uDCC7",
-      rsh: "↱",
-      rsqb: "]",
-      rsquo: "’",
-      rsquor: "’",
-      rthree: "⋌",
-      rtimes: "⋊",
-      rtri: "▹",
-      rtrie: "⊵",
-      rtrif: "▸",
-      rtriltri: "⧎",
-      ruluhar: "⥨",
-      rx: "℞",
-      sacute: "ś",
-      sbquo: "‚",
-      sc: "≻",
-      scE: "⪴",
-      scap: "⪸",
-      scaron: "š",
-      sccue: "≽",
-      sce: "⪰",
-      scedil: "ş",
-      scirc: "ŝ",
-      scnE: "⪶",
-      scnap: "⪺",
-      scnsim: "⋩",
-      scpolint: "⨓",
-      scsim: "≿",
-      scy: "с",
-      sdot: "⋅",
-      sdotb: "⊡",
-      sdote: "⩦",
-      seArr: "⇘",
-      searhk: "⤥",
-      searr: "↘",
-      searrow: "↘",
-      sect: "§",
-      semi: ";",
-      seswar: "⤩",
-      setminus: "∖",
-      setmn: "∖",
-      sext: "✶",
-      sfr: "\uD835\uDD30",
-      sfrown: "⌢",
-      sharp: "♯",
-      shchcy: "щ",
-      shcy: "ш",
-      shortmid: "∣",
-      shortparallel: "∥",
-      shy: "­",
-      sigma: "σ",
-      sigmaf: "ς",
-      sigmav: "ς",
-      sim: "∼",
-      simdot: "⩪",
-      sime: "≃",
-      simeq: "≃",
-      simg: "⪞",
-      simgE: "⪠",
-      siml: "⪝",
-      simlE: "⪟",
-      simne: "≆",
-      simplus: "⨤",
-      simrarr: "⥲",
-      slarr: "←",
-      smallsetminus: "∖",
-      smashp: "⨳",
-      smeparsl: "⧤",
-      smid: "∣",
-      smile: "⌣",
-      smt: "⪪",
-      smte: "⪬",
-      smtes: "⪬︀",
-      softcy: "ь",
-      sol: "/",
-      solb: "⧄",
-      solbar: "⌿",
-      sopf: "\uD835\uDD64",
-      spades: "♠",
-      spadesuit: "♠",
-      spar: "∥",
-      sqcap: "⊓",
-      sqcaps: "⊓︀",
-      sqcup: "⊔",
-      sqcups: "⊔︀",
-      sqsub: "⊏",
-      sqsube: "⊑",
-      sqsubset: "⊏",
-      sqsubseteq: "⊑",
-      sqsup: "⊐",
-      sqsupe: "⊒",
-      sqsupset: "⊐",
-      sqsupseteq: "⊒",
-      squ: "□",
-      square: "□",
-      squarf: "▪",
-      squf: "▪",
-      srarr: "→",
-      sscr: "\uD835\uDCC8",
-      ssetmn: "∖",
-      ssmile: "⌣",
-      sstarf: "⋆",
-      star: "☆",
-      starf: "★",
-      straightepsilon: "ϵ",
-      straightphi: "ϕ",
-      strns: "¯",
-      sub: "⊂",
-      subE: "⫅",
-      subdot: "⪽",
-      sube: "⊆",
-      subedot: "⫃",
-      submult: "⫁",
-      subnE: "⫋",
-      subne: "⊊",
-      subplus: "⪿",
-      subrarr: "⥹",
-      subset: "⊂",
-      subseteq: "⊆",
-      subseteqq: "⫅",
-      subsetneq: "⊊",
-      subsetneqq: "⫋",
-      subsim: "⫇",
-      subsub: "⫕",
-      subsup: "⫓",
-      succ: "≻",
-      succapprox: "⪸",
-      succcurlyeq: "≽",
-      succeq: "⪰",
-      succnapprox: "⪺",
-      succneqq: "⪶",
-      succnsim: "⋩",
-      succsim: "≿",
-      sum: "∑",
-      sung: "♪",
-      sup1: "¹",
-      sup2: "²",
-      sup3: "³",
-      sup: "⊃",
-      supE: "⫆",
-      supdot: "⪾",
-      supdsub: "⫘",
-      supe: "⊇",
-      supedot: "⫄",
-      suphsol: "⟉",
-      suphsub: "⫗",
-      suplarr: "⥻",
-      supmult: "⫂",
-      supnE: "⫌",
-      supne: "⊋",
-      supplus: "⫀",
-      supset: "⊃",
-      supseteq: "⊇",
-      supseteqq: "⫆",
-      supsetneq: "⊋",
-      supsetneqq: "⫌",
-      supsim: "⫈",
-      supsub: "⫔",
-      supsup: "⫖",
-      swArr: "⇙",
-      swarhk: "⤦",
-      swarr: "↙",
-      swarrow: "↙",
-      swnwar: "⤪",
-      szlig: "ß",
-      target: "⌖",
-      tau: "τ",
-      tbrk: "⎴",
-      tcaron: "ť",
-      tcedil: "ţ",
-      tcy: "т",
-      tdot: "⃛",
-      telrec: "⌕",
-      tfr: "\uD835\uDD31",
-      there4: "∴",
-      therefore: "∴",
-      theta: "θ",
-      thetasym: "ϑ",
-      thetav: "ϑ",
-      thickapprox: "≈",
-      thicksim: "∼",
-      thinsp: " ",
-      thkap: "≈",
-      thksim: "∼",
-      thorn: "þ",
-      tilde: "˜",
-      times: "×",
-      timesb: "⊠",
-      timesbar: "⨱",
-      timesd: "⨰",
-      tint: "∭",
-      toea: "⤨",
-      top: "⊤",
-      topbot: "⌶",
-      topcir: "⫱",
-      topf: "\uD835\uDD65",
-      topfork: "⫚",
-      tosa: "⤩",
-      tprime: "‴",
-      trade: "™",
-      triangle: "▵",
-      triangledown: "▿",
-      triangleleft: "◃",
-      trianglelefteq: "⊴",
-      triangleq: "≜",
-      triangleright: "▹",
-      trianglerighteq: "⊵",
-      tridot: "◬",
-      trie: "≜",
-      triminus: "⨺",
-      triplus: "⨹",
-      trisb: "⧍",
-      tritime: "⨻",
-      trpezium: "⏢",
-      tscr: "\uD835\uDCC9",
-      tscy: "ц",
-      tshcy: "ћ",
-      tstrok: "ŧ",
-      twixt: "≬",
-      twoheadleftarrow: "↞",
-      twoheadrightarrow: "↠",
-      uArr: "⇑",
-      uHar: "⥣",
-      uacute: "ú",
-      uarr: "↑",
-      ubrcy: "ў",
-      ubreve: "ŭ",
-      ucirc: "û",
-      ucy: "у",
-      udarr: "⇅",
-      udblac: "ű",
-      udhar: "⥮",
-      ufisht: "⥾",
-      ufr: "\uD835\uDD32",
-      ugrave: "ù",
-      uharl: "↿",
-      uharr: "↾",
-      uhblk: "▀",
-      ulcorn: "⌜",
-      ulcorner: "⌜",
-      ulcrop: "⌏",
-      ultri: "◸",
-      umacr: "ū",
-      uml: "¨",
-      uogon: "ų",
-      uopf: "\uD835\uDD66",
-      uparrow: "↑",
-      updownarrow: "↕",
-      upharpoonleft: "↿",
-      upharpoonright: "↾",
-      uplus: "⊎",
-      upsi: "υ",
-      upsih: "ϒ",
-      upsilon: "υ",
-      upuparrows: "⇈",
-      urcorn: "⌝",
-      urcorner: "⌝",
-      urcrop: "⌎",
-      uring: "ů",
-      urtri: "◹",
-      uscr: "\uD835\uDCCA",
-      utdot: "⋰",
-      utilde: "ũ",
-      utri: "▵",
-      utrif: "▴",
-      uuarr: "⇈",
-      uuml: "ü",
-      uwangle: "⦧",
-      vArr: "⇕",
-      vBar: "⫨",
-      vBarv: "⫩",
-      vDash: "⊨",
-      vangrt: "⦜",
-      varepsilon: "ϵ",
-      varkappa: "ϰ",
-      varnothing: "∅",
-      varphi: "ϕ",
-      varpi: "ϖ",
-      varpropto: "∝",
-      varr: "↕",
-      varrho: "ϱ",
-      varsigma: "ς",
-      varsubsetneq: "⊊︀",
-      varsubsetneqq: "⫋︀",
-      varsupsetneq: "⊋︀",
-      varsupsetneqq: "⫌︀",
-      vartheta: "ϑ",
-      vartriangleleft: "⊲",
-      vartriangleright: "⊳",
-      vcy: "в",
-      vdash: "⊢",
-      vee: "∨",
-      veebar: "⊻",
-      veeeq: "≚",
-      vellip: "⋮",
-      verbar: "|",
-      vert: "|",
-      vfr: "\uD835\uDD33",
-      vltri: "⊲",
-      vnsub: "⊂⃒",
-      vnsup: "⊃⃒",
-      vopf: "\uD835\uDD67",
-      vprop: "∝",
-      vrtri: "⊳",
-      vscr: "\uD835\uDCCB",
-      vsubnE: "⫋︀",
-      vsubne: "⊊︀",
-      vsupnE: "⫌︀",
-      vsupne: "⊋︀",
-      vzigzag: "⦚",
-      wcirc: "ŵ",
-      wedbar: "⩟",
-      wedge: "∧",
-      wedgeq: "≙",
-      weierp: "℘",
-      wfr: "\uD835\uDD34",
-      wopf: "\uD835\uDD68",
-      wp: "℘",
-      wr: "≀",
-      wreath: "≀",
-      wscr: "\uD835\uDCCC",
-      xcap: "⋂",
-      xcirc: "◯",
-      xcup: "⋃",
-      xdtri: "▽",
-      xfr: "\uD835\uDD35",
-      xhArr: "⟺",
-      xharr: "⟷",
-      xi: "ξ",
-      xlArr: "⟸",
-      xlarr: "⟵",
-      xmap: "⟼",
-      xnis: "⋻",
-      xodot: "⨀",
-      xopf: "\uD835\uDD69",
-      xoplus: "⨁",
-      xotime: "⨂",
-      xrArr: "⟹",
-      xrarr: "⟶",
-      xscr: "\uD835\uDCCD",
-      xsqcup: "⨆",
-      xuplus: "⨄",
-      xutri: "△",
-      xvee: "⋁",
-      xwedge: "⋀",
-      yacute: "ý",
-      yacy: "я",
-      ycirc: "ŷ",
-      ycy: "ы",
-      yen: "¥",
-      yfr: "\uD835\uDD36",
-      yicy: "ї",
-      yopf: "\uD835\uDD6A",
-      yscr: "\uD835\uDCCE",
-      yucy: "ю",
-      yuml: "ÿ",
-      zacute: "ź",
-      zcaron: "ž",
-      zcy: "з",
-      zdot: "ż",
-      zeetrf: "ℨ",
-      zeta: "ζ",
-      zfr: "\uD835\uDD37",
-      zhcy: "ж",
-      zigrarr: "⇝",
-      zopf: "\uD835\uDD6B",
-      zscr: "\uD835\uDCCF",
-      zwj: "‍",
-      zwnj: "‌"
-    };
-  });
-  init_decode_named_character_reference = __esm2(() => {
-    init_character_entities();
-    own = {}.hasOwnProperty;
-  });
-  init_codes = __esm2(() => {
-    codes = {
-      carriageReturn: -5,
-      lineFeed: -4,
-      carriageReturnLineFeed: -3,
-      horizontalTab: -2,
-      virtualSpace: -1,
-      eof: null,
-      nul: 0,
-      soh: 1,
-      stx: 2,
-      etx: 3,
-      eot: 4,
-      enq: 5,
-      ack: 6,
-      bel: 7,
-      bs: 8,
-      ht: 9,
-      lf: 10,
-      vt: 11,
-      ff: 12,
-      cr: 13,
-      so: 14,
-      si: 15,
-      dle: 16,
-      dc1: 17,
-      dc2: 18,
-      dc3: 19,
-      dc4: 20,
-      nak: 21,
-      syn: 22,
-      etb: 23,
-      can: 24,
-      em: 25,
-      sub: 26,
-      esc: 27,
-      fs: 28,
-      gs: 29,
-      rs: 30,
-      us: 31,
-      space: 32,
-      exclamationMark: 33,
-      quotationMark: 34,
-      numberSign: 35,
-      dollarSign: 36,
-      percentSign: 37,
-      ampersand: 38,
-      apostrophe: 39,
-      leftParenthesis: 40,
-      rightParenthesis: 41,
-      asterisk: 42,
-      plusSign: 43,
-      comma: 44,
-      dash: 45,
-      dot: 46,
-      slash: 47,
-      digit0: 48,
-      digit1: 49,
-      digit2: 50,
-      digit3: 51,
-      digit4: 52,
-      digit5: 53,
-      digit6: 54,
-      digit7: 55,
-      digit8: 56,
-      digit9: 57,
-      colon: 58,
-      semicolon: 59,
-      lessThan: 60,
-      equalsTo: 61,
-      greaterThan: 62,
-      questionMark: 63,
-      atSign: 64,
-      uppercaseA: 65,
-      uppercaseB: 66,
-      uppercaseC: 67,
-      uppercaseD: 68,
-      uppercaseE: 69,
-      uppercaseF: 70,
-      uppercaseG: 71,
-      uppercaseH: 72,
-      uppercaseI: 73,
-      uppercaseJ: 74,
-      uppercaseK: 75,
-      uppercaseL: 76,
-      uppercaseM: 77,
-      uppercaseN: 78,
-      uppercaseO: 79,
-      uppercaseP: 80,
-      uppercaseQ: 81,
-      uppercaseR: 82,
-      uppercaseS: 83,
-      uppercaseT: 84,
-      uppercaseU: 85,
-      uppercaseV: 86,
-      uppercaseW: 87,
-      uppercaseX: 88,
-      uppercaseY: 89,
-      uppercaseZ: 90,
-      leftSquareBracket: 91,
-      backslash: 92,
-      rightSquareBracket: 93,
-      caret: 94,
-      underscore: 95,
-      graveAccent: 96,
-      lowercaseA: 97,
-      lowercaseB: 98,
-      lowercaseC: 99,
-      lowercaseD: 100,
-      lowercaseE: 101,
-      lowercaseF: 102,
-      lowercaseG: 103,
-      lowercaseH: 104,
-      lowercaseI: 105,
-      lowercaseJ: 106,
-      lowercaseK: 107,
-      lowercaseL: 108,
-      lowercaseM: 109,
-      lowercaseN: 110,
-      lowercaseO: 111,
-      lowercaseP: 112,
-      lowercaseQ: 113,
-      lowercaseR: 114,
-      lowercaseS: 115,
-      lowercaseT: 116,
-      lowercaseU: 117,
-      lowercaseV: 118,
-      lowercaseW: 119,
-      lowercaseX: 120,
-      lowercaseY: 121,
-      lowercaseZ: 122,
-      leftCurlyBrace: 123,
-      verticalBar: 124,
-      rightCurlyBrace: 125,
-      tilde: 126,
-      del: 127,
-      byteOrderMarker: 65279,
-      replacementCharacter: 65533
-    };
-  });
-  init_constants = __esm2(() => {
-    constants = {
-      attentionSideAfter: 2,
-      attentionSideBefore: 1,
-      atxHeadingOpeningFenceSizeMax: 6,
-      autolinkDomainSizeMax: 63,
-      autolinkSchemeSizeMax: 32,
-      cdataOpeningString: "CDATA[",
-      characterGroupPunctuation: 2,
-      characterGroupWhitespace: 1,
-      characterReferenceDecimalSizeMax: 7,
-      characterReferenceHexadecimalSizeMax: 6,
-      characterReferenceNamedSizeMax: 31,
-      codeFencedSequenceSizeMin: 3,
-      contentTypeContent: "content",
-      contentTypeDocument: "document",
-      contentTypeFlow: "flow",
-      contentTypeString: "string",
-      contentTypeText: "text",
-      hardBreakPrefixSizeMin: 2,
-      htmlBasic: 6,
-      htmlCdata: 5,
-      htmlComment: 2,
-      htmlComplete: 7,
-      htmlDeclaration: 4,
-      htmlInstruction: 3,
-      htmlRawSizeMax: 8,
-      htmlRaw: 1,
-      linkResourceDestinationBalanceMax: 32,
-      linkReferenceSizeMax: 999,
-      listItemValueSizeMax: 10,
-      numericBaseDecimal: 10,
-      numericBaseHexadecimal: 16,
-      tabSize: 4,
-      thematicBreakMarkerCountMin: 3,
-      v8MaxSafeChunkSize: 1e4
-    };
-  });
-  init_types = __esm2(() => {
-    types = {
-      data: "data",
-      whitespace: "whitespace",
-      lineEnding: "lineEnding",
-      lineEndingBlank: "lineEndingBlank",
-      linePrefix: "linePrefix",
-      lineSuffix: "lineSuffix",
-      atxHeading: "atxHeading",
-      atxHeadingSequence: "atxHeadingSequence",
-      atxHeadingText: "atxHeadingText",
-      autolink: "autolink",
-      autolinkEmail: "autolinkEmail",
-      autolinkMarker: "autolinkMarker",
-      autolinkProtocol: "autolinkProtocol",
-      characterEscape: "characterEscape",
-      characterEscapeValue: "characterEscapeValue",
-      characterReference: "characterReference",
-      characterReferenceMarker: "characterReferenceMarker",
-      characterReferenceMarkerNumeric: "characterReferenceMarkerNumeric",
-      characterReferenceMarkerHexadecimal: "characterReferenceMarkerHexadecimal",
-      characterReferenceValue: "characterReferenceValue",
-      codeFenced: "codeFenced",
-      codeFencedFence: "codeFencedFence",
-      codeFencedFenceSequence: "codeFencedFenceSequence",
-      codeFencedFenceInfo: "codeFencedFenceInfo",
-      codeFencedFenceMeta: "codeFencedFenceMeta",
-      codeFlowValue: "codeFlowValue",
-      codeIndented: "codeIndented",
-      codeText: "codeText",
-      codeTextData: "codeTextData",
-      codeTextPadding: "codeTextPadding",
-      codeTextSequence: "codeTextSequence",
-      content: "content",
-      definition: "definition",
-      definitionDestination: "definitionDestination",
-      definitionDestinationLiteral: "definitionDestinationLiteral",
-      definitionDestinationLiteralMarker: "definitionDestinationLiteralMarker",
-      definitionDestinationRaw: "definitionDestinationRaw",
-      definitionDestinationString: "definitionDestinationString",
-      definitionLabel: "definitionLabel",
-      definitionLabelMarker: "definitionLabelMarker",
-      definitionLabelString: "definitionLabelString",
-      definitionMarker: "definitionMarker",
-      definitionTitle: "definitionTitle",
-      definitionTitleMarker: "definitionTitleMarker",
-      definitionTitleString: "definitionTitleString",
-      emphasis: "emphasis",
-      emphasisSequence: "emphasisSequence",
-      emphasisText: "emphasisText",
-      escapeMarker: "escapeMarker",
-      hardBreakEscape: "hardBreakEscape",
-      hardBreakTrailing: "hardBreakTrailing",
-      htmlFlow: "htmlFlow",
-      htmlFlowData: "htmlFlowData",
-      htmlText: "htmlText",
-      htmlTextData: "htmlTextData",
-      image: "image",
-      label: "label",
-      labelText: "labelText",
-      labelLink: "labelLink",
-      labelImage: "labelImage",
-      labelMarker: "labelMarker",
-      labelImageMarker: "labelImageMarker",
-      labelEnd: "labelEnd",
-      link: "link",
-      paragraph: "paragraph",
-      reference: "reference",
-      referenceMarker: "referenceMarker",
-      referenceString: "referenceString",
-      resource: "resource",
-      resourceDestination: "resourceDestination",
-      resourceDestinationLiteral: "resourceDestinationLiteral",
-      resourceDestinationLiteralMarker: "resourceDestinationLiteralMarker",
-      resourceDestinationRaw: "resourceDestinationRaw",
-      resourceDestinationString: "resourceDestinationString",
-      resourceMarker: "resourceMarker",
-      resourceTitle: "resourceTitle",
-      resourceTitleMarker: "resourceTitleMarker",
-      resourceTitleString: "resourceTitleString",
-      setextHeading: "setextHeading",
-      setextHeadingText: "setextHeadingText",
-      setextHeadingLine: "setextHeadingLine",
-      setextHeadingLineSequence: "setextHeadingLineSequence",
-      strong: "strong",
-      strongSequence: "strongSequence",
-      strongText: "strongText",
-      thematicBreak: "thematicBreak",
-      thematicBreakSequence: "thematicBreakSequence",
-      blockQuote: "blockQuote",
-      blockQuotePrefix: "blockQuotePrefix",
-      blockQuoteMarker: "blockQuoteMarker",
-      blockQuotePrefixWhitespace: "blockQuotePrefixWhitespace",
-      listOrdered: "listOrdered",
-      listUnordered: "listUnordered",
-      listItemIndent: "listItemIndent",
-      listItemMarker: "listItemMarker",
-      listItemPrefix: "listItemPrefix",
-      listItemPrefixWhitespace: "listItemPrefixWhitespace",
-      listItemValue: "listItemValue",
-      chunkDocument: "chunkDocument",
-      chunkContent: "chunkContent",
-      chunkFlow: "chunkFlow",
-      chunkText: "chunkText",
-      chunkString: "chunkString"
-    };
-  });
-  init_values = __esm2(() => {
-    values = {
-      ht: "\t",
-      lf: `
-`,
-      cr: "\r",
-      space: " ",
-      exclamationMark: "!",
-      quotationMark: '"',
-      numberSign: "#",
-      dollarSign: "$",
-      percentSign: "%",
-      ampersand: "&",
-      apostrophe: "'",
-      leftParenthesis: "(",
-      rightParenthesis: ")",
-      asterisk: "*",
-      plusSign: "+",
-      comma: ",",
-      dash: "-",
-      dot: ".",
-      slash: "/",
-      digit0: "0",
-      digit1: "1",
-      digit2: "2",
-      digit3: "3",
-      digit4: "4",
-      digit5: "5",
-      digit6: "6",
-      digit7: "7",
-      digit8: "8",
-      digit9: "9",
-      colon: ":",
-      semicolon: ";",
-      lessThan: "<",
-      equalsTo: "=",
-      greaterThan: ">",
-      questionMark: "?",
-      atSign: "@",
-      uppercaseA: "A",
-      uppercaseB: "B",
-      uppercaseC: "C",
-      uppercaseD: "D",
-      uppercaseE: "E",
-      uppercaseF: "F",
-      uppercaseG: "G",
-      uppercaseH: "H",
-      uppercaseI: "I",
-      uppercaseJ: "J",
-      uppercaseK: "K",
-      uppercaseL: "L",
-      uppercaseM: "M",
-      uppercaseN: "N",
-      uppercaseO: "O",
-      uppercaseP: "P",
-      uppercaseQ: "Q",
-      uppercaseR: "R",
-      uppercaseS: "S",
-      uppercaseT: "T",
-      uppercaseU: "U",
-      uppercaseV: "V",
-      uppercaseW: "W",
-      uppercaseX: "X",
-      uppercaseY: "Y",
-      uppercaseZ: "Z",
-      leftSquareBracket: "[",
-      backslash: "\\",
-      rightSquareBracket: "]",
-      caret: "^",
-      underscore: "_",
-      graveAccent: "`",
-      lowercaseA: "a",
-      lowercaseB: "b",
-      lowercaseC: "c",
-      lowercaseD: "d",
-      lowercaseE: "e",
-      lowercaseF: "f",
-      lowercaseG: "g",
-      lowercaseH: "h",
-      lowercaseI: "i",
-      lowercaseJ: "j",
-      lowercaseK: "k",
-      lowercaseL: "l",
-      lowercaseM: "m",
-      lowercaseN: "n",
-      lowercaseO: "o",
-      lowercaseP: "p",
-      lowercaseQ: "q",
-      lowercaseR: "r",
-      lowercaseS: "s",
-      lowercaseT: "t",
-      lowercaseU: "u",
-      lowercaseV: "v",
-      lowercaseW: "w",
-      lowercaseX: "x",
-      lowercaseY: "y",
-      lowercaseZ: "z",
-      leftCurlyBrace: "{",
-      verticalBar: "|",
-      rightCurlyBrace: "}",
-      tilde: "~",
-      replacementCharacter: "�"
-    };
-  });
-  init_default = __esm2(() => {
-    init_codes();
-    init_constants();
-    init_types();
-    init_values();
-  });
-  init_dev = __esm2(() => {
-    init_default();
-  });
-  init_micromark_util_combine_extensions = __esm2(() => {
-    init_dev();
-    hasOwnProperty = {}.hasOwnProperty;
-  });
-  init_dev2 = __esm2(() => {
-    init_default();
-  });
-  init_dev3 = __esm2(() => {
-    init_default();
-  });
-  init_dev4 = __esm2(() => {
-    init_default();
-    asciiAlpha = regexCheck(/[A-Za-z]/);
-    asciiAlphanumeric = regexCheck(/[\dA-Za-z]/);
-    asciiAtext = regexCheck(/[#-'*+\--9=?A-Z^-~]/);
-    asciiDigit = regexCheck(/\d/);
-    asciiHexDigit = regexCheck(/[\dA-Fa-f]/);
-    asciiPunctuation = regexCheck(/[!-/:-@[-`{-~]/);
-    unicodePunctuation = regexCheck(/\p{P}|\p{S}/u);
-    unicodeWhitespace = regexCheck(/\s/);
-  });
-  init_dev5 = __esm2(() => {
-    init_dev4();
-  });
-  init_content = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    content = { tokenize: initializeContent };
-  });
-  init_document = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    document = { tokenize: initializeDocument };
-    containerConstruct = { tokenize: tokenizeContainer };
-  });
-  init_dev6 = __esm2(() => {
-    init_dev4();
-    init_default();
-  });
-  init_attention = __esm2(() => {
-    init_development();
-    init_dev();
-    init_dev6();
-    init_default();
-    attention = {
-      name: "attention",
-      resolveAll: resolveAllAttention,
-      tokenize: tokenizeAttention
-    };
-  });
-  init_autolink = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_default();
-    autolink = { name: "autolink", tokenize: tokenizeAutolink };
-  });
-  init_blank_line = __esm2(() => {
-    init_dev5();
-    init_dev4();
-    init_default();
-    blankLine = { partial: true, tokenize: tokenizeBlankLine };
-  });
-  init_block_quote = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    blockQuote = {
-      continuation: { tokenize: tokenizeBlockQuoteContinuation },
-      exit,
-      name: "blockQuote",
-      tokenize: tokenizeBlockQuoteStart
-    };
-  });
-  init_character_escape = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_default();
-    characterEscape = {
-      name: "characterEscape",
-      tokenize: tokenizeCharacterEscape
-    };
-  });
-  init_character_reference = __esm2(() => {
-    init_development();
-    init_decode_named_character_reference();
-    init_dev4();
-    init_default();
-    characterReference = {
-      name: "characterReference",
-      tokenize: tokenizeCharacterReference
-    };
-  });
-  init_partial_non_lazy_continuation = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_default();
-    nonLazyContinuation = {
-      partial: true,
-      tokenize: tokenizeNonLazyContinuation
-    };
-  });
-  init_code_fenced = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    init_partial_non_lazy_continuation();
-    codeFenced = {
-      concrete: true,
-      name: "codeFenced",
-      tokenize: tokenizeCodeFenced
-    };
-  });
-  init_code_indented = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    codeIndented = {
-      name: "codeIndented",
-      tokenize: tokenizeCodeIndented
-    };
-    furtherStart = { partial: true, tokenize: tokenizeFurtherStart };
-  });
-  init_code_text = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_default();
-    codeText = {
-      name: "codeText",
-      previous,
-      resolve: resolveCodeText,
-      tokenize: tokenizeCodeText
-    };
-  });
-  init_splice_buffer = __esm2(() => {
-    init_default();
-  });
-  init_dev7 = __esm2(() => {
-    init_development();
-    init_dev();
-    init_default();
-    init_splice_buffer();
-  });
-  init_content2 = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_dev7();
-    init_default();
-    content2 = { resolve: resolveContent, tokenize: tokenizeContent };
-    continuationConstruct = { partial: true, tokenize: tokenizeContinuation };
-  });
-  init_dev8 = __esm2(() => {
-    init_dev4();
-    init_default();
-  });
-  init_dev9 = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_default();
-  });
-  init_dev10 = __esm2(() => {
-    init_dev5();
-    init_dev4();
-    init_default();
-  });
-  init_dev11 = __esm2(() => {
-    init_dev5();
-    init_dev4();
-    init_default();
-  });
-  init_definition = __esm2(() => {
-    init_development();
-    init_dev8();
-    init_dev9();
-    init_dev5();
-    init_dev10();
-    init_dev11();
-    init_dev4();
-    init_dev3();
-    init_default();
-    definition = { name: "definition", tokenize: tokenizeDefinition };
-    titleBefore = { partial: true, tokenize: tokenizeTitleBefore };
-  });
-  init_hard_break_escape = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_default();
-    hardBreakEscape = {
-      name: "hardBreakEscape",
-      tokenize: tokenizeHardBreakEscape
-    };
-  });
-  init_heading_atx = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_dev();
-    init_default();
-    headingAtx = {
-      name: "headingAtx",
-      resolve: resolveHeadingAtx,
-      tokenize: tokenizeHeadingAtx
-    };
-  });
-  init_micromark_util_html_tag_name = __esm2(() => {
-    htmlBlockNames = [
-      "address",
-      "article",
-      "aside",
-      "base",
-      "basefont",
-      "blockquote",
-      "body",
-      "caption",
-      "center",
-      "col",
-      "colgroup",
-      "dd",
-      "details",
-      "dialog",
-      "dir",
-      "div",
-      "dl",
-      "dt",
-      "fieldset",
-      "figcaption",
-      "figure",
-      "footer",
-      "form",
-      "frame",
-      "frameset",
-      "h1",
-      "h2",
-      "h3",
-      "h4",
-      "h5",
-      "h6",
-      "head",
-      "header",
-      "hr",
-      "html",
-      "iframe",
-      "legend",
-      "li",
-      "link",
-      "main",
-      "menu",
-      "menuitem",
-      "nav",
-      "noframes",
-      "ol",
-      "optgroup",
-      "option",
-      "p",
-      "param",
-      "search",
-      "section",
-      "summary",
-      "table",
-      "tbody",
-      "td",
-      "tfoot",
-      "th",
-      "thead",
-      "title",
-      "tr",
-      "track",
-      "ul"
-    ];
-    htmlRawNames = ["pre", "script", "style", "textarea"];
-  });
-  init_html_flow = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_micromark_util_html_tag_name();
-    init_default();
-    init_blank_line();
-    init_partial_non_lazy_continuation();
-    htmlFlow = {
-      concrete: true,
-      name: "htmlFlow",
-      resolveTo: resolveToHtmlFlow,
-      tokenize: tokenizeHtmlFlow
-    };
-    blankLineBefore = { partial: true, tokenize: tokenizeBlankLineBefore };
-  });
-  init_html_text = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    htmlText = { name: "htmlText", tokenize: tokenizeHtmlText };
-  });
-  init_label_end = __esm2(() => {
-    init_development();
-    init_dev8();
-    init_dev9();
-    init_dev10();
-    init_dev11();
-    init_dev4();
-    init_dev();
-    init_dev3();
-    init_default();
-    labelEnd = {
-      name: "labelEnd",
-      resolveAll: resolveAllLabelEnd,
-      resolveTo: resolveToLabelEnd,
-      tokenize: tokenizeLabelEnd
-    };
-    resourceConstruct = { tokenize: tokenizeResource };
-    referenceFullConstruct = { tokenize: tokenizeReferenceFull };
-    referenceCollapsedConstruct = { tokenize: tokenizeReferenceCollapsed };
-  });
-  init_label_start_image = __esm2(() => {
-    init_development();
-    init_default();
-    init_label_end();
-    labelStartImage = {
-      name: "labelStartImage",
-      resolveAll: labelEnd.resolveAll,
-      tokenize: tokenizeLabelStartImage
-    };
-  });
-  init_label_start_link = __esm2(() => {
-    init_development();
-    init_default();
-    init_label_end();
-    labelStartLink = {
-      name: "labelStartLink",
-      resolveAll: labelEnd.resolveAll,
-      tokenize: tokenizeLabelStartLink
-    };
-  });
-  init_line_ending = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    lineEnding = { name: "lineEnding", tokenize: tokenizeLineEnding };
-  });
-  init_thematic_break = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    thematicBreak = {
-      name: "thematicBreak",
-      tokenize: tokenizeThematicBreak
-    };
-  });
-  init_list = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    init_blank_line();
-    init_thematic_break();
-    list = {
-      continuation: { tokenize: tokenizeListContinuation },
-      exit: tokenizeListEnd,
-      name: "list",
-      tokenize: tokenizeListStart
-    };
-    listItemPrefixWhitespaceConstruct = {
-      partial: true,
-      tokenize: tokenizeListItemPrefixWhitespace
-    };
-    indentConstruct = { partial: true, tokenize: tokenizeIndent };
-  });
-  init_setext_underline = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    setextUnderline = {
-      name: "setextUnderline",
-      resolveTo: resolveToSetextUnderline,
-      tokenize: tokenizeSetextUnderline
-    };
-  });
-  init_dev12 = __esm2(() => {
-    init_attention();
-    init_autolink();
-    init_blank_line();
-    init_block_quote();
-    init_character_escape();
-    init_character_reference();
-    init_code_fenced();
-    init_code_indented();
-    init_code_text();
-    init_content2();
-    init_definition();
-    init_hard_break_escape();
-    init_heading_atx();
-    init_html_flow();
-    init_html_text();
-    init_label_end();
-    init_label_start_image();
-    init_label_start_link();
-    init_line_ending();
-    init_list();
-    init_setext_underline();
-    init_thematic_break();
-  });
-  init_flow = __esm2(() => {
-    init_development();
-    init_dev12();
-    init_dev5();
-    init_dev4();
-    init_default();
-    flow = { tokenize: initializeFlow };
-  });
-  init_text = __esm2(() => {
-    init_development();
-    init_default();
-    resolver = { resolveAll: createResolver() };
-    string = initializeFactory("string");
-    text2 = initializeFactory("text");
-  });
-  exports_constructs = {};
-  __export(exports_constructs, {
-    attentionMarkers: () => attentionMarkers,
-    contentInitial: () => contentInitial,
-    disable: () => disable,
-    document: () => document2,
-    flow: () => flow2,
-    flowInitial: () => flowInitial,
-    insideSpan: () => insideSpan,
-    string: () => string2,
-    text: () => text3
-  });
-  init_constructs = __esm2(() => {
-    init_dev12();
-    init_default();
-    init_text();
-    document2 = {
-      [codes.asterisk]: list,
-      [codes.plusSign]: list,
-      [codes.dash]: list,
-      [codes.digit0]: list,
-      [codes.digit1]: list,
-      [codes.digit2]: list,
-      [codes.digit3]: list,
-      [codes.digit4]: list,
-      [codes.digit5]: list,
-      [codes.digit6]: list,
-      [codes.digit7]: list,
-      [codes.digit8]: list,
-      [codes.digit9]: list,
-      [codes.greaterThan]: blockQuote
-    };
-    contentInitial = {
-      [codes.leftSquareBracket]: definition
-    };
-    flowInitial = {
-      [codes.horizontalTab]: codeIndented,
-      [codes.virtualSpace]: codeIndented,
-      [codes.space]: codeIndented
-    };
-    flow2 = {
-      [codes.numberSign]: headingAtx,
-      [codes.asterisk]: thematicBreak,
-      [codes.dash]: [setextUnderline, thematicBreak],
-      [codes.lessThan]: htmlFlow,
-      [codes.equalsTo]: setextUnderline,
-      [codes.underscore]: thematicBreak,
-      [codes.graveAccent]: codeFenced,
-      [codes.tilde]: codeFenced
-    };
-    string2 = {
-      [codes.ampersand]: characterReference,
-      [codes.backslash]: characterEscape
-    };
-    text3 = {
-      [codes.carriageReturn]: lineEnding,
-      [codes.lineFeed]: lineEnding,
-      [codes.carriageReturnLineFeed]: lineEnding,
-      [codes.exclamationMark]: labelStartImage,
-      [codes.ampersand]: characterReference,
-      [codes.asterisk]: attention,
-      [codes.lessThan]: [autolink, htmlText],
-      [codes.leftSquareBracket]: labelStartLink,
-      [codes.backslash]: [hardBreakEscape, characterEscape],
-      [codes.rightSquareBracket]: labelEnd,
-      [codes.underscore]: attention,
-      [codes.graveAccent]: codeText
-    };
-    insideSpan = { null: [attention, resolver] };
-    attentionMarkers = { null: [codes.asterisk, codes.underscore] };
-    disable = { null: [] };
-  });
-  init_create_tokenizer = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_dev();
-    init_default();
-    debug = createDebug("micromark");
-  });
-  init_parse = __esm2(() => {
-    init_micromark_util_combine_extensions();
-    init_content();
-    init_document();
-    init_flow();
-    init_text();
-    init_constructs();
-    init_create_tokenizer();
-  });
-  init_postprocess = __esm2(() => {
-    init_dev7();
-  });
-  init_preprocess = __esm2(() => {
-    init_default();
-    search = /[\0\t\n\r]/g;
-  });
-  init_dev13 = __esm2(() => {
-    init_parse();
-    init_postprocess();
-    init_preprocess();
-  });
-  init_dev14 = __esm2(() => {
-    init_decode_named_character_reference();
-    init_dev2();
-    init_default();
-    characterEscapeOrReference = /\\([!-/:-@[-`{-~])|&(#(?:\d{1,7}|x[\da-f]{1,6})|[\da-z]{1,31});/gi;
-  });
-  init_lib2 = __esm2(() => {
-    init_development();
-    init_mdast_util_to_string();
-    init_dev13();
-    init_dev2();
-    init_dev14();
-    init_dev3();
-    init_default();
-    init_decode_named_character_reference();
-    init_unist_util_stringify_position();
-    own2 = {}.hasOwnProperty;
-  });
-  init_dev15 = __esm2(() => {
-    init_lib2();
-  });
-  init_lib3 = __esm2(() => {
-    init_unist_util_is();
-    empty = [];
-  });
-  init_unist_util_visit_parents = __esm2(() => {
-    init_lib3();
-  });
-  init_lib4 = __esm2(() => {
-    init_unist_util_visit_parents();
-    init_unist_util_is();
-  });
-  init_mdast_util_find_and_replace = __esm2(() => {
-    init_lib4();
-  });
-  init_lib5 = __esm2(() => {
-    init_development();
-    init_dev4();
-    init_mdast_util_find_and_replace();
-  });
-  init_mdast_util_gfm_autolink_literal = __esm2(() => {
-    init_lib5();
-  });
-  init_lib6 = __esm2(() => {
-    init_development();
-    init_dev3();
-    footnoteReference.peek = footnoteReferencePeek;
-  });
-  init_mdast_util_gfm_footnote = __esm2(() => {
-    init_lib6();
-  });
-  init_lib7 = __esm2(() => {
-    handleDelete.attention = attentionDelete;
-    handleDelete.peek = peekDelete;
-  });
-  init_mdast_util_gfm_strikethrough = __esm2(() => {
-    init_lib7();
-  });
-  init_lib8 = __esm2(() => {
-    init_development();
-  });
-  init_mdast_util_gfm_table = __esm2(() => {
-    init_lib8();
-  });
-  init_lib9 = __esm2(() => {
-    init_development();
-  });
-  init_mdast_util_gfm_task_list_item = __esm2(() => {
-    init_lib9();
-  });
-  init_lib10 = __esm2(() => {
-    init_mdast_util_gfm_autolink_literal();
-    init_mdast_util_gfm_footnote();
-    init_mdast_util_gfm_strikethrough();
-    init_mdast_util_gfm_table();
-    init_mdast_util_gfm_task_list_item();
-  });
-  init_mdast_util_gfm = __esm2(() => {
-    init_lib10();
-  });
-  init_syntax = __esm2(() => {
-    init_dev4();
-    init_default();
-    wwwPrefix = { tokenize: tokenizeWwwPrefix, partial: true };
-    domain = { tokenize: tokenizeDomain, partial: true };
-    path = { tokenize: tokenizePath, partial: true };
-    trail = { tokenize: tokenizeTrail, partial: true };
-    emailDomainDotTrail = {
-      tokenize: tokenizeEmailDomainDotTrail,
-      partial: true
-    };
-    wwwAutolink = {
-      name: "wwwAutolink",
-      tokenize: tokenizeWwwAutolink,
-      previous: previousWww
-    };
-    protocolAutolink = {
-      name: "protocolAutolink",
-      tokenize: tokenizeProtocolAutolink,
-      previous: previousProtocol
-    };
-    emailAutolink = {
-      name: "emailAutolink",
-      tokenize: tokenizeEmailAutolink,
-      previous: previousEmail
-    };
-    text4 = {};
-    code = codes.digit0;
-    while (code < codes.leftCurlyBrace) {
-      text4[code] = emailAutolink;
-      code++;
-      if (code === codes.colon)
-        code = codes.uppercaseA;
-      else if (code === codes.leftSquareBracket)
-        code = codes.lowercaseA;
-    }
-    text4[codes.plusSign] = emailAutolink;
-    text4[codes.dash] = emailAutolink;
-    text4[codes.dot] = emailAutolink;
-    text4[codes.underscore] = emailAutolink;
-    text4[codes.uppercaseH] = [emailAutolink, protocolAutolink];
-    text4[codes.lowercaseH] = [emailAutolink, protocolAutolink];
-    text4[codes.uppercaseW] = [emailAutolink, wwwAutolink];
-    text4[codes.lowercaseW] = [emailAutolink, wwwAutolink];
-  });
-  init_dev16 = __esm2(() => {
-    init_syntax();
-  });
-  init_syntax2 = __esm2(() => {
-    init_development();
-    init_dev12();
-    init_dev5();
-    init_dev4();
-    init_dev3();
-    init_default();
-    indent = { tokenize: tokenizeIndent2, partial: true };
-  });
-  init_dev17 = __esm2(() => {
-    init_syntax2();
-  });
-  init_syntax3 = __esm2(() => {
-    init_development();
-    init_dev();
-    init_dev6();
-    init_default();
-  });
-  init_dev18 = __esm2(() => {
-    init_syntax3();
-  });
-  init_infer = __esm2(() => {
-    init_development();
-  });
-  init_syntax4 = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    init_infer();
-  });
-  init_dev19 = __esm2(() => {
-    init_syntax4();
-  });
-  init_syntax5 = __esm2(() => {
-    init_development();
-    init_dev5();
-    init_dev4();
-    init_default();
-    tasklistCheck = { name: "tasklistCheck", tokenize: tokenizeTasklistCheck };
-  });
-  init_dev20 = __esm2(() => {
-    init_syntax5();
-  });
-  init_micromark_extension_gfm = __esm2(() => {
-    init_micromark_util_combine_extensions();
-    init_dev16();
-    init_dev17();
-    init_dev18();
-    init_dev19();
-    init_dev20();
-  });
-  init_roadmap_content = __esm2(() => {
-    init_dev15();
-    init_mdast_util_gfm();
-    init_micromark_extension_gfm();
-    init_iteration();
-    ROADMAP_STATUSES = ["active", "paused", "completed"];
-    DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
-  });
   init_collaboration_remote_read = __esm2(() => {
     init_collaboration_store();
     init_collaboration_identity();
     init_collaboration_remote();
     init_issue();
     init_milestone_store();
-    init_roadmap_store();
     init_store_db();
-    init_roadmap_content();
     PROVIDER_ISSUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
     SEVERITY_RANK = { critical: 5, high: 4, medium: 3, low: 2, nit: 1 };
     TERMINAL = new Set(["resolved", "waived", "duplicate", "superseded", "obsolete"]);
@@ -14091,6 +7460,7 @@ var init_engine = __esm(() => {
   });
   init_collaboration_remote = __esm2(() => {
     init_collaboration_store();
+    init_catalog();
     init_issue();
     init_collaboration_identity();
     init_collaboration_cutover();
@@ -14241,6 +7611,7 @@ var init_engine = __esm(() => {
     init_collaboration_store();
     init_collaboration_identity();
     init_store_db();
+    DOCUMENT_KIND_NAMES = ["spec", "knowledge", "guide", "compass", "plan", "review", "other"];
     ENTITY_KINDS2 = {
       project: true,
       iteration: true,
@@ -14262,7 +7633,6 @@ var init_engine = __esm(() => {
       guide: true,
       compass: true,
       plan: true,
-      roadmap: true,
       review: true,
       other: true
     };
@@ -14289,13 +7659,12 @@ var init_engine = __esm(() => {
     };
   });
   init_project = __esm2(() => {
-    init_roadmap_content();
     init_coordination_write();
     init_store_db();
     init_collaboration_identity();
     init_collaboration_store();
     init_status();
-    DATE_RE4 = /^\d{4}-\d{2}-\d{2}$/;
+    DATE_RE3 = /^\d{4}-\d{2}-\d{2}$/;
     FindingsEvidenceError = class FindingsEvidenceError extends Error {
       code;
       details;
@@ -14337,12 +7706,11 @@ var init_engine = __esm(() => {
     ADR_BUCKETS = ["proposed", "implemented", "rejected", "archived"];
     GITIGNORE_PROCESS_ENTRIES = GITIGNORE_SNIPPET.split(`
 `).filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/")).map((line) => line.trim());
-    GITIGNORE_PROCESS_ENTRIES_AGENTS = GITIGNORE_SNIPPET_AGENTS.split(`
-`).filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/")).map((line) => line.trim());
-    HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+    HARNESS_ROOT_DECLARATION = /^!?\/?\.mstar(?:\/|$)/;
   });
   init_plan_path = __esm2(() => {
     init_coordination_write();
+    init_document_frontmatter();
     init_path();
     PlanPathError = class PlanPathError extends Error {
       code;
@@ -14354,10 +7722,10 @@ var init_engine = __esm(() => {
         this.details = details;
       }
     };
-    PLAN_CONSULTED_HEADERS = {
-      plan_id: true,
-      "main worktree branch": true,
-      "working branch": true
+    PLAN_CONSULTED_KEYS = {
+      "main worktree branch": "main_worktree_branch",
+      plan_id: "plan_id",
+      "working branch": "working_branch"
     };
   });
   init_workflow = __esm2(() => {
@@ -14444,7 +7812,6 @@ var init_engine = __esm(() => {
       guide: true,
       compass: true,
       plan: true,
-      roadmap: true,
       review: true,
       other: true
     };
@@ -14590,7 +7957,6 @@ var init_engine = __esm(() => {
       "sync_cursor",
       "sync_runs",
       "project_bindings",
-      "project_roadmaps",
       "project_milestones",
       "catalog_entities",
       "catalog_links",
@@ -14632,13 +7998,19 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       name: "collaboration-milestone-effort",
       sql: COLLABORATION_MILESTONE_EFFORT_V6_SQL
     };
+    COLLABORATION_ROADMAP_REMOVAL_SCHEMA = {
+      version: 7,
+      name: "collaboration-roadmap-removal",
+      sql: COLLABORATION_ROADMAP_REMOVAL_SQL
+    };
     COLLABORATION_MIGRATIONS = [
       COLLABORATION_SCHEMA,
       COLLABORATION_REMOTE_SCHEMA,
       COLLABORATION_OUTBOX_SCHEMA,
       COLLABORATION_MOVE_SCHEMA,
       COLLABORATION_MOVE_ROUTE_SCHEMA,
-      COLLABORATION_MILESTONE_EFFORT_SCHEMA
+      COLLABORATION_MILESTONE_EFFORT_SCHEMA,
+      COLLABORATION_ROADMAP_REMOVAL_SCHEMA
     ];
     COLLABORATION_REMOTE_TABLES = [
       "remote_bindings",
@@ -14662,7 +8034,6 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       "occurrences",
       "project_bindings",
       "project_milestones",
-      "project_roadmaps",
       "provenance",
       "relations",
       "remote_bindings",
@@ -14949,7 +8320,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       ...COLLABORATION_V4_COLUMNS,
       ...COLLABORATION_ROUTE_COLUMNS
     };
-    COLLABORATION_CURRENT_COLUMNS = {
+    COLLABORATION_V6_COLUMNS = {
       ...COLLABORATION_V5_ROUTE_COLUMNS,
       project_milestones: [
         "milestone_id",
@@ -14962,8 +8333,10 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
         "revision",
         "created_at",
         "updated_at"
-      ]
+      ],
+      project_roadmaps: ["project_id", "project_kind", "content_markdown", "content_hash", "revision", "updated_at"]
     };
+    COLLABORATION_CURRENT_COLUMNS = Object.fromEntries(Object.entries(COLLABORATION_V6_COLUMNS).filter(([table]) => table !== COLLABORATION_ROADMAP_TABLE));
     COLLABORATION_KEY_LAYOUT_V2 = [
       {
         table: "collaboration_meta",
@@ -15142,14 +8515,14 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       ...COLLABORATION_KEY_LAYOUT_ROUTE
     ];
     COLLABORATION_MOVE_TABLES = ["issue_moves"];
-    COLLABORATION_V3_TABLES = COLLABORATION_TABLES.filter((table) => !COLLABORATION_MOVE_TABLES.includes(table));
+    COLLABORATION_V6_TABLES = [...COLLABORATION_TABLES, COLLABORATION_ROADMAP_TABLE];
+    COLLABORATION_V3_TABLES = COLLABORATION_V6_TABLES.filter((table) => !COLLABORATION_MOVE_TABLES.includes(table));
     COLLABORATION_V2_TABLES = COLLABORATION_V3_TABLES.filter((table) => !COLLABORATION_OUTBOX_TABLES.includes(table));
-    COLLABORATION_V1_TABLES = COLLABORATION_TABLES.filter((table) => !COLLABORATION_REMOTE_TABLES.includes(table) && !COLLABORATION_OUTBOX_TABLES.includes(table) && !COLLABORATION_MOVE_TABLES.includes(table));
+    COLLABORATION_V1_TABLES = COLLABORATION_V6_TABLES.filter((table) => !COLLABORATION_REMOTE_TABLES.includes(table) && !COLLABORATION_OUTBOX_TABLES.includes(table) && !COLLABORATION_MOVE_TABLES.includes(table));
     COLLABORATION_CUTOVER_TABLES = [
       "catalog_entities",
       "catalog_links",
       "project_milestones",
-      "project_roadmaps",
       "issues",
       "occurrences",
       "relations",
@@ -15162,6 +8535,11 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       "project_bindings",
       "catalog_operations",
       "issue_counter"
+    ];
+    COLLABORATION_SOURCE_DROP_TABLES = [
+      ...COLLABORATION_CUTOVER_TABLES.slice(0, 2),
+      COLLABORATION_ROADMAP_TABLE,
+      ...COLLABORATION_CUTOVER_TABLES.slice(2)
     ];
     PASS_THROUGH_STORE_CODES = {
       "store.busy": true,
@@ -15187,23 +8565,6 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     RECOVERY_FORBIDDEN_FORM = /\b(pragma|attach|detach|vacuum|create|drop|alter|temp)\b/;
     RECOVERY_FORBIDDEN_REPLACE = /(?:^|;)\s*replace\s+into\b/;
   });
-  init_roadmap_store = __esm2(() => {
-    init_collaboration_store();
-    init_collaboration_identity();
-    init_collaboration_remote_read();
-    init_store_db();
-    init_roadmap_content();
-    RoadmapError = class RoadmapError extends Error {
-      code;
-      constructor(code, message) {
-        super(`[${code}] ${message}`);
-        this.name = "RoadmapError";
-        this.code = code;
-      }
-    };
-  });
-  init_roadmap_store();
-  init_roadmap_content();
   init_core();
   init_mstarc();
   init_collaboration_identity();
@@ -15224,6 +8585,9 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   init_dispatch();
   init_worktree();
   init_path();
+  init_plan_path();
+  init_document_frontmatter();
+  init_document_schema();
   init_workflow();
   init_execution_store();
   init_worktree();
@@ -15238,6 +8602,8 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   init_workflow();
   init_project();
   MAX_STATUS_CONTENT_LENGTH = 2 * 1024 * 1024;
+  init_document_frontmatter();
+  init_document_schema();
   init_path();
   STORE_AUTHORITY_FILES = [
     "store.db",
@@ -15281,6 +8647,8 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     ...KNOWLEDGE_KNOWLEDGE_PROBLEM_TYPES
   ];
   WALK_SKIP_DIRS = new Set(["node_modules", ".git", "dist"]);
+  init_document_frontmatter();
+  init_document_schema();
   REMOVAL_PATH_PATTERNS = [
     /status\.json/i,
     /R#\d+/i,
@@ -15408,7 +8776,6 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   init_execution_store();
   init_status();
   init_workflow();
-  init_roadmap_store();
   init_store_db();
   init_execution_store();
   init_cross_authority_move();
@@ -15442,6 +8809,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   init_status();
   init_issue();
   init_issue();
+  init_catalog();
   captureStackTrace = "captureStackTrace" in Error ? Error.captureStackTrace : (..._args) => {};
   allowsEval = /* @__PURE__ */ cached(() => {
     if (globalConfig.jitless) {
@@ -15950,7 +9318,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       return hide(this, "~standard", standardProps(this));
     },
     set "~standard"(value) {
-      own3(this, "~standard", value);
+      own(this, "~standard", value);
     }
   });
   $ZodString = /* @__PURE__ */ $constructor("$ZodString", (inst, def) => {
@@ -16961,12 +10329,12 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   ZodRealError = /* @__PURE__ */ $constructor("ZodError", initializer2, undefined, {
     Parent: Error
   });
-  parse3 = /* @__PURE__ */ _parse(ZodRealError);
+  parse2 = /* @__PURE__ */ _parse(ZodRealError);
   parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError);
   safeParse = /* @__PURE__ */ _safeParse(ZodRealError);
   safeParseAsync = /* @__PURE__ */ _safeParseAsync(ZodRealError);
   encode = /* @__PURE__ */ _encode(ZodRealError);
-  decode2 = /* @__PURE__ */ _decode(ZodRealError);
+  decode = /* @__PURE__ */ _decode(ZodRealError);
   encodeAsync = /* @__PURE__ */ _encodeAsync(ZodRealError);
   decodeAsync = /* @__PURE__ */ _decodeAsync(ZodRealError);
   safeEncode = /* @__PURE__ */ _safeEncode(ZodRealError);
@@ -17084,10 +10452,10 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       });
     },
     set "~standard"(value) {
-      own3(this, "~standard", value);
+      own(this, "~standard", value);
     },
     parse: function _parse(data, params) {
-      return parse3(this, data, params, { callee: _parse });
+      return parse2(this, data, params, { callee: _parse });
     },
     parseAsync: async function _parseAsync(data, params) {
       return await parseAsync(this, data, params, { callee: _parseAsync });
@@ -17102,7 +10470,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       return this?.safeParseAsync;
     },
     set spa(value) {
-      own3(this, "spa", value);
+      own(this, "spa", value);
     },
     validate(data, params) {
       return validate(this, data, params);
@@ -17114,7 +10482,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       return encode(this, data, params, { callee: _encode });
     },
     decode: function _decode(data, params) {
-      return decode2(this, data, params, { callee: _decode });
+      return decode(this, data, params, { callee: _decode });
     },
     encodeAsync: async function _encodeAsync(data, params) {
       return await encodeAsync(this, data, params, { callee: _encodeAsync });
@@ -17695,11 +11063,11 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     ZodType.init(inst, def);
     inst._zod.processJSONSchema = (ctx, json, params) => customProcessor(inst, ctx, json, params);
   });
-  gitObjectId = string4().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, "a Git object id");
-  providerId2 = string4().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "a lowercase UUID");
-  rfc3339 = string4().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/, "a UTC RFC 3339 instant");
-  sha256Digest = string4().regex(/^[0-9a-f]{64}$/, "a canonical lowercase SHA-256 digest");
-  issueRef = string4().regex(/^mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "a portable mstar:issue:<uuid> reference");
+  gitObjectId = string2().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/, "a Git object id");
+  providerId2 = string2().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "a lowercase UUID");
+  rfc3339 = string2().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/, "a UTC RFC 3339 instant");
+  sha256Digest = string2().regex(/^[0-9a-f]{64}$/, "a canonical lowercase SHA-256 digest");
+  issueRef = string2().regex(/^mstar:issue:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, "a portable mstar:issue:<uuid> reference");
   providerScope = object({
     provider: literal("linear"),
     workspaceId: providerId2,
@@ -17717,55 +11085,55 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   scopeOutcome2 = union([
     object({
       kind: literal("verified"),
-      readerId: string4(),
-      writerId: string4().nullable(),
+      readerId: string2(),
+      writerId: string2().nullable(),
       capabilities: scopeCapabilities
     }).strict(),
     object({ kind: _enum(["unavailable", "scope-mismatch", "denied", "revoked", "unsafe-fidelity"]) }).strict()
   ]);
   scopeCheck2 = object({
-    projectId: string4(),
+    projectId: string2(),
     scope: providerScope,
     journalIssueId: providerId2,
     checkedAt: rfc3339,
     outcome: scopeOutcome2
   }).strict();
   mstarSubjectFields = object({
-    title: string4(),
+    title: string2(),
     kind: _enum(ISSUE_KINDS),
     severity: _enum(ISSUE_SEVERITIES),
     disposition: _enum(ISSUE_DISPOSITIONS),
-    impact: string4(),
-    acceptance: string4(),
-    owner: string4().nullish(),
+    impact: string2(),
+    acceptance: string2(),
+    owner: string2().nullish(),
     registeredAt: rfc3339.nullish(),
     closedAt: rfc3339.nullish(),
-    closureNote: string4().nullish(),
+    closureNote: string2().nullish(),
     createdAt: rfc3339,
     updatedAt: rfc3339,
     revision: number2().int().positive(),
-    milestoneId: string4().nullish()
+    milestoneId: string2().nullish()
   }).strict();
   occurrenceRecord = object({
     eventId: providerId2.describe("the history row's stable event UUID"),
-    occurrenceKey: string4(),
-    sourceKind: string4(),
-    sourceIdentity: string4(),
-    rootCauseKey: string4(),
-    acceptanceKey: string4(),
-    location: string4(),
-    observedBehavior: string4(),
-    evidence: array(string4()),
+    occurrenceKey: string2(),
+    sourceKind: string2(),
+    sourceIdentity: string2(),
+    rootCauseKey: string2(),
+    acceptanceKey: string2(),
+    location: string2(),
+    observedBehavior: string2(),
+    evidence: array(string2()),
     discoveredAt: rfc3339.nullish(),
     recordedAt: rfc3339,
     imported: boolean3()
   }).strict();
   closureEvidence = object({
-    reason: string4().nullish(),
-    scope: string4().nullish(),
-    references: array(string4()).optional(),
-    canonicalIssueId: string4().nullish(),
-    alignmentRef: string4().nullish()
+    reason: string2().nullish(),
+    scope: string2().nullish(),
+    references: array(string2()).optional(),
+    canonicalIssueId: string2().nullish(),
+    alignmentRef: string2().nullish()
   }).strict();
   importedRecordSpellings = [
     "legacyId",
@@ -17794,15 +11162,15 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     "registeredAt",
     "registered_at"
   ];
-  importedRecord2 = object(Object.fromEntries(importedRecordSpellings.map((key) => [key, string4().nullish()]))).strict().refine((record) => Object.keys(record).length > 0, "must carry the imported record's business fields").describe("the reviewed portable legacy register row: one spelling per field, and at least one field");
+  importedRecord2 = object(Object.fromEntries(importedRecordSpellings.map((key) => [key, string2().nullish()]))).strict().refine((record) => Object.keys(record).length > 0, "must carry the imported record's business fields").describe("the reviewed portable legacy register row: one spelling per field, and at least one field");
   transitionRecord = object({
     eventId: providerId2.describe("the history row's stable event UUID"),
     fromDisposition: _enum(ISSUE_DISPOSITIONS),
     toDisposition: _enum(ISSUE_DISPOSITIONS),
-    actor: string4().nullish(),
+    actor: string2().nullish(),
     occurredAt: rfc3339.nullish(),
     recordedAt: rfc3339,
-    reason: string4(),
+    reason: string2(),
     evidence: union([closureEvidence, importedRecord2]).describe("the closure document normally; the reviewed legacy register row when imported is true"),
     issueRevision: number2().int().nonnegative(),
     imported: boolean3()
@@ -17818,22 +11186,22 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   provenanceRecord2 = object({
     eventId: providerId2.describe("the history row's stable event UUID"),
     kind: _enum(provenanceKinds2),
-    target: string4(),
+    target: string2(),
     sourceHash: sha256Digest,
     origin: _enum(["scoped", "unscoped"]),
-    legacyProject: string4().nullish(),
-    legacyBucket: string4().nullish(),
-    legacyEntryId: string4().nullish(),
-    legacyJson: string4().nullish().describe("the legacy row's JSON text; mutually exclusive with legacyRecord"),
+    legacyProject: string2().nullish(),
+    legacyBucket: string2().nullish(),
+    legacyEntryId: string2().nullish(),
+    legacyJson: string2().nullish().describe("the legacy row's JSON text; mutually exclusive with legacyRecord"),
     legacyRecord: importedRecord2.nullish(),
     importedAt: rfc3339.nullish()
   }).strict();
   projectMoveRecord = object({
     eventId: providerId2.describe("the history row's stable event UUID"),
-    fromProject: string4(),
-    toProject: string4(),
-    actor: string4(),
-    reason: string4(),
+    fromProject: string2(),
+    toProject: string2(),
+    actor: string2(),
+    reason: string2(),
     occurredAt: rfc3339,
     issueRevision: number2().int().nonnegative()
   }).strict();
@@ -17848,14 +11216,14 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   portableSubject = object({ issueRef, head: array(sha256Digest), fields: mstarSubjectFields, ...subjectHistory }).strict().describe("the complete portable subject the snapshot carries");
   remoteIssue2 = object({
     identity: providerIssueIdentity,
-    nativeTitle: string4(),
-    nativeStatus: string4(),
+    nativeTitle: string2(),
+    nativeStatus: string2(),
     providerUpdatedAt: rfc3339,
     mstar: portableSubject.nullable()
   }).strict();
   milestoneDocument = object({
-    milestoneId: string4(),
-    name: string4(),
+    milestoneId: string2(),
+    name: string2(),
     effortSessions: number2().int().min(1).nullable().describe("null or an integer of at least 1 (a count of standard sessions)"),
     status: _enum(["planned", "active", "delivered", "dropped"]),
     ordinal: number2().int().nonnegative(),
@@ -17863,28 +11231,26 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     createdAt: rfc3339,
     updatedAt: rfc3339
   }).strict();
-  roadmapDocument = object({ contentMarkdown: string4(), revision: number2().int().positive(), updatedAt: rfc3339 }).strict();
   catalogEntityDocument = object({
     kind: _enum(["project", "iteration", "plan", "document"]),
-    id: string4(),
-    title: string4(),
-    description: string4().nullable(),
-    documentKind: string4().nullable(),
+    id: string2(),
+    title: string2(),
+    description: string2().nullable(),
+    documentKind: _enum(DOCUMENT_KIND_NAMES).nullable(),
     lifecycle: _enum(["active", "archived", "superseded"]),
     revision: number2().int().positive()
   }).strict();
   catalogLinkDocument = object({
     fromKind: _enum(["project", "iteration", "plan", "document"]),
-    fromId: string4(),
+    fromId: string2(),
     relation: _enum(["belongs-to", "documents", "spec-ref", "knowledge-ref", "derived-from", "supersedes"]),
     toKind: _enum(["project", "iteration", "plan", "document"]),
-    toId: string4(),
+    toId: string2(),
     ordinal: number2().int().nonnegative().nullable()
   }).strict();
   projectDocument = object({
-    projectId: string4(),
+    projectId: string2(),
     milestones: array(milestoneDocument),
-    roadmap: roadmapDocument.nullable(),
     catalogEntities: array(catalogEntityDocument),
     catalogLinks: array(catalogLinkDocument)
   }).strict();
@@ -17895,8 +11261,8 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       object({
         kind: literal("partial"),
         stream: _enum(["issues", "comments", "journal"]),
-        nextCursor: string4().nullable(),
-        code: string4()
+        nextCursor: string2().nullable(),
+        code: string2()
       }).strict()
     ]),
     project: projectDocument.extend({ head: array(sha256Digest).nullable(), binding: providerScope }).strict(),
@@ -17904,8 +11270,8 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   }).strict();
   frozenEvent2 = object({
     version: literal(1),
-    repoKey: string4(),
-    projectId: string4(),
+    repoKey: string2(),
+    projectId: string2(),
     operationId: providerId2,
     parents: array(sha256Digest).describe("sorted unique content digests of the heads this event replaces"),
     change: union([
@@ -17938,18 +11304,18 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
       capture: object({
         kind: _enum(ISSUE_KINDS),
         severity: _enum(ISSUE_SEVERITIES),
-        impact: string4(),
-        acceptance: string4(),
-        owner: string4().optional(),
-        sourceIdentity: string4(),
-        rootCauseKey: string4(),
-        acceptanceKey: string4(),
-        occurrenceKey: string4(),
-        sourceKind: string4(),
-        location: string4(),
-        observedBehavior: string4(),
-        evidence: array(string4()),
-        discoveredAt: string4()
+        impact: string2(),
+        acceptance: string2(),
+        owner: string2().optional(),
+        sourceIdentity: string2(),
+        rootCauseKey: string2(),
+        acceptanceKey: string2(),
+        occurrenceKey: string2(),
+        sourceKind: string2(),
+        location: string2(),
+        observedBehavior: string2(),
+        evidence: array(string2()),
+        discoveredAt: string2()
       }).strict()
     }).strict(),
     object({
@@ -17966,12 +11332,12 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     observedHeads: array(sha256Digest),
     observedRecords: array(object({ identity: providerIssueIdentity, recordId: providerId2, event: frozenEvent2 }).strict())
   }).strict();
-  notSentOutcome = object({ kind: literal("not-sent"), code: string4() }).strict();
+  notSentOutcome = object({ kind: literal("not-sent"), code: string2() }).strict();
   receiptEnvelopeFields = {
     version: literal(1),
     selectorCommit: gitObjectId,
     generation: number2().int().positive(),
-    projectId: string4(),
+    projectId: string2(),
     operationId: providerId2,
     attemptId: providerId2,
     requestHash: sha256Digest,
@@ -17987,15 +11353,15 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   }).strict();
   remoteResolutionDocumentSchema = object({
     operationId: providerId2,
-    operator: string4(),
-    reason: string4(),
+    operator: string2(),
+    reason: string2(),
     event: frozenEvent2.describe("the replacement event in the frozen event's own shape, with a NEW operation id and parents citing every fork head")
   }).strict();
   remoteForkObservationDocumentSchema = object({
     version: literal(1),
     selectorCommit: gitObjectId,
     generation: number2().int().positive(),
-    projectId: string4(),
+    projectId: string2(),
     conflictOperationId: providerId2,
     asOf: rfc3339,
     coverage: literal("complete"),
@@ -18007,17 +11373,17 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
     route: _enum(["local-local", "local-remote", "remote-local", "remote-unknown"]),
     operationId: providerId2,
     issueRef,
-    sourceAuthority: string4(),
-    destinationAuthority: string4(),
-    destinationProject: string4(),
-    actor: string4(),
-    reason: string4(),
-    payloadJson: string4(),
+    sourceAuthority: string2(),
+    destinationAuthority: string2(),
+    destinationProject: string2(),
+    actor: string2(),
+    reason: string2(),
+    payloadJson: string2(),
     payloadDigest: sha256Digest,
-    stagedCounts: string4(),
-    sourceStoreId: string4(),
+    stagedCounts: string2(),
+    sourceStoreId: string2(),
     sourceEpoch: number2().int().positive(),
-    sourceIssueId: string4().nullable(),
+    sourceIssueId: string2().nullable(),
     destinationIssueId: providerId2.nullable(),
     confirmation: object({
       operationId: providerId2,
@@ -18035,6 +11401,25 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
   init_issue();
   init_git_probe();
   init_catalog();
+  init_collaboration_identity();
+  init_collaboration_store();
+  init_cross_authority_move();
+  ISSUE_LINE = new RegExp(`^- ((?:I-[0-9]{6})|(?:${POINTER})) — (.+)$`);
+  ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`, "g");
+  HAS_ISSUE_POINTER = new RegExp(`(?:I-[0-9]{6})|(?:${POINTER})`);
+  ISSUE_REF = new RegExp(`^${POINTER}$`);
+  LANE_REFUSAL_CODES = new Set([
+    "collaboration.not-initialized",
+    "collaboration.stale-binding",
+    "collaboration.unreadable",
+    "collaboration.cutover-required",
+    "collaboration.not-active",
+    "store.busy",
+    "store.corrupt",
+    "store.schema-unsupported",
+    "store.unreadable",
+    "remote.unavailable"
+  ]);
   init_catalog_import();
   init_catalog_registration();
   init_catalog();
@@ -18087,7 +11472,7 @@ ${COLLABORATION_ISSUES_V2_RESTORE_SQL}`
 
 // hooks/src/session-context.ts
 import fs from "node:fs";
-import path2 from "node:path";
+import path from "node:path";
 import { execFileSync as execFileSync2 } from "node:child_process";
 function readStdinJson() {
   try {
@@ -18123,7 +11508,7 @@ function resolveHarnessDir2(root) {
     if (first)
       main = first.slice("worktree ".length).trim();
   } catch {}
-  const fixed = path2.join(main, ".mstar");
+  const fixed = path.join(main, ".mstar");
   try {
     return fs.statSync(fixed).isDirectory() ? fixed : null;
   } catch {

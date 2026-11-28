@@ -281,11 +281,7 @@ describe("shared host-health helpers", () => {
 
     writeText(main, ".mstarc", "[config]\nreview_dir=process/reviews\n");
     const withoutMode = await definition.execute({ path: main }, context);
-    expect(withoutMode.status).toBe("ok");
-    if (withoutMode.status !== "ok") return;
-    const diagnostic = (withoutMode.data as Record<string, unknown>).collaboration as { code: string; message: string };
-    expect(diagnostic.code).toBe("collaboration.mode-required");
-    expect(diagnostic.message).toContain("mode=local");
+    expect(withoutMode).toMatchObject({ status: "ok", data: { collaboration: expected } });
   });
 
   test("path resolve treats a nested worktree as a linked checkout", async () => {

@@ -215,13 +215,14 @@ describe("collaboration identity", () => {
     expect(refusal(() => resolveAt(plain)).code).toBe("collaboration.repo-identity-unresolved");
   });
 
-  test("missing invalid and remote modes refuse while local and mirror are accepted", () => {
+  test("an absent mode defaults to local while empty, invalid and remote selections are checked", () => {
     const origin = "https://github.com/acme/widgets.git";
-    const absent = refusal(() => resolveAt(makeRepo(origin)));
-    expect(absent.code).toBe("collaboration.mode-required");
-    expect(absent.message).toContain("mode");
+    const absent = resolveAt(makeRepo(origin));
+    expect(absent.mode).toBe("local");
+    expect(absent.dbPath).toBe(join(HOME, ".mstar", "repos", "github.com", "acme", "widgets", "collaboration.db"));
+    expect(resolveAt(makeRepo(origin, "[collaboration]\n")).mode).toBe("local");
 
-    const empty = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\n")));
+    const empty = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=\n")));
     expect(empty.code).toBe("collaboration.mode-required");
 
     const invalid = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=server\n")));
@@ -315,7 +316,7 @@ describe("collaboration identity", () => {
     expect(refusal(() => resolveAt(linked)).code).toBe("collaboration.config-unreadable");
 
     const absent = makeRepo("https://github.com/acme/widgets.git");
-    expect(refusal(() => resolveAt(absent)).code).toBe("collaboration.mode-required");
+    expect(resolveAt(absent).mode).toBe("local");
   });
 
   test("reserved authority basenames cannot occupy a repository directory", async () => {
@@ -500,6 +501,10 @@ describe("remote selector resolution", () => {
       previous: null,
       cutover: null,
     });
+    const observed = JSON.parse(
+      readFileSync(join(repo, ".mstar", "collaboration-selector-observation.json"), "utf8"),
+    ) as { selectorCommit: string; generation: number };
+    expect(observed).toMatchObject({ selectorCommit: commit, generation: 4 });
   });
 
   test("an unavailable origin refuses remote selection, never reads it as absence", () => {
@@ -525,6 +530,27 @@ describe("remote selector resolution", () => {
     const foreign = refusal(() => resolveAt(repo));
     expect(foreign.code).toBe("collaboration.stale-binding");
     expect(foreign.message).toContain("github.com/other/repo");
+  });
+
+  test("an absent mode beside a published remote selector refuses and keeps the observation", () => {
+    const origin = makeSelectorOrigin();
+    const commit = origin.publish(selectorPayload());
+    const repo = makeRepo(CANONICAL_ORIGIN, undefined, false);
+    git(repo, "config", `url.${origin.bare}.insteadOf`, CANONICAL_ORIGIN);
+
+    const result = refusal(() => resolveAt(repo));
+    expect(result.code).toBe("collaboration.stale-binding");
+    expect(result.message).toContain("declares no mode");
+    expect(result.message).toContain("mode=remote");
+    expect(
+      JSON.parse(readFileSync(join(repo, ".mstar", "collaboration-selector-observation.json"), "utf8")),
+    ).toMatchObject({ repoKey: CANONICAL_REPO_KEY, selectorCommit: commit });
+
+    git(origin.bare, "update-ref", "-d", SELECTOR_REF);
+    const deleted = refusal(() => resolveAt(repo));
+    expect(deleted.code).toBe("collaboration.stale-binding");
+    expect(deleted.message).toContain(commit);
+    expect(deleted.message).toContain("Re-publish");
   });
 
   test("a malformed published selector refuses remote selection", () => {

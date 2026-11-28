@@ -280,7 +280,11 @@ describe("mstar path resolve — collaboration diagnostic", () => {
         writeFileSync(join(root, ".mstarc"), "[config]\nreview_dir=process/reviews\n");
         const withoutMode = runResolve([root], { HOME: home });
         expect(withoutMode.exitCode).toBe(0);
-        expect(data(withoutMode).collaboration).toMatchObject({ code: "collaboration.mode-required" });
+        expect(data(withoutMode).collaboration).toEqual({
+          repoKey: "github.com/acme/repo",
+          mode: "local",
+          dbPath: join(home, ".mstar", "repos", "github.com", "acme", "repo", "collaboration.db"),
+        });
       });
     } finally {
       rmSync(home, { recursive: true, force: true });

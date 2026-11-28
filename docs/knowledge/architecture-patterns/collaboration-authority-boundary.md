@@ -40,9 +40,10 @@ copy of the same authority, and a host write gate cannot protect only the execut
   keep non-default ports as `host~port`. An origin-less repository may select an explicit `[collaboration]
   repo_id`; a path, Git author, `store_id`, or project name is never storage identity. Different origins and
   forks must not converge.
-- **The mode is explicit and fail-closed.** `[collaboration] mode=local|mirror|remote` selects the authority.
-  A missing, invalid, or unsupported mode refuses; it never defaults to local. Remote is not approximated by a
-  local read.
+- **The mode is explicit for every non-default authority.** An absent `[collaboration]` section selects `local`;
+  `mirror` and `remote` are declared, an empty `mode=` refuses `collaboration.mode-required`, and a declared mode that
+  disagrees with the published selector refuses `collaboration.stale-binding`. A published selector is never
+  approximated by a local read.
 - **The collaboration store has its own schema and staged/active lifecycle.** It contains no `execution_*`
   tables, workflow plans, sessions, leases, or coordinator rows. Creation is staged, verified, and only then
   active. A newer schema must be reported as an unsupported version, not as corruption: read the migration
@@ -145,8 +146,10 @@ copy of the same authority, and a host write gate cannot protect only the execut
   store from a rejected storage path (symlink/permission/canonical-private failure) and gives the correct recovery.
   dsh and the host gates consume the same probe; dsh aggregate facts disclose completeness and `asOf`, not
   projection health as authority.
-- **Explicit mode is part of the install.** A repository's own `.mstarc` must declare `[collaboration] mode=...`;
-  without it the repository's store verbs refuse `collaboration.mode-required`. Test fixtures must isolate
+- **The local default is part of the install.** A repository's own `.mstarc` leaves the `local` authority only by
+  declaring `[collaboration] mode=mirror|remote`; an absent section selects local, an empty `mode=` refuses
+  `collaboration.mode-required`, and a published selector refuses a checkout that defaulted to local.
+  Test fixtures must isolate
   `homedir`/HOME and restore spies before deleting their temp roots; never write test lanes under a real user HOME.
 
 ## Why This Matters

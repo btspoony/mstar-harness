@@ -250,13 +250,18 @@ function selectorUnavailable(cause: string): never {
   );
 }
 
-function selectorStale(cause: string): never {
+function selectorStale(cause: string, recovery?: string): never {
   throw new CollaborationIdentityError(
     "collaboration.stale-binding",
-    `${cause}. Inspect the published selector and this checkout's binding with mstar path resolve, then complete the ` +
-      `reviewed remote bind for this checkout; nothing was read as collaboration authority`,
+    `${cause}. ${recovery ?? "Inspect the published selector and this checkout's binding with mstar path resolve, then " +
+      "complete the reviewed remote bind for this checkout; nothing was read as collaboration authority"}`,
   );
 }
+
+const SELECTOR_ABSENT_RECOVERY =
+  `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin, then re-run; this checkout keeps the observation ` +
+  `it recorded, so a mode change alone does not clear the fence and the reviewed and observe verbs cannot bind a ref ` +
+  `the origin does not publish`;
 
 function lookupSelector(mainRoot: string): string | null {
   let out: string;
@@ -399,7 +404,12 @@ function parseSelectorCutover(
   };
 }
 
-function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): CollaborationSelector {
+function parseSelector(
+  raw: unknown,
+  repoKey: string,
+  mode: CollaborationMode,
+  declaredMode: string | undefined,
+): CollaborationSelector {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) selectorUnavailable("The selector payload is not an object");
   const body = raw as Record<string, unknown>;
   if (body.version !== 1) selectorUnavailable("The selector payload's version is not supported");
@@ -412,7 +422,11 @@ function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): 
     selectorUnavailable("The selector's mode is not supported");
   }
   if (selectorMode !== mode) {
-    selectorStale(`The published selector selects ${selectorMode} while ${MSTARC_FILE} selects ${mode}`);
+    selectorStale(
+      `The published selector selects ${selectorMode} while ${MSTARC_FILE} ` +
+        (declaredMode === undefined ? `declares no mode, which defaults to ${mode}` : `selects ${mode}`) +
+        `; declare 'mode=${selectorMode}' in [${COLLABORATION_SECTION}] to follow the published selector`,
+    );
   }
   if (body.phase !== "active" && body.phase !== "draining") {
     selectorUnavailable("The selector's phase is not active or draining");
@@ -485,12 +499,6 @@ function recordObservedSelector(context: StoreContext, seen: SelectorObservation
   }
 }
 
-function readableGeneration(raw: unknown): number | undefined {
-  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
-  const value = (raw as Record<string, unknown>).generation;
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
-}
-
 function remoteBindingRecorded(context: StoreContext): boolean {
   try {
     const raw: unknown = JSON.parse(readFileSync(join(context.harnessDir, COLLABORATION_BINDING_FILE), "utf8"));
@@ -505,6 +513,7 @@ function resolvePublishedSelector(
   mainRoot: string,
   repoKey: string,
   mode: CollaborationMode,
+  declaredMode: string | undefined,
 ): CollaborationSelection | null {
   const commit = lookupSelector(mainRoot);
   if (commit === null) {
@@ -513,20 +522,38 @@ function resolvePublishedSelector(
       selectorStale(
         `This checkout observed selector ${seen.selectorCommit}` +
           `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
       );
     }
     if (remoteBindingRecorded(context)) {
-      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+      selectorStale(
+        `This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
+      );
     }
     return null;
   }
-  recordObservedSelector(context, { repoKey, selectorCommit: commit });
-  const payload = selectorPayload(mainRoot, commit);
+  let payload: unknown;
+  try {
+    payload = selectorPayload(mainRoot, commit);
+  } catch (error) {
+    recordObservedSelector(context, { repoKey, selectorCommit: commit });
+    throw error;
+  }
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  const generation = readableGeneration(payload);
-  if (generation !== undefined) recordObservedSelector(context, { repoKey, selectorCommit: commit, generation });
-  const selector = parseSelector(payload, repoKey, mode);
+  let selector: CollaborationSelector;
+  try {
+    selector = parseSelector(payload, repoKey, mode, declaredMode);
+  } catch (error) {
+    recordObservedSelector(context, { repoKey, selectorCommit: commit });
+    throw error;
+  }
+  recordObservedSelector(context, {
+    repoKey,
+    selectorCommit: commit,
+    generation: selector.generation,
+  });
   return {
     commit,
     generation: selector.generation,
@@ -538,13 +565,12 @@ function resolvePublishedSelector(
 }
 
 function resolveMode(raw: string | undefined): CollaborationMode {
-  if (raw === undefined || raw === "") {
+  if (raw === undefined) return "local";
+  if (raw === "") {
     throw new CollaborationIdentityError(
       "collaboration.mode-required",
-      (raw === ""
-        ? `An empty [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; `
-        : `No [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; `) +
-        "add 'mode=local', 'mode=mirror' or 'mode=remote' and re-run",
+      `An empty [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; ` +
+        "remove the line to keep the local default, or write 'mode=local', 'mode=mirror' or 'mode=remote' and re-run",
     );
   }
   if (raw === "local" || raw === "mirror" || raw === "remote") return raw;
@@ -665,10 +691,14 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
       selectorStale(
         `This checkout observed selector ${seen.selectorCommit}` +
           `${seen.generation === undefined ? "" : ` (generation ${seen.generation})`}, but the origin now publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
       );
     }
     if (remoteBindingRecorded(context)) {
-      selectorStale(`This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`);
+      selectorStale(
+        `This checkout is recorded as bound to a remote selector, but the origin publishes no ${AUTHORITY_REF}`,
+        SELECTOR_ABSENT_RECOVERY,
+      );
     }
     return;
   }
@@ -678,8 +708,9 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
 }
 
 /**
- * Canonical collaboration identity, explicit mode and user-level database path
- * for this control harness. Every origin-backed checkout proves its selection
+ * Canonical collaboration identity, mode and user-level database path for
+ * this control harness. An absent mode selects `local`; `mirror` and `remote`
+ * are declared. Every origin-backed checkout proves its selection
  * from the origin's protected selector ref first: a local/mirror checkout keeps
  * its own lane only when that live lookup confirms no selector. A `remote` mode
  * requires the checked selection; a local/mirror mode that admits beside an
@@ -703,7 +734,7 @@ export function resolveCollaborationLocation(
       selectorUnavailable("This repository has no origin remote, so it cannot enroll in remote collaboration");
     }
   } else {
-    const published = resolvePublishedSelector(context, mainRoot, identity.repoKey, mode);
+    const published = resolvePublishedSelector(context, mainRoot, identity.repoKey, mode, config.mode);
     if (mode === "remote") {
       if (published === null) selectorUnavailable(`The origin remote publishes no ${AUTHORITY_REF}`);
       selection = published;
