@@ -399,7 +399,12 @@ function parseSelectorCutover(
   };
 }
 
-function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): CollaborationSelector {
+function parseSelector(
+  raw: unknown,
+  repoKey: string,
+  mode: CollaborationMode,
+  declaredMode: string | undefined,
+): CollaborationSelector {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) selectorUnavailable("The selector payload is not an object");
   const body = raw as Record<string, unknown>;
   if (body.version !== 1) selectorUnavailable("The selector payload's version is not supported");
@@ -412,7 +417,11 @@ function parseSelector(raw: unknown, repoKey: string, mode: CollaborationMode): 
     selectorUnavailable("The selector's mode is not supported");
   }
   if (selectorMode !== mode) {
-    selectorStale(`The published selector selects ${selectorMode} while ${MSTARC_FILE} selects ${mode}`);
+    selectorStale(
+      `The published selector selects ${selectorMode} while ${MSTARC_FILE} ` +
+        (declaredMode === undefined ? `declares no mode, which defaults to ${mode}` : `selects ${mode}`) +
+        `; declare 'mode=${selectorMode}' in [${COLLABORATION_SECTION}] to follow the published selector`,
+    );
   }
   if (body.phase !== "active" && body.phase !== "draining") {
     selectorUnavailable("The selector's phase is not active or draining");
@@ -505,6 +514,7 @@ function resolvePublishedSelector(
   mainRoot: string,
   repoKey: string,
   mode: CollaborationMode,
+  declaredMode: string | undefined,
 ): CollaborationSelection | null {
   const commit = lookupSelector(mainRoot);
   if (commit === null) {
@@ -526,7 +536,7 @@ function resolvePublishedSelector(
   if (confirmed !== commit) selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
   const generation = readableGeneration(payload);
   if (generation !== undefined) recordObservedSelector(context, { repoKey, selectorCommit: commit, generation });
-  const selector = parseSelector(payload, repoKey, mode);
+  const selector = parseSelector(payload, repoKey, mode, declaredMode);
   return {
     commit,
     generation: selector.generation,
@@ -538,13 +548,12 @@ function resolvePublishedSelector(
 }
 
 function resolveMode(raw: string | undefined): CollaborationMode {
-  if (raw === undefined || raw === "") {
+  if (raw === undefined) return "local";
+  if (raw === "") {
     throw new CollaborationIdentityError(
       "collaboration.mode-required",
-      (raw === ""
-        ? `An empty [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; `
-        : `No [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; `) +
-        "add 'mode=local', 'mode=mirror' or 'mode=remote' and re-run",
+      `An empty [${COLLABORATION_SECTION}] mode is configured in ${MSTARC_FILE}; ` +
+        "remove the line to keep the local default, or write 'mode=local', 'mode=mirror' or 'mode=remote' and re-run",
     );
   }
   if (raw === "local" || raw === "mirror" || raw === "remote") return raw;
@@ -678,8 +687,9 @@ export function assertSelectionUnchanged(context: StoreContext, location: Collab
 }
 
 /**
- * Canonical collaboration identity, explicit mode and user-level database path
- * for this control harness. Every origin-backed checkout proves its selection
+ * Canonical collaboration identity, mode and user-level database path for
+ * this control harness. An absent mode selects `local`; `mirror` and `remote`
+ * are declared. Every origin-backed checkout proves its selection
  * from the origin's protected selector ref first: a local/mirror checkout keeps
  * its own lane only when that live lookup confirms no selector. A `remote` mode
  * requires the checked selection; a local/mirror mode that admits beside an
@@ -703,7 +713,7 @@ export function resolveCollaborationLocation(
       selectorUnavailable("This repository has no origin remote, so it cannot enroll in remote collaboration");
     }
   } else {
-    const published = resolvePublishedSelector(context, mainRoot, identity.repoKey, mode);
+    const published = resolvePublishedSelector(context, mainRoot, identity.repoKey, mode, config.mode);
     if (mode === "remote") {
       if (published === null) selectorUnavailable(`The origin remote publishes no ${AUTHORITY_REF}`);
       selection = published;

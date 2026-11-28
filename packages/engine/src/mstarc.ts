@@ -42,7 +42,7 @@ export const MSTARC_SECTION = "config";
 export const LINEAR_SECTION = "linear";
 /** `[linear.mapping]` — optional per-value correspondence override. */
 export const LINEAR_MAPPING_SECTION = "linear.mapping";
-/** `[collaboration]` — explicit collaboration authority mode (`local|mirror|remote`) and optional origin-less id. */
+/** `[collaboration]` — collaboration authority mode (`mirror|remote`; absent selects `local`) and optional origin-less id. */
 export const COLLABORATION_SECTION = "collaboration";
 /** `[config]` key declaring `{PLAN_DIR}`. */
 export const MSTARC_PLAN_DIR_KEY = "plan_dir";

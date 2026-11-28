@@ -131,7 +131,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         // explicit document that overrides the generated one).
         ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> --attestation <absolute-json> for an upgrade, or mstar store activate --manifest <path> --operator <name> for an activation."
         : code === "collaboration.repo-identity-unresolved" || code === "collaboration.mode-required" || code === "collaboration.mode-invalid" || code === "collaboration.mode-unavailable"
-          ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=local|mirror, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
+          ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=mirror|remote to leave the local default, an absent mode keeping local, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
           : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
             ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then apply and activate it with mstar store collaboration apply --harness <abs> --manifest <abs-manifest> and mstar store collaboration activate --harness <abs> --manifest <abs-manifest>. A source or target another activation owns is preserved, never overwritten."
             : code === "collaboration.cutover-not-quiescent"

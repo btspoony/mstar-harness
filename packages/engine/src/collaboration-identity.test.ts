@@ -215,13 +215,14 @@ describe("collaboration identity", () => {
     expect(refusal(() => resolveAt(plain)).code).toBe("collaboration.repo-identity-unresolved");
   });
 
-  test("missing invalid and remote modes refuse while local and mirror are accepted", () => {
+  test("an absent mode defaults to local while empty, invalid and remote selections are checked", () => {
     const origin = "https://github.com/acme/widgets.git";
-    const absent = refusal(() => resolveAt(makeRepo(origin)));
-    expect(absent.code).toBe("collaboration.mode-required");
-    expect(absent.message).toContain("mode");
+    const absent = resolveAt(makeRepo(origin));
+    expect(absent.mode).toBe("local");
+    expect(absent.dbPath).toBe(join(HOME, ".mstar", "repos", "github.com", "acme", "widgets", "collaboration.db"));
+    expect(resolveAt(makeRepo(origin, "[collaboration]\n")).mode).toBe("local");
 
-    const empty = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\n")));
+    const empty = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=\n")));
     expect(empty.code).toBe("collaboration.mode-required");
 
     const invalid = refusal(() => resolveAt(makeRepo(origin, "[collaboration]\nmode=server\n")));
@@ -315,7 +316,7 @@ describe("collaboration identity", () => {
     expect(refusal(() => resolveAt(linked)).code).toBe("collaboration.config-unreadable");
 
     const absent = makeRepo("https://github.com/acme/widgets.git");
-    expect(refusal(() => resolveAt(absent)).code).toBe("collaboration.mode-required");
+    expect(resolveAt(absent).mode).toBe("local");
   });
 
   test("reserved authority basenames cannot occupy a repository directory", async () => {
