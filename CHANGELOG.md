@@ -8,6 +8,235 @@ Package-specific histories: [`packages/cli/CHANGELOG.md`](packages/cli/CHANGELOG
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-28
+
+### Breaking
+
+- **Collaboration state moved out of the execution store.** Issues, findings, occurrences, relations, provenance, projects, roadmaps, milestones, mirror ledgers, and portable catalog identity now live in one user-level SQLite database per canonical repository (`<user home>/.mstar/repos/<host>/<owner>/<repo>/collaboration.db`); `{HARNESS_DIR}/store.db` keeps execution state, projections, host state, and the cross-domain bookkeeping only.
+- **A collaboration mode is declared only to leave the local default.** An absent `[collaboration]` section or an absent `mode` selects `local`; a section declaring `mode=mirror` or `mode=remote` (the header alone on its line, the mode on the next line) selects another authority:
+  ```ini
+  ; optional — an absent section selects `local`
+  [collaboration]
+  mode=remote
+  ```
+  An origin-less repository additionally declares `repo_id` on its own line in that same section, because no origin can supply the identity. Writing the section and the mode on one line leaves the mode undeclared. An empty `mode=` refuses repository-scoped store verbs as `collaboration.mode-required`, an unknown one as `collaboration.mode-invalid`, and a declared mode that disagrees with the published selector as `collaboration.stale-binding`.
+- **Operator upgrade path.** Stop every old writer first, then run `mstar store collaboration plan --harness <abs> --out <abs-manifest>`, review the manifest, run `mstar store collaboration apply --harness <abs> --manifest <abs-manifest>`, and publish it with `mstar store collaboration activate --harness <abs> --manifest <abs-manifest> --operator <name> --attestation <abs-attestation>`. A fresh checkout uses `mstar store init`; a checkout that must bind an already published authority uses `mstar store collaboration adopt --harness <abs> --expect-store <store-id>`, because `store init` never adopts an active authority.
+- **Reads and gates disclose incompleteness instead of guessing.** Views and host gates carry a scoped collaboration observation with `asOf`, authority stamp, revisions, and completeness; a missing, staged, stale, or unreadable source refuses with a `collaboration.*` code rather than rendering zero or an empty success.
+- **Backups are a verified pair, restores are create-only.** `mstar store backup --out <abs-manifest>` now publishes and verifies an execution image plus a collaboration image; `mstar store collaboration restore --harness <abs> --backup <abs-manifest> --operator <name> --attestation <abs>` restores only into an absent canonical target, and `mstar store execution export|restore-preview|restore` remains explicitly execution-only.
+- **An existing collaboration lane must be upgraded explicitly.** The lane now carries two further immutable migrations —
+  `collaboration-remote-cache` (version 2: the stable `issues.issue_ref` and the remote cache tables) and
+  `collaboration-remote-outbox` (version 3: `remote_outbox` and `remote_outbox_receipts`).
+  `mstar store upgrade --operator <name>` advances an admitted version-1 lane in place to version 3, preserving its issue
+  history and minting one stable reference per issue; every ordinary read, write and `store init` refuses
+  `collaboration.upgrade-required` until that upgrade ran.
+- **`local`/`mirror` checkouts on an origin-backed repository now need a live Git selector lookup.** A failed lookup is
+  `remote.selector-unavailable` instead of assumed absence, and a published `draining` selector stops local/mirror
+  writers with `collaboration.stale-binding`. A checkout keeps its own lane only when the origin confirms no selector.
+- **`remote` mode is implemented.** The protected selector is the only selection authority; the checkout's database is a
+  verified observation cache maintained by `mstar store collaboration remote status|bind|observe`. Required views,
+  counts and gates answer from admitted snapshots or refuse with `remote.unavailable`,
+  `collaboration.observation-incomplete` or `collaboration.observation-stale`; they never fall back to local rows.
+  Switching a published `local`/`mirror` lane to remote is the reviewed transition: `remote bind` retires the
+  predecessor under write exclusion to `collaboration.retired-<storeId>-<epoch>.db` beside the lane and creates the
+  cache only afterwards.
+- **Freshness now has two clocks.** A required view, count, rollup or findings/completion gate needs a current positive
+  access check AND an observation whose provider traversal started inside the same 60-second window; a completion
+  witness is also bound to its exact selector commit and generation. Optional views disclose the gap instead.
+- **A collaboration mutation re-proves its selection before commit.** A selector that moves to a draining or successor
+  generation while a writer waits rolls the effect back, and a missing private cache never substitutes for the
+  checkout's recorded selector lineage.
+- **Remote writes are durable intents, not provider calls.** In a `remote` checkout every business write freezes an
+  intent in the version-3 outbox (`remote adopt-issue` enqueues an `issue-adopt` intent) and refuses
+  `remote.effect-pending` until a recorded receipt confirms it; a remote lane still below version 3 refuses
+  `collaboration.upgrade-required` at admission, and recovery is the reviewed `remote bind`
+  (`store upgrade` returns no collaboration receipt for `mode=remote`). The CLI performs no provider call —
+  `outbox-dispatch` issues the host's single send permit — so no credential or transport ships in the checkout.
+- **Every existing collaboration lane must be advanced to version 4, and the execution store gains version 22.** The lane
+  now carries `collaboration-cross-authority` (version 4: a nullable `relations.to_issue` beside `to_ref`, the `issue_moves`
+  ledger and fence, and the triggers that hold it), and the execution store gains `execution-issue-move-intent` (version 22),
+  which rebuilds `execution_collaboration_intents` with a fifth composite kind, `issue-move`. `mstar store upgrade --operator
+  <name>` advances an admitted version-1, -2 or -3 lane through the remaining steps in one `BEGIN IMMEDIATE`, and advances the
+  execution store in the same invocation; every ordinary read, write and `store init` refuses
+  `collaboration.upgrade-required` until the lane half ran, and a store below version 22 cannot record a move phase. A
+  `remote` cache is never upgraded in place: `remote bind` replaces a pre-v4 cache, and refuses `remote.effect-pending` —
+  naming the outbox route — while any intent is still `enqueued`, `unconfirmed`, or a `conflict` with no settlement reached.
+- **One record can now move to another authority as a staged, resumable move.** `issue move --to-authority <repo-key>` walks
+  `staged` → `verified` → `switched` → `published`; the source row of the new `issue_moves` ledger is both the ledger and the
+  fence, so from `staged` on every `issues`, `relations` and `issue_sync_state` write to that record aborts and reaches the
+  caller as `collaboration.operation-partial`. The same command resumes from whatever phase the ledger holds, `--discard`
+  abandons a move at or before `switched` and leaves the source record byte-identical — it carries the record's `--expect`
+  and no `--expect-store`, which a move's own phase commits have already advanced — and publication happens once per
+  operation id before deleting the source record, its children and its settled mirror rows.
+- **A relation whose target lives outside the lane is stored instead of refused.** `relations.to_issue` is nullable and
+  `to_ref` holds the target's stable `IssueRef`; exactly one of the two is set, and the table refuses a row with both or
+  neither. Both local readers answer `toIssue: null` / `toRef` / `title: null`, the row becomes a local relation in the
+  transaction that admits the target, and a record frozen by a move is never a mirror push candidate. Local `issue show` and
+  the `issue-detail` view now return the record's `issueRef`.
+- **Four refusal codes join the contract.** `issue.move-in-progress` is the source fence a write meets (and
+  `collaboration.move-phase-invalid` a transition that the ledger forbids), `collaboration.move-destination-occupied` an
+  occupant under the same reference that does not already hold the frozen image, and `issue.move-document-not-written` a
+  handoff document that could not be written — reported beside the move that completed, never as its failure.
+- **`mstar issue move` gains the cross-authority surface.** `--to-authority <repo-key>` selects the staged route (without it
+  the verb keeps its local project reassignment), and `--input <file|->` / `--out <abs>` are the two-checkout `local`/
+  `remote` exchange, where each side writes only the lane its own mode selects. A remote-to-remote move still refuses
+  `collaboration.mode-unavailable` and a destination that resolves to the record's own authority `issue.scope-refused`, both
+  before anything is staged.
+- **One declaration layer**: a plan, an Assignment, a task brief and a PM acceptance report declare their machine-read fields in a `---`-fenced front matter block read by the shared document schema — never a private field list per surface, and never a scan of the body.
+- **Assignment write homes**: a dispatching PM selects ONE write home by the Assignment's identity — plan → `{SDD_DIR}/assignments/`, iteration → `{ITERATION_DIR}/<id>/assignments/`, workflow → `{WORKFLOW_DIR}/<id>/assignments/` (precedence plan → iteration → workflow); a write home that would alias the read-only flat source `{HARNESS_DIR}/assignments/` is refused. An `Assignment file:` pointer is validated separately and never selects a home: it must be an absolute path, and after canonicalization it must land inside one of those three write homes or the flat read-only source `{HARNESS_DIR}/assignments/` — which the resolver accepts while no engine path creates a file there. A relative, unreadable, out-of-home or unrooted pointer refuses `dispatch.assignment.path`.
+- **No fallback**: a document carrying its fields as `**Label**:` body lines declares nothing. An inline one is refused `dispatch.assignment.legacy-format` terminally (independent of the `soft` / `hard` setting, advisory only on a host with no refusal channel), and a pointer at one resolves the file and refuses the same code. Migrate by rewriting the document as front matter with the snake_case keys (`execute_as`, `working_branch`, `plan_id`, …) or by pointing `Assignment file: <absolute path>` at the rewritten document — appending a fence to the old labels does not help.
+- **Self-declaring briefs**: `mstar sdd` now writes each task brief with `plan_id` and `task` front matter, plus an optional `files` list holding the task's own entries when it declares any (a task with none omits the key); the sliced body is byte-identical.
+- **`--type acceptance`**: `mstar lint <report.md> --type acceptance` validates `plan_id`, `gate`, `verdict` and `generated_at` through the shared schema (`gate: pm-acceptance`; `verdict` one of the four PM verdict values), and the acceptance template opens with that block.
+- **Corpus**: the skills and host documents name the front matter shape once per owning topic and point at `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical) instead of restating a field list.
+- **The dashboard screens the effort field before any write.** The effort input keeps the raw text (a plain numeric-mode input, not a sanitising `type="number"` field); an empty field sends `effortSessions: null` where the count changes at all, a whole number inside the safely representable range is sent as that number (the engine still owns the range, so `0` is refused by the engine, not the UI), and anything else — non-integer text, or a number too large to represent exactly — is refused at the screen instead of being coerced into a cleared estimate. An estimated milestone renders `<n> sessions`; an unestimated one renders a word, matching the prototype.
+- **Project milestones carry a count of standard sessions instead of a calendar date.** `project_milestones.target` is replaced by `effort_sessions` (null = unestimated, or an integer of at least 1); `milestone add|update` take `--effort-sessions <n>` and `--clear-effort-sessions` in place of the date flags, the roadmap export and the dashboard show `<n> sessions` or "unestimated", and the milestone timeline orders by `ordinal`. An existing target becomes **unestimated** on `store upgrade` — it is not converted, and a `local`/`mirror` lane advances through `store upgrade` while `remote bind` replaces a pre-current remote cache (refused as `remote.effect-pending` while it holds an unsettled outbox intent). An observe document that still carries `target` — the milestone rows ride the observe submission; bind's document is the check batch — is refused with `remote.input-invalid`.
+
+### Added
+
+- Added **`/codebase-arch-governance [path|subsystem] [dry-run] [rounds N]`**: converge a codebase toward the shape its current requirements would have produced, one closed batch at a time — lowest-total-complexity move, every caller migrated, the replaced path deleted in the same batch, the settled rule locked on the strongest available constraint. `dry-run` publishes the prioritised batches and their baseline without editing; `rounds N` (a positive integer, one by default) bounds the batches one invocation completes.
+- Added `mstar-coding-behavior` → `references/architecture-governance.md` and a Decision Rules subsection that loads it: the seven properties with their existing owners, the closed-batch conditions, batch selection, rejected moves, and stop conditions — no second copy of the deep-module, constraint-ladder or issue-capture methods.
+- Registered the command on every surface: `docs/commands.md`, the root README pair, `docs/runtime-reference.md`, and the Codex project-scope command skills.
+- Added a **recon gate** before a governance batch: `/codebase-arch-governance` now reads the codebase into six inventories — architecture map, dependency graph, state-ownership map, duplicate implementations, technology options, spec deviations — and a recon that cannot be completed names its missing evidence instead of selecting a batch.
+- Named those inventories in `mstar-coding-behavior` → `references/architecture-governance.md` § Recon, with `file:line` (or `spec:line ↔ code:line`) evidence, recorded in the round's plan or the reused audit report.
+- `dry-run` now performs the read-only recon and returns the six inventories plus the ranked candidates, still writing nothing.
+- Enforced per-plan layer publication: a compass `Done` plan without a `PR stack` row is now reported by `mstar lint --type iteration`, reported by the phase-2 iteration gate, refused by the phase-3 gate, and refuses the next `mstar plan complete` with `coordination.layer-unpublished`.
+- Updated the `mstar-iteration` Phase 2 and `pr-stack` references and promoted the ADR to `docs/adr/implemented/process/`.
+- **Remote collaboration has a supported host lane.** An operator in a `remote` checkout follows five documented steps — verify and bind the selected scope, observe it, adopt one exact unmarked provider issue, dispatch exactly one queued intent, and record or reconcile the provider's answer — so a provider-authoritative change can be completed and reconstructed without reading engine source. The new `mstar-remote-collaboration` skill carries the trigger, the exact CLI forms, the schema-discovery rule and each refusal's recovery, and takes provider tool names from the live host list instead of hardcoding them.
+- **The complete round trip and explicit adoption are proven at the shipped boundary.** `packages/cli/test/remote-host-roundtrip.test.ts` runs the built CLI as a subprocess in a sandbox with its own workspace and `HOME`: a fresh observation materializes the portable project, roadmap, milestone and marked-issue history (occurrences, transitions, relations, provenance) beside an unmarked issue of the same title; the tested non-adoptions each keep their named code — no strict document is usage (exit 2), a caller-supplied title or project is `remote.input-invalid`, and an already-marked target is `remote.scope-mismatch` — and none records an intent or a provider send; the exact unmarked provider UUID yields one durable intent and exactly one send permit across dispatch and its replay; and the adopted finding is readable by its new `IssueRef`. A provider-native `Done` leaves the MStar disposition unchanged. The same suite covers a lost response that stays `unconfirmed` on absent or ambiguous lookup evidence and confirms only on a unique exact match, a competing provider effect surfaced as a conflict with the competing record preserved and the cache invalidated, and a stale base that refuses without writing.
+- **The proof runs against the controlled host fixture, not a provider.** The CLI and engine still hold no credential, transport or Linear client, and `docs/specs/architecture/collaboration-authority.md` now records the lane as implemented behavior with live Linear permissions, field fidelity and exact event round-trip left explicitly unverified. A fork resolution and abandonment are specified but not exercised by this suite.
+
+### Changed
+
+- **Refreshed the repository maintenance policy against the current tree.** `AGENTS.md` now lists the actual packages (`commands`, `judgment`, `opencode-v2`, `ui`) and entry points, adds `hooks/` and `rules/`, and states that `harness-skills/` / `harness-agents/` are gitignored `bundle-assets` outputs rather than sources. Redundant prose was compressed; every working rule was kept.
+- **A 5.0 migration guide now covers the collaboration authority change end to end.** `docs/migration-5.0.md` states the breaking summary, the reviewed ladder (`store upgrade`, then `store collaboration plan`, `apply`, `activate` with the operator's cutover attestation), a worked cutover taken from this repository's own plan/apply/activate receipts, the split authority, remote `status`/`bind`/`observe` with the freshness window, rebind and its `collaboration.stale-binding` refusals, the verified backup pair and create-only restore, and recovery rows for the refusal classes its documented flows produce, leaving the complete refusal map to the remote collaboration skill and the tracked contract. `INSTALL.md` gains an `Upgrading from 4.x` section that links it.
+- **The guide states its remaining limits instead of implying they are solved.** Cross-authority project moves run local to local and across a `local`/`remote` boundary as a two-checkout exchange, and remote to remote refuses `collaboration.mode-unavailable` before staging; the limit that remains is tracked under `I-001235`. Live Linear behaviour is unverified because the remote lane, cache, outbox, and sandbox handoff are proven only against the controlled host fixture.
+- **Downgrade is an access loss, and the guide says so.** After the fence the last released 4.9.x build refuses the execution store as `store.schema-unsupported` and never opens the separate collaboration database, so its issue, catalog, project, roadmap, milestone, and findings reads stop until a 5.0 build is installed and reloaded.
+- **The whole-tree comment corpus floor is retired.** CI runs the changed-lines comment ratchet only; a per-root lower bound on the unclassified-comment count could not tell a detector regression from a genuine cleanup, and every honest cleanup needed a workflow edit to lower it. Detector behavior is pinned by `packages/cli/test/lint-cli.test.ts` (unclassified detection, `why:` acceptance, doc-block handling, the `--diff-base` ratchet), and the ratchet's base order and selection pipeline are unchanged.
+- **Removed the unclassified comment corpus carried by the 5.0 merge across 168 files.** Descriptive `note:` / `why:` / `invariant:` blocks with no resolvable anchor are deleted, and no comment was re-prefixed; the sweep changes no code.
+- **The comment gate recognizes the lint-owned single-line markers** `// hash-gate: authorized — <justification>` and `// reachability: manual — <justification>`, so the reviewed markers already present in the 5.0 files keep passing; `scripts/lint-hash-gates.ts` and `scripts/lint-help-reachability.ts` own their justification bars.
+- Two test fixtures spell their fake credential by concatenation so the plugin scanner does not report a hardcoded secret.
+- **An absent `[collaboration]` mode now selects `local`.** A repository needs no `.mstarc` declaration to use its local user-level authority; `mirror` and `remote` remain explicit, an empty `mode=` still refuses `collaboration.mode-required`, and a published remote selector refuses a checkout that defaulted to local instead of reading local rows. The refusal now names that recovery.
+- **Autonomous iterations now resolve merge policy by evidence, not by asking.** Phase 1 keeps `pr_merge_policy` mandatory, but an explicit `autonomous` opt-in lets PM recommend it from existing evidence (`reviewed-bot` when a review bot is attached, else `reviewed-auto`) and record the rationale, instead of stopping for owner confirmation. `owner-gated` is never recommended autonomously.
+- Updated `mstar-iteration` Phase 1 and its route map, the compass template, `autonomous-direction-lock.md`, `iteration-loop`, and the PR-delivery authorization source so every owner accepts the mode-aware decision.
+- **The 5.0 migration guide now names 4.9.x as its source release.** `docs/migration-5.0.md` states the version labels explicitly, opens with an **At a glance** table of breaking item, consequence and section, and covers the document front-matter declaration in its own section. Prose in the ladder, backup and recovery sections was condensed without dropping a condition or an ownership boundary, and the refusal rows stay tied to the flows the guide documents.
+- **Both READMEs point at the guide.** The documentation list carries the row at the same position in `README.md` and `README_CN.md`, and each Install section closes with one sentence stating that upgrading an existing 4.x install is a reviewed cutover rather than an installer step.
+- **Docs**: promoted the fixed-harness-root ADR from `proposed` to `implemented` — the retired root selectors shipped in 4.8 and the fixed `.mstar` root is standing architecture; inbound references and two stale resolver comments updated.
+- **Condensed the README Workflow section** in both languages into one paragraph each for the development cycle, scope and merge authorization, and engine enforcement; the duplicated figure caption and the per-policy detail already owned by the PR-delivery reference are gone.
+
+### Fixed
+
+- **A journal lane this checkout does not hold no longer refuses workflow selection, and a pending registration now vetoes the workflow/ralph dispatch instead of degrading to an unreadable read.** A bound remote checkout whose private cache is absent, or a scope with no collaboration store yet, carries no `catalog_operations` row, so it gets the same pre-activation pass-through `store.not-active` already had instead of `collaboration.not-initialized`. A registered workflow with a genuinely pending registration still refuses `catalog.registration-pending`, the verdict now runs on the source read the host actually uses (`readExecutionWorkflowSource`), and that read carries the verdict as its own field: the fan-out gate denies the call under `warn`, `ask` and `hard` alike rather than reporting "cannot read the store" and allowing it, so `ralph` cannot start work beside a lifecycle whose catalog registration never committed. Genuinely unreadable sources keep their documented fail-open.
+- **Collaboration admission is fail-closed at the binding boundary.** A bound checkout now verifies the
+  lane `storeId` and epoch on read; an unbound replacement clone may read but cannot write; a dangling,
+  unreadable, or non-regular execution store can no longer look absent.
+- **Legacy collaboration rows are never hidden by execution metadata damage.** A readable unfenced store
+  with collaboration rows still requires the reviewed cutover, bound or unbound; a genuinely separate
+  collaboration lane remains usable.
+- **Cross-domain composites bind before reserving.** The execution-side reservation is created only after
+  the collaboration binding is accepted, so a refused binding leaves no intent.
+- The engine, command, CLI, host, and hook suites now assert the split authority through
+  `collaboration.db`; the shipped write-gate bundle is regenerated from the same source.
+- **The cutover-required disclosure no longer implies a released 4.9.x build can use the store after activation.** The execution schema is never lowered, so that build refuses it as `store.schema-unsupported` even after the cutover; the failure now says so and names this newer build as the one that completes the ladder.
+- **A new milestone now sorts after the existing ones, and a refused estimate no longer throws away the operator's other edits.** Creating a milestone on a deletion-gapped board (ordinals 0, 2) assigns one past the highest ordinal instead of the milestone count, so the board and timeline place it last rather than alongside existing work; and when the engine refuses a count (zero, negative, or over the safe range), the milestone editor and the create form stay open with the typed name/effort/status intact — the store's own refusal message arrives beside the still-open draft, and the draft closes or clears only when the write is accepted.
+- **A sampled refusal can no longer decline a reservation whose intent the winner froze.** Before the frame records a
+  deterministic decline, it re-reads the composite's remote outbox rows under the freeze's own write lane
+  (`remoteIds` on every remote composite: residual-add entries, residual-close and execution-register). A durable
+  intent found there — or a lane that cannot be read, which proves nothing either way — keeps the reservation prepared,
+  and the same-id replay settles from the winner's confirmed intent; a bounded regression freezes, dispatches and
+  confirms the winner inside the loser's replay-admission gap and proves the refuse-then-resume journey end to end.
+- **An established no-op answer is replay-first and observation-proven, like an insert.** At the decision boundary —
+  inside the remote-cache write lane, the lock every freeze takes — the answer re-checks the outbox row under the
+  operation id and the sampled observation revision: a different-payload capture that froze the same id in the overlap
+  refuses as a collision instead of reporting a false established success, and a superseded sample refuses
+  `collaboration.observation-stale`. A bounded no-op/operation-id overlap regression observes the refusal and the
+  intact winner row.
+- **One structural owner for the strict remote documents.** The published observe/receipt/reconcile/adoption/resolve/
+  dispatch/bind descriptors move into the engine (`remote-documents`), built from the same vocabularies the runtime
+  parsers enforce; the command package only re-exports them, so discovery can never drift from the document the
+  runtime accepts. The engine's subject parsers (fields and every history row) now collect their defects in collector
+  mode, so one receipt refusal names two bad subject fields and a malformed history row together — through the
+  published descriptor and the runtime alike — before any outbox access; `remote.unsafe-fidelity` stays its own
+  refusal class and is never flattened into the structural aggregate.
+- **The settled-effect correction is now runnable as printed.** The changed-field refusal of a remote registration names
+  the journal's own `--project` on its `mstar catalog update` route (a remote catalog write refuses without it), and the
+  structured refusal carries that same ordered route as `recovery` plus the durable `confirmed_components`, so a replayed
+  decline never reports an effect-free operation. A command-surface regression proves the flag is both required and
+  accepted.
+- **The empty outbox probe and the durable decline share one lane.** The composite decline checks for the same-id durable
+  intent INSIDE the remote-cache write lane and commits the execution decline while holding it, while a composite freeze
+  proves the reservation is still `prepared` in that same lane before inserting. A freeze that lands between the sampled
+  refusal and the decline therefore retains the reservation, and a decline that wins refuses an already-admitted
+  attempt's freeze instead of leaving a durable intent it can never finalize. Two bounded overlaps cover both orderings.
+- **One malformed history entry no longer truncates a receipt refusal.** Every subject-history row is its own collection
+  boundary in the runtime parser (and the project journal's rows too), so a null entry and a later entry with a bad field
+  are named together with the subject's own field defects; the engine-owned descriptors already report per entry, and
+  both paths are asserted on one receipt before any outbox access.
+- **A pre-v3 remote cache is replaced only inside one critical section, by one atomic rename.** `store collaboration
+  remote bind` re-proves the lane's ownership and schema where the replacement is published, stages and admits the
+  successor, preserves the previous bytes by hard link, then swaps the name without ever unlinking it: a cache the
+  checkout never recorded, a lane another binder advanced while the successor was staged, and a v3 outbox row a
+  writer froze in it are all left intact, and an interrupted publication leaves the predecessor readable.
+- **A confirmed repair finalizes only the work it actually proves.** The finalizer compares the required normalized
+  portable fields AND links of the confirmed journal with the reviewed delta, so a settlement that keeps every id but
+  changes a title or drops a `belongs-to` link registers no workflow and no binding; the refusal names the operation
+  and record the provider actually settled, and re-registering the same workflow under a new operation id adopts the
+  rows already published identically instead of tripping their create-only check.
+- **Abandonment, decline and partial outcomes name what is left to do.** A live repair is the recovery the composite
+  names — dispatched with its fork observation, or reconciled when its send is uncertain — instead of a second
+  `outbox-resolve` the live link refuses; a withdrawn repair points at repairing the original fork, which still fences
+  every later send. Every entry is scanned: one confirmed component without a readable receipt keeps the reservation
+  instead of permitting a mixed, effect-free decline, and re-observation names the supported
+  `store collaboration remote observe --harness <abs> --input <file|->` form.
+- **Remote capture and closure decide against the observation they freeze.** A dedupe or a plan-scoped closure is
+  proved inside the freeze transaction, so a snapshot installed between the read and the write can no longer create
+  or append an issue twice, or close one whose canonical target is missing.
+- **Remote and outbox `--input` documents are published as typed contracts.** `mstar schema --command <id>` now
+  describes the frozen event, its project/issue subject and every history row with closed, typed members, and each
+  verb's `--help` names its own registered schema command. A receipt accepts `not-sent`; a reconciliation, which
+  reports what a lookup saw, no longer advertises an arm it always rejects.
+- **One structural refusal answers the whole document.** A receipt or reconciliation submission reports every unknown
+  member, every unreadable field and every nested outcome defect together, and names the published document to
+  consult and the corrected `--input` to resubmit.
+- **A verified older collaboration image restores by advancing a private copy.** The recovery receipt records the
+  digest sampled from that staged copy before the ladder runs, so the source image is never migrated, the retry across
+  a publication gap recognises its own generation, and an image from a newer schema names the compatible build or
+  another verified pair as its recovery.
+- **A roadmap export with no usable `created_at` round-trips.** The field is optional: absent when no stored date can
+  fill it, real `YYYY-MM-DD` when present, and the exported document is accepted by `roadmap replace` as written.
+- **Recoveries name the command the operator can actually run.** A pre-v3 remote cache points at
+  `store collaboration remote bind --harness <abs> --input <file|->` with its verified batch and published document,
+  a stale remote write points at `store collaboration remote status` for the observation revision `--expect-store`
+  needs, and a remote milestone recovery names the exact stored operation with `--operation`.
+- **A same-ID overlap can no longer release the winning reservation.** A `remote.operation-conflict` that READ a durable
+  outbox row proves the failure happened AFTER a freeze, so the losing identical attempt reports a partial and retains
+  the shared reservation instead of declining it; the winner's frozen intent settles by the same-id replay, which a
+  bounded same-ID overlap regression observes end to end (one frozen intent, one resumable reservation).
+- **Remote capture decides against the observation it freezes.** The write's sampled observation revision is re-proved
+  inside the freeze transaction, so a scope that moves after the last sample refuses
+  `collaboration.observation-stale` instead of freezing decisions about a superseded base; the occurrence-key dedupe is
+  project-wide (another subject's key answers the established receipt, a conflict, or an identity refusal — never a
+  second append), and the established no-op answer sits inside the replay boundary. A confirmed append receipt names
+  the eventId of the occurrence actually in the confirmed event.
+- **Closures enforce their gates on the freeze revision.** An ordinary closure and a plan-scoped residual-close re-prove
+  the sampled base inside the freeze transaction and keep the reservation when the scope moved; a terminal refusal's
+  inspect command is valid for the addressed alias (a provider UUID names its `--project`), and reopening a terminal
+  issue is stated as a deliberate change with its required inputs, never a default next step.
+- **One structural contract drives the observe documents and the engine's recursive refusals.** The published
+  `portableSubject` accepts the `fields` member the engine requires, so a marked observation the runtime accepts is no
+  longer refused by discovery; the engine's identity, event and observed-records parsers collect unknown keys and every
+  nested defect into ONE refusal before any outbox access, while authority, freshness and exact-event checks stay the
+  engine's own.
+- **Cache-recovery and roadmap evidence no longer assume a three-migration layout or an empty template.** The
+  destination ledger assertion reads the whole migration registry, and the undated roadmap round-trip authors a
+  Direction and proves its semantic survival, the absent `created_at`, and the re-export's own success status.
+- **The roadmap's effort cell is asserted through its own hook.** The board's session count carries
+  `data-ms-effort`, so the UI test can no longer be satisfied by an unrelated "12" (a catalog revision),
+  and the timeline invariant no longer promises an ordering the code does not implement.
+- **`store upgrade` honours `--operation` as the idempotency key of the exact request, and on the normal upgrade path refuses a malformed id before it advances the execution schema.** A clean retry under the same id replays its retained reservation and receipt instead of minting a fresh operation. A retry that changes a request-identity option (`--ack-skip-workflow`, `--ack-skip-compass` or `--delivery`) is a different request and refuses `execution.operation-conflict`, so it must omit `--operation` and mint a fresh id — which the option's own help now states instead of promising a same-id retry. `--ack-skip-dsh` alone does not change the request identity — it only disposes DSH host-state facts — so a retry that adds only it under the same id replays the already-committed execution import instead of conflicting. The malformed-id refusal belongs to the normal upgrade path alone. Before `upgradeStoreMinimal`'s entry, `store upgrade` may already have advanced an existing v1 collaboration lane or created and published this scope's first lane on a fresh or file-era checkout, and on a combined store the `collaboration.cutover-required` branch advances the execution schema before it refuses. The guarantee is therefore exactly this: on the normal path a malformed id is refused without touching the execution schema or the execution authority.
+
+### Version alignment
+
+- Bump monorepo root, `@mstar-harness/opencode`, `@mstar-harness/opencode-v2`, `@mstar-harness/cli`, `@mstar-harness/engine`, `@mstar-harness/dsh`, Cursor/Codex/Kimi/ZCode/omp/Claude plugin manifests, the portable Agent Plugins manifest, and both marketplace manifests: **→ 5.0.0**.
+
 ## [4.9.0] - 2026-11-25
 
 ### Breaking

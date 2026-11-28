@@ -6,6 +6,202 @@
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-28
+
+### Breaking
+
+- **协作状态移出执行库。** 议题与 finding、occurrence、关系、provenance、项目、路线图、里程碑、镜像账本与可移植目录身份，现由每个规范仓库一个用户级 SQLite 数据库承载（`<用户主目录>/.mstar/repos/<host>/<owner>/<repo>/collaboration.db`）；`{HARNESS_DIR}/store.db` 只保留执行状态、投影、宿主状态与跨域记账。
+- **协作模式只在离开本地默认时才声明。** 缺少 `[collaboration]` 段或缺少 `mode` 时选择 `local`；声明 `mode=mirror` 或 `mode=remote` 的段（段头独占一行，模式写在下一行）才会选择其他权威：
+  ```ini
+  ; optional — an absent section selects `local`
+  [collaboration]
+  mode=remote
+  ```
+  无 origin 的仓库还需在同一段内单独一行声明 `repo_id`（没有 origin 可提供身份）。把段头与模式写在同一行会留下未声明的模式。空的 `mode=` 使仓库级 store 动词以 `collaboration.mode-required` 拒绝，取值未知为 `collaboration.mode-invalid`，声明值与已发布 selector 不一致为 `collaboration.stale-binding`。
+- **操作者升级路径。** 先停止所有旧写入方，再执行 `mstar store collaboration plan --harness <abs> --out <abs-manifest>`，审阅 manifest 后执行 `mstar store collaboration apply --harness <abs> --manifest <abs-manifest>`，最后用 `mstar store collaboration activate --harness <abs> --manifest <abs-manifest> --operator <name> --attestation <abs-attestation>` 发布。全新检出使用 `mstar store init`；需要绑定已发布权威的检出使用 `mstar store collaboration adopt --harness <abs> --expect-store <store-id>`，因为 `store init` 从不接管已激活权威。
+- **读取与门禁披露不完整，而不是猜测。** 视图与宿主门禁携带带作用域的协作观测（`asOf`、权威标识、修订号与完整性）；缺失、暂存、过期或不可读的数据源以 `collaboration.*` 代码拒绝，而不是渲染成零或空成功。
+- **备份是经验证的一对镜像，恢复只做 create-only。** `mstar store backup --out <abs-manifest>` 现发布并校验执行镜像与协作镜像；`mstar store collaboration restore --harness <abs> --backup <abs-manifest> --operator <name> --attestation <abs>` 只恢复到不存在的规范目标，`mstar store execution export|restore-preview|restore` 仍明确只作用于执行域。
+- **已存在的协作 lane 必须显式升级。** lane 现携带两个后续不可变迁移——`collaboration-remote-cache`（版本 2：稳定的
+  `issues.issue_ref` 与远程缓存表）与 `collaboration-remote-outbox`（版本 3：`remote_outbox` 与
+  `remote_outbox_receipts`）。`mstar store upgrade --operator <name>` 就地推进已准入的版本 1 lane 至版本 3，保留其
+  issue 历史并为每个 issue 生成一个稳定引用；在该升级执行前，普通读取、写入与 `store init` 都以
+  `collaboration.upgrade-required` 拒绝。
+- **有 origin 的仓库上，`local`/`mirror` 检出现在需要实时 Git selector 查询。** 查询失败为
+  `remote.selector-unavailable`，不再被当作“没有 selector”；仓库发布了 `draining` selector 时，local/mirror 写入以
+  `collaboration.stale-binding` 停止。只有当 origin 确认不存在 selector 时，检出才保留自己的 lane。
+- **`remote` 模式已实现。** 受保护 selector 是唯一的选源权威；检出数据库只是由
+  `mstar store collaboration remote status|bind|observe` 维护的已验证观测缓存。必需视图、计数与门禁只从已准入快照作答，
+  否则以 `remote.unavailable`、`collaboration.observation-incomplete` 或 `collaboration.observation-stale` 拒绝，
+  绝不回退到本地行。把已发布的 `local`/`mirror` lane 切到 remote 需走审查过的迁移：`remote bind` 在写入排他下把前身
+  lane 退休为同目录的 `collaboration.retired-<storeId>-<epoch>.db`，随后才创建缓存。
+- **新鲜度现在有两个时钟。** 必需视图、计数、汇总或 findings/完成门禁既需要当前有效的正向访问校验，也需要 provider
+  遍历开始时间落在同一个 60 秒窗口内；完成证据还绑定其确切的 selector commit 与 generation。可选视图只披露缺口。
+- **协作写入在提交前重新证明选源。** 若 selector 在写入方等待期间移动到 draining 或后继 generation，效果回滚；私有缓存
+  缺失也不能替代检出记录的 selector 血缘。
+- **远程写入是持久 intent，而不是 provider 调用。** 在 `remote` 检出中，每个业务写入都会在版本 3 的 outbox 中冻结一个
+  intent（`remote adopt-issue` 入队 `issue-adopt` intent），并持续以 `remote.effect-pending` 拒绝，直到记录的 receipt
+  确认该效果；远端 lane 仍低于版本 3 时在准入处以 `collaboration.upgrade-required` 拒绝，恢复路径为经审查的
+  `remote bind`（`mode=remote` 时 `store upgrade` 不返回 collaboration receipt）。CLI 不执行任何
+  provider 调用——`outbox-dispatch` 只签发宿主的唯一发送许可——因此检出中不携带凭据或传输实现。
+- **所有既有协作 lane 必须推进到版本 4，execution store 新增版本 22。** lane 现携带
+  `collaboration-cross-authority`（版本 4：可空的 `relations.to_issue` 与 `to_ref` 并存、`issue_moves` 账本与栅栏，以及
+  维持它的触发器），execution store 新增 `execution-issue-move-intent`（版本 22），重建
+  `execution_collaboration_intents` 并加入第五个 composite kind `issue-move`。`mstar store upgrade --operator <name>`
+  在一个 `BEGIN IMMEDIATE` 内把已准入的版本 1、2 或 3 lane 走完剩余步骤，并在同一次调用中推进 execution store；在 lane
+  这一半执行前，普通读取、写入与 `store init` 都以 `collaboration.upgrade-required` 拒绝，而低于版本 22 的 store 无法记录
+  迁移阶段。`remote` 缓存绝不被就地升级：`remote bind` 替换 pre-v4 缓存，且只要还有 `enqueued`、`unconfirmed` 或未达成
+  结算的 `conflict` intent，就以 `remote.effect-pending` 拒绝并给出 outbox 恢复路径。
+- **一条记录现在可以以分阶段、可恢复的方式迁移到另一个权威。** `issue move --to-authority <repo-key>` 依次走
+  `staged` → `verified` → `switched` → `published`；新增 `issue_moves` 账本的 source 行既是账本又是栅栏，因此从
+  `staged` 起，对该记录的任何 `issues`、`relations`、`issue_sync_state` 写入都会中止，并以
+  `collaboration.operation-partial` 报告给调用方。同一命令从账本记录的任意阶段续跑，`--discard` 在 `switched` 或之前
+  放弃迁移并让 source 记录逐列不变——它只携带记录的 `--expect`，不带 `--expect-store`（迁移自身的阶段提交已推进该
+  lane revision）——发布对每个 operation id 只发生一次，并在删除 source 记录、其子行与已结算的
+  mirror 行之前完成核对。
+- **目标位于 lane 之外的关系现在被存储，而不是被拒绝。** `relations.to_issue` 可空，`to_ref` 保存目标的稳定
+  `IssueRef`；两者恰好设置一个，表会拒绝两者皆空或皆设的行。两个本地读取端都作答 `toIssue: null` / `toRef` /
+  `title: null`，在准入该目标的同一事务中该行变为本地关系，被迁移冻结的记录也不会成为 mirror 推送候选。本地
+  `issue show` 与 `issue-detail` 视图现返回该记录的 `issueRef`。
+- **四个拒绝码加入契约。** `issue.move-in-progress` 是写入遇到的 source 栅栏（账本禁止的转换则是
+  `collaboration.move-phase-invalid`），`collaboration.move-destination-occupied` 是同引用下并不持有既定镜像的占用者，
+  `issue.move-document-not-written` 是无法写出的交接文档——它随已完成的迁移一并报告，绝不被当作迁移失败。
+- **`mstar issue move` 新增跨权威入口。** `--to-authority <repo-key>` 选择分阶段路线（不带它时该动词仍做本地项目改派），
+  `--input <file|->` / `--out <abs>` 是 `local`/`remote` 的双检出交换，每一侧只写自己 mode 选中的 lane。remote 到
+  remote 的迁移仍以 `collaboration.mode-unavailable` 拒绝，目标解析为记录自身权威的迁移以 `issue.scope-refused` 拒绝，
+  两者都在任何暂存发生前完成。
+- **只有一层声明**：plan、Assignment、task brief 与 PM acceptance report 的机器读取字段一律写在 `---` 包围的 front matter 中，由共享文档 schema 读取——不允许每个 surface 自带字段表，也不再扫描正文。
+- **Assignment 写入位置**：派发方 PM 按 Assignment 的 identity 选定唯一写入位置——plan → `{SDD_DIR}/assignments/`，iteration → `{ITERATION_DIR}/<id>/assignments/`，workflow → `{WORKFLOW_DIR}/<id>/assignments/`（precedence plan → iteration → workflow）；若该写入位置会别名只读的扁平来源 `{HARNESS_DIR}/assignments/`，则拒绝。`Assignment file:` 指针另行校验，且**不**参与写入位置选择：它必须是绝对路径，且 canonicalize 之后必须落在上述三个写入位置之一或扁平只读来源 `{HARNESS_DIR}/assignments/` 之内——该来源 resolver 接受，但任何引擎路径都不在此新建文件。相对路径、不可读、落在 home 之外或没有 control harness root 的指针一律以 `dispatch.assignment.path` 拒绝。
+- **不再回退**：把字段写成 `**Label**:` 正文行的文档不再声明任何字段。内联的此类文档以 `dispatch.assignment.legacy-format` 被终局拒绝（与 `soft` / `hard` 设置无关，仅在完全没有拒绝通道的宿主上降为 advisory）；指针指向此类文件时同样解析该文件并以同一错误码拒绝。迁移方式是改写为 front matter 的 snake_case 键（`execute_as`、`working_branch`、`plan_id` 等），或让 `Assignment file: <绝对路径>` 指向改写后的文档——给旧标签补一个围栏没有用。
+- **brief 自带声明**：`mstar sdd` 现在为每份 task brief 写入 `plan_id`、`task` front matter，并可选地写入 `files` 列表（收录该 task 自己的条目；没有条目的 task 不写该键）；切出的正文逐字不变。
+- **`--type acceptance`**：`mstar lint <report.md> --type acceptance` 经共享 schema 校验 `plan_id`、`gate`、`verdict`、`generated_at`（`gate: pm-acceptance`；`verdict` 取四个 PM verdict 值之一），acceptance 模板以其开头。
+- **语料**：skills 与宿主文档在各自的 owning topic 只陈述一次 front matter 形状，其余改为指向 `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical)，不再复述字段表。
+- **仪表盘在写入前筛查会话数输入。** 输入框保留原始文本(数字模式的文本框,不再用会吞掉非法文本的 `type="number"`);留空在确实改变计数时发送 `effortSessions: null`,安全整数范围内按该数值发送(范围仍由 engine 裁决,`0` 由 engine 拒绝而非 UI 拦截),其余情况——非整数文本,或大到无法精确表示的数字——在界面直接拒绝,不会被强转为清空估算。已估算的里程碑显示 `<n> sessions`,未估算的显示文字,与原型一致。
+- **项目里程碑改存标准会话计数,不再携带日历日期。** `project_milestones.target` 由 `effort_sessions` 取代(null = 未估算,或至少为 1 的整数);`milestone add|update` 以 `--effort-sessions <n>` 与 `--clear-effort-sessions` 取代日期旗标,路线图导出与仪表盘显示 `<n> sessions` 或「未估算」,里程碑时间线按 `ordinal` 排序。既有 target 在 `store upgrade` 后变为**未估算**——不做转换;`local`/`mirror` lane 经 `store upgrade` 推进,而 `remote bind` 替换 pre-current 的远程缓存(仍持有未结算 outbox 意图时以 `remote.effect-pending` 拒绝)。仍携带 `target` 的 observe 文档以 `remote.input-invalid` 拒绝(里程碑行随 observe 提交;bind 的文档是 check batch)。
+
+### Added
+
+- 新增 **`/codebase-arch-governance [path|subsystem] [dry-run] [rounds N]`**：把代码库分闭环批次收敛到其当前需求本应产出的形态——每批只做总复杂度最低的改动，迁移全部调用方，在同一批次内删除被替代的实现，并把已确立的规则固化到当前可用的最强约束上。`dry-run` 只发布排序后的批次与基线，不改代码；`rounds N`（正整数，默认 1）限定一次调用可完成的批次数。
+- 新增 `mstar-coding-behavior` → `references/architecture-governance.md` 及加载它的 Decision Rules 小节：七项属性及其既有 owner、批次收敛条件、批次选择、被拒改动与停止条件；deep-module、constraint-ladder 与 issue capture 的方法不再复制第二份。
+- 该命令已登记到全部表面：`docs/commands.md`、根 README 双语对、`docs/runtime-reference.md`，以及 Codex 项目级命令 skill。
+- 新增治理批次前的**侦察门禁**：`/codebase-arch-governance` 先把代码库读成六项清单——架构图、依赖图、状态归属图、重复实现清单、技术选型清单、规格偏差清单；侦察无法完成时列出缺失证据，而不是挑一个候选批次。
+- 六项清单写入 `mstar-coding-behavior` → `references/architecture-governance.md` § Recon，证据形式为 `file:line`（偏差为 `spec:line ↔ code:line`），落在本轮计划或被复用的审计报告里。
+- `dry-run` 现在执行只读侦察，在回复中返回六项清单与排序后的候选，仍然不写任何文件。
+- 新增逐层发布强制：compass 中 `Done` 却没有 `PR stack` 行的 plan，现由 `mstar lint --type iteration` 报告、phase-2 iteration gate 报告、phase-3 gate 拒绝，并让下一次 `mstar plan complete` 以 `coordination.layer-unpublished` 拒绝。
+- 更新 `mstar-iteration` Phase 2 与 `pr-stack` 参考，并将 ADR 提升至 `docs/adr/implemented/process/`。
+- **远程协作现在有一条受支持的宿主通道。** `remote` 检出的操作者按五个有文档的步骤执行——校验并绑定选定范围、观测、采纳一个确切的无标记 provider issue、派发恰好一个已入队 intent、记录或核对 provider 的答复——因此无需阅读引擎源码即可完成并重建一次 provider 权威的变更。新增的 `mstar-remote-collaboration` skill 承载触发条件、确切的 CLI 形式、schema 发现规则与每种拒绝的恢复路径，并从实时宿主工具列表读取 provider 工具名，而非硬编码。
+- **完整往返与显式采纳已在发布边界上得到证明。** `packages/cli/test/remote-host-roundtrip.test.ts` 以子进程方式在拥有独立 workspace 与 `HOME` 的沙箱中运行构建后的 CLI：一次新观测会把可移植的 project、roadmap、milestone 与带 MStar 标记的 issue 历史（occurrence、transition、relation、provenance）与一个同名无标记 issue 一并呈现；受测的未采纳情形各自保留其指名错误码——缺少严格文档为 usage（exit 2），调用方自带的 title 或 project 为 `remote.input-invalid`，已标记的目标为 `remote.scope-mismatch`——且都不记录 intent、不发起 provider 发送；确切的无标记 provider UUID 产生一个持久 intent，并在派发与其重放之间只产生一个发送许可；被采纳的 issue 可通过其新的 `IssueRef` 读取。provider 原生的 `Done` 不改变 MStar disposition。同一套件还覆盖：查询证据缺失或歧义时保持 `unconfirmed`、仅在唯一精确匹配时确认的响应丢失；作为 conflict 呈现、竞争记录被保留且缓存失效的竞争效果；以及拒绝且不写入的过期基线。
+- **该证明针对受控宿主 fixture，而不是 provider。** CLI 与引擎仍不持有凭据、传输或 Linear 客户端，`docs/specs/architecture/collaboration-authority.md` 现把该通道记录为已实现的行为，并明确保留 live Linear 权限、字段保真度与精确事件往返未验证。分叉解决与放弃仅有规格说明，本套件未执行。
+
+### Changed
+
+- **按当前仓库结构刷新维护策略。** `AGENTS.md` 现列出实际存在的包（`commands`、`judgment`、`opencode-v2`、`ui`）与入口，补上 `hooks/`、`rules/`，并说明 `harness-skills/` / `harness-agents/` 是 `bundle-assets` 的 gitignored 产物而非源文件；压缩冗余措辞，保留全部规则。
+- **新增 5.0 迁移指南，完整覆盖协作权威变更。** `docs/migration-5.0.md` 说明破坏性变更摘要、审查过的阶梯（`store upgrade`，随后 `store collaboration plan`、`apply`、带操作者 cutover attestation 的 `activate`）、取自本仓库真实 plan/apply/activate 回执的完整迁移示例、拆分后的权威、远程 `status`/`bind`/`observe` 与新鲜度窗口、rebind 及其 `collaboration.stale-binding` 拒绝、经验证的备份镜像对与 create-only 恢复，以及文档所述流程会产生各拒绝类的恢复行；完整拒绝码映射归属远程协作 skill 与受跟踪的契约。`INSTALL.md` 新增 `Upgrading from 4.x` 小节并链接该指南。
+- **指南明确写出剩余限制，而不是暗示已经解决。** 跨权威项目移动支持本地到本地，以及 `local`/`remote` 边界上的双检出交换；远端到远端则在暂存前以 `collaboration.mode-unavailable` 拒绝，剩余限制由 `I-001235` 跟踪。实时 Linear 行为未经验证，因为远程 lane、缓存、outbox 与沙箱交接只在受控宿主 fixture 上得到证明。
+- **降级等于失去访问权，指南已写明。** fence 之后，最后发布的 4.9.x 构建会以 `store.schema-unsupported` 拒绝执行库，且从不打开独立的协作数据库，因此其 issue、目录、项目、路线图、里程碑与 findings 读取都会停止，直到安装并重载 5.0 构建。
+- **全树注释语料下限（floor）退役。** CI 只运行按变更行收紧的注释 ratchet；未分类注释数量的每根下界无法区分检测器回归与真实清理，而每次真实清理都要改工作流把下界调低。检测器行为改由 `packages/cli/test/lint-cli.test.ts` 钉住（未分类检出、`why:` 接受、doc block 处理、`--diff-base` ratchet），ratchet 的基准解析顺序与文件选择管线不变。
+- **清理 5.0 合并带入的 168 个文件中的未分类注释。** 删除没有可解析锚点的 `note:` / `why:` / `invariant:` 描述性注释块，未改写任何前缀；本次清理不改动代码。
+- **注释门识别 lint-owned 单行 marker**：`// hash-gate: authorized — <justification>` 与 `// reachability: manual — <justification>`，使 5.0 文件中既有的已审查标记继续通过；两者的理由标准分别由 `scripts/lint-hash-gates.ts` 与 `scripts/lint-help-reachability.ts` 拥有。
+- 两处测试 fixture 改用拼接写法生成假凭据，避免插件扫描器误报 hardcoded secret。
+- **`[collaboration]` 未声明 mode 时现默认 `local`。** 仓库无需在 `.mstarc` 写声明即可使用本地用户级权威；`mirror` 与 `remote` 仍需显式声明，空的 `mode=` 仍以 `collaboration.mode-required` 拒绝，而远端已发布的 selector 会拒绝默认落到 local 的 checkout，不会改读本地数据；该拒绝文案现给出声明对应 mode 的恢复方式。
+- **autonomous 迭代改为按证据解析 merge policy，不再停下询问用户。** Phase 1 仍强制记录 `pr_merge_policy`，但在显式 `autonomous` opt-in 下由 PM 按证据推荐（挂载 review bot 时 `reviewed-bot`，否则 `reviewed-auto`）并落盘 rationale；`owner-gated` 不在 autonomous 下推荐。
+- 更新 `mstar-iteration` Phase 1 与 route map、compass 模板、`autonomous-direction-lock.md`、`iteration-loop` 与 PR delivery 授权来源，使所有权威处接受按模式决定的语义。
+- **5.0 迁移指南现在明确标注 4.9.x 为来源版本。** `docs/migration-5.0.md` 明确写出各版本标签，以「At a glance」表格开场列出破坏性变更、后果与所在小节，并把文档 front matter 声明独立成节。阶梯、备份与恢复三节的文字经过压缩，但没有丢掉任何条件或归属边界；拒绝处理各行仍然只对应指南自己记录的流程。
+- **两份 README 都指向该指南。** 文档列表在 `README.md` 与 `README_CN.md` 的同一位置加入该行，两个安装小节结尾各有一句：从既有 4.x 安装升级是一次经审查的 cutover，而不是安装器的一步。
+- **文档**：fixed-harness-root ADR 从 `proposed` 晋级为 `implemented` —— 退役根选择器已在 4.8 发布，固定 `.mstar` 根是常设架构；同步更新入站引用与两处过时的解析注释。
+- **精简两份 README 的 Workflow 段落**：development 循环、范围与合并授权、引擎校验各保留一段；删除重复的图注，以及 PR-delivery 参考中已有的逐策略细节。
+
+### Fixed
+
+- **本检出并不持有的 journal lane 不再拒绝 workflow 选择，而 pending 注册现在会否决 workflow/ralph 派发，而不是退化成“读取失败”。** 已绑定但私有 cache 缺失的 remote 检出，或尚无协作库的作用域，都不含 `catalog_operations` 行，因此获得与 `store.not-active` 相同的前置放行，而不是 `collaboration.not-initialized`。已注册 workflow 若确有 pending 注册仍以 `catalog.registration-pending` 拒绝；该判定现在跑在宿主真正使用的源读取（`readExecutionWorkflowSource`）上，并把判定作为独立字段随读取结果返回：fan-out 闸门在 `warn`、`ask`、`hard` 下统一否决该调用，而不再把它当作“读不到库”放行，因此 `ralph` 无法在一个 catalog 注册从未提交的 lifecycle 旁开工。真正不可读的源仍保留既有的 fail-open 行为。
+- **协作准入在绑定边界失败关闭。** 已绑定检出在读取时校验 lane 的 `storeId` 与 epoch；未绑定的替换
+  clone 可读但不可写；悬空、不可读或非普通文件的 execution store 不再被误判为不存在。
+- **execution 元数据损坏不再掩盖 legacy 协作行。** 可读但未加 fence 且含协作行的库仍需走审查过的
+  cutover，无论是否绑定；真正独立的协作 lane 仍可用。
+- **跨域复合操作先绑定再预留。** 只有协作绑定通过后才创建 execution 预留，绑定被拒时不会留下 intent。
+- engine、commands、CLI、host 与 hook 套件改为通过 `collaboration.db` 断言拆分后的权威；随包发布的
+  write-gate bundle 已由同一源码重建。
+- **cutover-required 披露不再暗示已发布的 4.9.x 版本在激活后可用该库。** execution schema 从不回退，因此该版本即使走完 cutover 仍以 `store.schema-unsupported` 拒绝；失败信息现在明说这一点，并指名由这个更新的版本完成迁移阶梯。
+- **新建里程碑现在排在既有里程碑之后,被拒绝的估算不再丢弃操作员的其他编辑。** 在有删除空缺(序号 0、2)的面板上创建里程碑时,取最高序号加一而非里程碑计数,面板与时间线因此将其排到最后而非夹在既有工作之间;当 engine 拒绝计数(零、负数或超出安全范围)时,里程碑编辑器与创建表单保持打开并保留已输入的名称/估算/状态——存储的拒绝原文在仍打开的草稿旁呈现,只有写入被接受时草稿才关闭或清空。
+- **采样拒绝不再 decline 一个赢家已冻结 intent 的预留。** 在 frame 记录确定性 decline 之前，它会在 freeze 自己的
+  写车道（每个 remote composite 的 `remoteIds`：residual-add 条目、residual-close 与 execution-register）下重读
+  composite 的 remote outbox 行；车道上发现的 durable intent——或一条无法读取、对任何一方都不构成证明的车道——
+  保持预留为 prepared，同 id replay 从赢家的 confirmed intent 结算。一个有界回归在输家的 replay 准入间隙内
+  freeze、dispatch 并确认赢家，端到端证明 refuse-then-resume 旅程。
+- **established no-op answer 与 insert 一样 replay 优先、以 observation 证明。** 在决策边界——remote-cache 写车道，
+  每个 freeze 都持有的锁——answer 按 operation id 与采样的 observation revision 重查 outbox 行：重叠期内冻结同一 id
+  的不同 payload 捕获作为冲突拒绝，而不是报告虚假的 established 成功；被取代的样本拒绝
+  `collaboration.observation-stale`。一个有界 no-op/operation-id 重叠回归观察该拒绝与完好的赢家行。
+- **严格的 remote 文档有了唯一结构属主。** 已发布的 observe/receipt/reconcile/adoption/resolve/dispatch/bind
+  描述符移入 engine（`remote-documents`），由 runtime 解析器强制的同一套词汇构建；command 包只 re-export，
+  discovery 不会偏离 runtime 接受的文档。engine 的 subject 解析器（字段与每条 history 行）改为以 collector 模式
+  收集缺陷，一条 receipt 拒绝同时点名两个坏 subject 字段与一条畸形 history 行——已发布描述符与 runtime 皆然——
+  且发生在任何 outbox 访问之前；`remote.unsafe-fidelity` 保持自己的拒绝类，不会被压平进结构聚合。
+- **settled-effect 修正现在可按印刷原文直接执行。** 远程 registration 的 changed-field 拒绝在其 `mstar catalog update`
+  路由上点名 journal 自己的 `--project`（远程 catalog 写入缺它会拒绝），结构化拒绝携带同一条有序路由作为
+  `recovery`，外加 durable 的 `confirmed_components`，因此 replay 出的 decline 不会报告一个无效果的 operation。
+  命令表面回归证明该 flag 既必需也被接受。
+- **空的 outbox 探测与 durable decline 共享一条车道。** composite decline 在 remote-cache 写车道内检查同 id durable
+  intent 并在持锁时提交 execution decline；composite freeze 在插入前于同一条车道证明预留仍为 `prepared`。落在
+  采样拒绝与 decline 之间的 freeze 因此保留预留，而赢得竞争的 decline 拒绝一个已获准 attempt 的 freeze，而不是
+  留下一个永远无法 finalize 的 durable intent。两个有界重叠覆盖两种顺序。
+- **一条畸形 history 条目不再截断 receipt 拒绝。** 运行时解析器中每条 subject-history 行都是自己的收集边界
+  （project journal 的行同样如此），null 条目与更靠后的坏字段条目会同 subject 自身的字段缺陷一起被点名；
+  engine 拥有的描述符本就按条目报告，两条路径在同一条 receipt 上、任何 outbox 访问之前得到断言。
+- **pre-v3 远程缓存只在一个临界区内、以一个原子 rename 被替换。** `store collaboration remote bind` 在发布处
+  重新证明该 lane 的归属与 schema，暂存并准入后继缓存，以硬链接保留旧字节，然后在不 unlink 名称的前提下完成替换：
+  检出从未记录的缓存、后继暂存期间被其他 bind 推进的 lane、以及写入者已冻结在其中的 v3 outbox 行都保持原样，
+  发布中断时仍留下可读的旧缓存。
+- **已确认的修复只落定它真正证明的工作。** finalizer 会同时比较已确认 journal 中必需归一化可移植字段与链接，
+  因此保留全部 ID、却改动标题或丢掉 `belongs-to` 链接的结算不再登记 workflow 或绑定；拒绝会指明 provider 实际
+  落定的 operation 与 record，而以新 operation id 重新登记同一 workflow 会采纳已一致发布的记录，不再撞上其
+  create-only 检查。
+- **放弃、拒收与部分成果都说明剩余步骤。** 仍在链路中的修复就是 composite 给出的恢复路径（带 fork observation
+  派发，发送不确定时改为 reconcile），而不是再次对被活链拒绝的 `outbox-resolve`；被撤回的修复则指向修复原始分叉，
+  该分叉仍然阻断其后的一切发送。所有条目都会被扫描：任一已确认组件缺少可读 receipt 时保留预约，绝不允许
+  混入的无效果 decline；重新观测时会给出受支持的 `store collaboration remote observe --harness <abs> --input <file|->`
+  形式。
+- **远程捕获与关闭都以实际冻结的观测为准。** 去重与计划内的关闭在冻结事务内证明，因此在读取与写入之间安装的快照
+  既不能重复创建或追加 issue，也不能关闭一个规范目标缺失的 issue。
+- **远程与 outbox 的 `--input` 文档以强类型契约发布。** `mstar schema --command <id>` 现完整描述冻结事件、
+  其 project/issue subject 与每一行历史记录（封闭且有类型），每个动词的 `--help` 都会给出自己注册的 schema 命令。
+  receipt 接受 `not-sent`；reconciliation 只报告查询所见，不再宣称一个它始终拒绝的分支。
+- **一次结构性拒绝回答整份文档。** receipt 或 reconciliation 提交会同时列出所有未知成员、不可读字段与嵌套 outcome
+  缺陷，并指明应查阅的已发布文档与需要重新提交的修正 `--input`。
+- **经验证的旧版协作镜像通过推进私有副本恢复。** 恢复 receipt 记录的是该暂存副本在迁移前采样的摘要，
+  因此源镜像永不被就地迁移，跨越发布缺口的重试能识别自己的代，来自更新 schema 的镜像会指出兼容的构建或另一份
+  经验证的镜像对。
+- **没有可用 `created_at` 的 roadmap 导出可往返。** 该字段可选：无可填充的存储日期时省略，存在时必须是真实
+  `YYYY-MM-DD`，且导出的文档可原样被 `roadmap replace` 接受。
+- **恢复路径给出操作者真正能运行的命令。** pre-v3 远程缓存指向
+  `store collaboration remote bind --harness <abs> --input <file|->` 及其验证批次与已发布文档；过期的远程写入指向
+  `store collaboration remote status` 以取得 `--expect-store` 所需的观测修订；远程 milestone 恢复会带上
+  `--operation` 指明确切的已存操作。
+- **同 ID 重叠不再释放赢家的预留。** 读取到 durable outbox 行的 `remote.operation-conflict` 证明失败发生在 freeze
+  之后，因此落败的相同 attempt 报告 partial 并保留共享预留而不是 decline 它；赢家的冻结 intent 通过同 id replay
+  结算，一个有界同 ID 重叠回归端到端观察全程（一个冻结 intent、一个可恢复预留）。
+- **remote capture 针对它所冻结的 observation 做决策。** 写入采样的 observation revision 在 freeze 事务内重新证明，
+  因此最后一个样本之后移动的 scope 拒绝 `collaboration.observation-stale`，而不是基于被取代的基础冻结决策；
+  occurrence-key 去重是 project 级的（另一个 subject 的 key 以 established receipt、冲突或身份拒绝回答——绝不是
+  第二次 append），established no-op answer 位于 replay 边界内。确认的 append receipt 点名确认事件中实际存在的
+  occurrence 的 eventId。
+- **closure 在 freeze revision 上执行自己的门禁。** 普通 closure 与 plan 作用域的 residual-close 在 freeze 事务内
+  重新证明采样的基础并在 scope 移动时保留预留；terminal 拒绝的 inspect 命令对被寻址的 alias 有效（provider UUID
+  点名它的 `--project`），重新打开 terminal issue 被表述为需要所需输入的有意变更，绝不是默认的下一步。
+- **一个结构契约同时驱动 observe 文档与 engine 的递归拒绝。** 已发布的 `portableSubject` 接受 engine 要求的
+  `fields` 成员，runtime 接受的标记 observation 不再被 discovery 拒绝；engine 的 identity、event 与
+  observed-records 解析器在任何 outbox 访问之前把未知键与每个嵌套缺陷收集进 ONE 条拒绝，而 authority、freshness
+  与 exact-event 检查仍是 engine 自己的。
+- **cache 恢复与 roadmap 证据不再假设三次 migration 布局或空模板。** 目标 ledger 断言读取整个 migration registry，
+  undated roadmap round-trip 撰写一个 Direction 并证明其语义存活、`created_at` 缺失，以及 re-export 自身的成功
+  状态。
+- **roadmap 的 effort 单元通过自身 hook 断言。** board 的会话数带上 `data-ms-effort`，UI 测试不再能
+  被无关的 "12"（目录 revision）满足；timeline 的 invariant 不再承诺代码未实现的排序。
+- **`store upgrade` 把 `--operation` 当作该确切请求的幂等键，并在常规升级路径上于推进 execution schema 之前拒绝非法 id。** 同 id 的干净重试会重放既有预留与收据，而不再另生成一个操作。附带新的请求身份选项（`--ack-skip-workflow`、`--ack-skip-compass` 或 `--delivery`）的重试属于不同请求，以 `execution.operation-conflict` 拒绝，因此必须省略 `--operation` 并生成新 id——选项帮助现在写明这一点，而不再承诺同 id 重试。仅附加 `--ack-skip-dsh` 不改变请求身份——它只处置 DSH host-state 事实——因此同 id 下仅附加它的重试会重放已提交的 execution import，而不是被判为冲突。非法 id 的拒绝仅属于常规升级路径。在 `upgradeStoreMinimal` 入口之前，`store upgrade` 可能已推进既有的 v1 collaboration lane，或在全新或 file-era 的 checkout 上创建并发布本 scope 的第一个 lane；在合并存储上，`collaboration.cutover-required` 分支会先推进 execution schema 再拒绝。因此保证仅限于此：在常规路径上，非法 id 被拒绝，既不触碰 execution schema，也不触碰 execution authority。
+
+### 版本对齐
+
+- 提升 monorepo 根、`@mstar-harness/opencode`、`@mstar-harness/opencode-v2`、`@mstar-harness/cli`、`@mstar-harness/engine`、`@mstar-harness/dsh`、Cursor/Codex/Kimi/ZCode/omp/Claude 插件清单、便携式 Agent Plugins 清单及两份 marketplace 清单：**→ 5.0.0**。
+
 ## [4.9.0] - 2026-11-25
 
 ### Breaking

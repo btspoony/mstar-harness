@@ -6,6 +6,33 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-28
+
+### Breaking
+
+- **The dashboard screens the effort field before any write.** The effort input keeps the raw text (a plain numeric-mode input, not a sanitising `type="number"` field); an empty field sends `effortSessions: null` where the count changes at all, a whole number inside the safely representable range is sent as that number (the engine still owns the range, so `0` is refused by the engine, not the UI), and anything else — non-integer text, or a number too large to represent exactly — is refused at the screen instead of being coerced into a cleared estimate. An estimated milestone renders `<n> sessions`; an unestimated one renders a word, matching the prototype.
+- **Project milestones carry a count of standard sessions instead of a calendar date.** `project_milestones.target` is replaced by `effort_sessions` (null = unestimated, or an integer of at least 1); `milestone add|update` take `--effort-sessions <n>` and `--clear-effort-sessions` in place of the date flags, the roadmap export and the dashboard show `<n> sessions` or "unestimated", and the milestone timeline orders by `ordinal`. An existing target becomes **unestimated** on `store upgrade` — it is not converted, and a `local`/`mirror` lane advances through `store upgrade` while `remote bind` replaces a pre-current remote cache (refused as `remote.effect-pending` while it holds an unsettled outbox intent). An observe document that still carries `target` — the milestone rows ride the observe submission; bind's document is the check batch — is refused with `remote.input-invalid`.
+
+### Changed
+
+- Raised the `@deepseek-ai/dsh-*` peer cohort and the architectural dev pins (`dsh-client-ui-*`, `dsh-scope`, `dsh-session-format-v3-to-v4`, `dsh-tool-executor-native`, `dsh-util-code-language`) to `0.2.2-rc.5`; the rc.3 → rc.5 audit finds no removed export, no package-set change and no session-format change, so the plugin consumes the same surfaces.
+- Bridged the role declaration to `dsh-llm-fallbacks`: its reader resolves a role only from the body-label `**Execute as**: <id>` header and stops at the first `---`, so a front-matter `execute_as` Assignment left its fallback chain, persona and notice row unbound. With the fallbacks capability mounted, the role channel now prepends that one header line ahead of the opening fence at dispatch time; the document, the role channel and the dispatch gate keep reading front matter.
+- Moved the `dsh-llm-fallbacks` pin to `0.8.11` in both places at once (`packages/dsh` devDependency and the CLI `mstar.dshLlmFallbacks`), whose peers are the same `^0.2.2-rc.5` cohort.
+
+### Fixed
+
+- **A journal lane this checkout does not hold no longer refuses workflow selection, and a pending registration now vetoes the workflow/ralph dispatch instead of degrading to an unreadable read.** A bound remote checkout whose private cache is absent, or a scope with no collaboration store yet, carries no `catalog_operations` row, so it gets the same pre-activation pass-through `store.not-active` already had instead of `collaboration.not-initialized`. A registered workflow with a genuinely pending registration still refuses `catalog.registration-pending`, the verdict now runs on the source read the host actually uses (`readExecutionWorkflowSource`), and that read carries the verdict as its own field: the fan-out gate denies the call under `warn`, `ask` and `hard` alike rather than reporting "cannot read the store" and allowing it, so `ralph` cannot start work beside a lifecycle whose catalog registration never committed. Genuinely unreadable sources keep their documented fail-open.
+- **Terminal source refusals**: a refused `Assignment file:` pointer now vetoes the dispatch and the native subagent start in every enforcement mode (listener, host hook and start seam) instead of degrading to an advisory or a role exemption.
+- **One resolution per start**: an admitted pointer's resolved document is handed from `tools/pre-execute` to `startActivation`, so the child runs the version the gate decided on.
+- **Shape scope**: a prompt is Assignment-shaped only from its front matter or the engine's single retired-format recognition — a `## Assignment` heading or `execute_as:` line quoted in prose no longer shapes it (and no longer writes a ledger row). A resolved file carrier is validated as an Assignment.
+- **Parallel tracks** read the schema-owned `working_branch` / `worktree_path` lists and their parsed fields; the unsupported `dispatch_mode` marker is gone.
+- **Milestone create draft no longer leaks across projects.** The panel's create form keyed its draft under the bare string `create`, so text typed in one project's create form re-seeded every other project's form when the operator switched projects. Drafts are now keyed by the identity the form was opened over — the project, plus the create slot or milestone id — so each project's form keeps exactly its own typed text across a read refresh or a revision conflict.
+- **The milestone write channel recovers from a stale store revision.** A write refused with the engine's revision-conflict class now refreshes the roadmap read (an input-validation refusal still never does), so the retry carries the freshly observed revision instead of being refused forever. In-progress drafts moved out of the read's subtree into a host-owned store keyed per target ('create' / the milestone id): a refresh re-mounts the form over the typed values, and an accepted write clears exactly its target's entry.
+
+- Version alignment with harness **5.0.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **5.0.0**.
+
 ## [4.9.0] - 2026-11-25
 
 ### Breaking
