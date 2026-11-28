@@ -532,9 +532,9 @@ describe("remote selector resolution", () => {
     expect(foreign.message).toContain("github.com/other/repo");
   });
 
-  test("an absent mode beside a published remote selector refuses and writes nothing", () => {
+  test("an absent mode beside a published remote selector refuses and keeps the observation", () => {
     const origin = makeSelectorOrigin();
-    origin.publish(selectorPayload());
+    const commit = origin.publish(selectorPayload());
     const repo = makeRepo(CANONICAL_ORIGIN, undefined, false);
     git(repo, "config", `url.${origin.bare}.insteadOf`, CANONICAL_ORIGIN);
 
@@ -542,7 +542,14 @@ describe("remote selector resolution", () => {
     expect(result.code).toBe("collaboration.stale-binding");
     expect(result.message).toContain("declares no mode");
     expect(result.message).toContain("mode=remote");
-    expect(existsSync(join(repo, ".mstar", "collaboration-selector-observation.json"))).toBe(false);
+    expect(
+      JSON.parse(readFileSync(join(repo, ".mstar", "collaboration-selector-observation.json"), "utf8")),
+    ).toMatchObject({ repoKey: CANONICAL_REPO_KEY, selectorCommit: commit });
+
+    git(origin.bare, "update-ref", "-d", SELECTOR_REF);
+    const deleted = refusal(() => resolveAt(repo));
+    expect(deleted.code).toBe("collaboration.stale-binding");
+    expect(deleted.message).toContain(commit);
   });
 
   test("a malformed published selector refuses remote selection", () => {

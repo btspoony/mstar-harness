@@ -791,7 +791,13 @@ function resolvePublishedSelector(context, mainRoot, repoKey, mode, declaredMode
   const confirmed = lookupSelector(mainRoot);
   if (confirmed !== commit)
     selectorUnavailable(`The origin's ${AUTHORITY_REF} changed while it was being read`);
-  const selector = parseSelector(payload, repoKey, mode, declaredMode);
+  let selector;
+  try {
+    selector = parseSelector(payload, repoKey, mode, declaredMode);
+  } catch (error) {
+    recordObservedSelector(context, { repoKey, selectorCommit: commit });
+    throw error;
+  }
   recordObservedSelector(context, {
     repoKey,
     selectorCommit: commit,
