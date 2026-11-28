@@ -130,9 +130,11 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
         // consumer, and the supported route is the installed Node CLI (or an
         // explicit document that overrides the generated one).
         ? "Rerun the same verb through the installed Node CLI: mstar store upgrade --operator <name> --attestation <absolute-json> for an upgrade, or mstar store activate --manifest <path> --operator <name> for an activation."
-        : code === "collaboration.repo-identity-unresolved" || code === "collaboration.mode-required" || code === "collaboration.mode-invalid" || code === "collaboration.mode-unavailable"
-          ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=mirror|remote to leave the local default, an absent mode keeping local, plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
-          : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
+        : code === "collaboration.mode-unavailable"
+          ? "This checkout selects remote collaboration, where the provider is the authority: use the remote boundary (mstar store collaboration remote status|bind|observe) instead of this local-domain store verb."
+          : code === "collaboration.repo-identity-unresolved" || code === "collaboration.mode-required" || code === "collaboration.mode-invalid"
+            ? "Set the repository identity in the checkout's .mstarc — [collaboration] mode=local|mirror|remote (an absent mode selects local), plus repo_id=<lower-case-id> for a genuinely origin-less repository — then rerun the same store verb."
+            : code === "collaboration.cutover-required" || code === "collaboration.cutover-conflict"
             ? "Run mstar store collaboration plan --harness <abs> --out <abs-manifest>, have the manifest reviewed, then apply and activate it with mstar store collaboration apply --harness <abs> --manifest <abs-manifest> and mstar store collaboration activate --harness <abs> --manifest <abs-manifest>. A source or target another activation owns is preserved, never overwritten."
             : code === "collaboration.cutover-not-quiescent"
               ? "Settle the pending mirror batches or catalog registrations the refusal names with their own verbs, stop the remaining writers, then retry the same reviewed manifest."
