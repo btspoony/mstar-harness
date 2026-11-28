@@ -6,7 +6,6 @@ import {
   CollaborationIdentityError,
   CoordinationError,
   checkPathOwnership,
-  detectHarnessKind,
   detectHost,
   emitGitignoreSnippet,
   hasHarnessRootDeclaration,
@@ -441,13 +440,13 @@ export function getLocalCommandDefinitions(): readonly CommandDefinition[] {
             return path.resolve(a) === path.resolve(b);
           }
         };
-        if (detectHarnessKind(harnessDir) === "mstar" && sameDir(harnessDir, defaultHarness)) {
+        if (sameDir(harnessDir, defaultHarness)) {
           const gitignorePath = path.join(workspaceRoot, ".gitignore");
           const current = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, "utf8") : "";
           if (hasHarnessRootDeclaration(current)) skipped.push(".gitignore (author-owned harness-root declaration)");
           else {
             const lines = new Set(current.split(/\r?\n/).map((line) => line.trim()));
-            const snippetLines = emitGitignoreSnippet("mstar").split("\n").map((line) => line.trim());
+            const snippetLines = emitGitignoreSnippet().split("\n").map((line) => line.trim());
             const missing = snippetLines.filter((line) => line !== "" && !lines.has(line));
             if (missing.length > 0) {
               const prefix = current !== "" && !current.endsWith("\n") ? "\n" : "";

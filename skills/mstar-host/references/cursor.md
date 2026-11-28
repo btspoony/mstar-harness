@@ -26,7 +26,7 @@ Mount shape on this host: skills, commands and rules mount as text — no native
 
 ## Plan mode × harness dual-write
 
-When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, ACTIVE store.db registry/workflow/plan rows.
+When **Plan mode** is active, **CreatePlan is session UX**; SSOT is **`{HARNESS_DIR}`** (fixed `.mstar/`) — `{PLAN_DIR}/<plan-id>-<name>.md`, ACTIVE store.db registry/workflow/plan rows.
 
 Before first **CreatePlan**: Read `mstar-conventions`, `mstar-artifacts`, Prepare gates from `mstar-phase-gates` when not hotfix. Full procedure: **`cursor-plan-mode-bridge.md`**.
 
