@@ -599,7 +599,7 @@ const COMMENT_SHAPES: readonly RegExp[] = [
   /@generated\b/i,
   // see skills/mstar-coding-behavior/references/comments.md § MUST: the
   // hash-gate marker scripts/lint-hash-gates.ts requires on a reviewed site.
-  /\bhash-gate\s*:\s*authorized\s*[\u2014-]/i,
+  /\bhash-gate:\s*authorized\s*\u2014\s*\S/,
 ];
 
 /** why: the marker is a shape only when a tracking reference (an owner, an

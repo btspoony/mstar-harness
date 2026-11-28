@@ -3,7 +3,7 @@ category: Changed
 packages: root
 ---
 
-- **Removed the unclassified comment corpus carried by the 5.0 merge across 168 files.** Descriptive `note:` / `why:` / `invariant:` blocks with no resolvable anchor are deleted, and no comment was re-prefixed. Comment-stripped transpiler output is byte-identical for every touched file, so behavior is unchanged.
+- **Removed the unclassified comment corpus carried by the 5.0 merge across 168 files.** Descriptive `note:` / `why:` / `invariant:` blocks with no resolvable anchor are deleted, and no comment was re-prefixed. Comment-stripped transpiler output is byte-identical for every touched file, so the comment sweep itself changes no behavior.
 - **The comment gate accepts the `hash-gate: authorized — <justification>` marker** that `scripts/lint-hash-gates.ts` owns, and the 32 reviewed integrity sites it authorizes are restored with their original justifications.
 - Two test fixtures spell their fake credential by concatenation so the plugin scanner does not report a hardcoded secret.
 
