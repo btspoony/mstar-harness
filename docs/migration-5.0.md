@@ -40,7 +40,7 @@ Its facts have other owners — open work in the issue store, goals as milestone
 
 ## Before you start
 
-Every verb below that takes a target names it explicitly: pass an absolute `--harness <abs>` for this checkout's harness directory — the directory that holds `store.db`, normally `<repository>/.mstar`. It is the operation target, never discovered from the working directory. Two verbs take no target: `mstar path resolve` discovers its scope from the directory it starts in, and `mstar schema --command <verb>` prints the shape of one document.
+Every verb below that takes a target names it explicitly: pass an absolute `--harness <abs>` for this checkout's harness directory — the directory that holds `store.db`, normally `<repository>/.mstar`. It is the operation target, never discovered from the working directory. Three verbs take no target: `mstar path resolve` discovers its scope from the directory it starts in, `mstar schema --command <verb>` prints the shape of one document, and `mstar lint <file> --type <kind>` reads the path you pass.
 
 - Node.js >= 24.18.0 must be the runtime (the CLI needs native `node:sqlite`).
 - Read access to the canonical Git origin is required: identity, mode, and — in `remote` mode — the protected selector ref `refs/heads/mstar-collaboration-authority` are resolved from the live remote.
