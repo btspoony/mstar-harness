@@ -6,6 +6,18 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-28
+
+### Fixed
+
+- **`mstar lint` refusals carry one literal recovery per branch.** The recovery no longer interpolates the caller's `--type` value, so `lint:refusal-quality` proves it statically; `--type acceptance` keeps its own arm because the filename inference never reproduces that type, and the generic arm tells the caller to repeat the flag it supplied. No allowlist entry was added.
+- **The engine-absent inertness fixture stubs the current engine import surface.** The stub still exported names `packages/opencode/src/mstar.ts` no longer imports and was missing `readAssignmentSource`, `assignmentFrontmatterEntries` and `parseAssignmentFieldsFromFrontmatter`, so the copied plugin failed to load and the probe exited 1 with one stderr line instead of proving the hook inert.
+- **The `issue obsolete` end-to-end case declares its own 30s budget.** It spawns the built bundle about eleven times, so the default 5s bound fails on a loaded `test-cli-ops-a` shard (reproduced at 5.08s under CPU contention); no assertion changed.
+
+- Version alignment with harness **5.0.0** (no OpenCode package API change).
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **5.0.0**.
+
 ## [4.9.0] - 2026-11-25
 
 - Version alignment with harness **4.9.0** (no OpenCode package API change).

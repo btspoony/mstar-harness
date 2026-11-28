@@ -6,6 +6,61 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-28
+
+### Breaking
+
+- **One declaration layer**: a plan, an Assignment, a task brief and a PM acceptance report declare their machine-read fields in a `---`-fenced front matter block read by the shared document schema — never a private field list per surface, and never a scan of the body.
+- **Assignment write homes**: a dispatching PM selects ONE write home by the Assignment's identity — plan → `{SDD_DIR}/assignments/`, iteration → `{ITERATION_DIR}/<id>/assignments/`, workflow → `{WORKFLOW_DIR}/<id>/assignments/` (precedence plan → iteration → workflow); a write home that would alias the read-only flat source `{HARNESS_DIR}/assignments/` is refused. An `Assignment file:` pointer is validated separately and never selects a home: it must be an absolute path, and after canonicalization it must land inside one of those three write homes or the flat read-only source `{HARNESS_DIR}/assignments/` — which the resolver accepts while no engine path creates a file there. A relative, unreadable, out-of-home or unrooted pointer refuses `dispatch.assignment.path`.
+- **No fallback**: a document carrying its fields as `**Label**:` body lines declares nothing. An inline one is refused `dispatch.assignment.legacy-format` terminally (independent of the `soft` / `hard` setting, advisory only on a host with no refusal channel), and a pointer at one resolves the file and refuses the same code. Migrate by rewriting the document as front matter with the snake_case keys (`execute_as`, `working_branch`, `plan_id`, …) or by pointing `Assignment file: <absolute path>` at the rewritten document — appending a fence to the old labels does not help.
+- **Self-declaring briefs**: `mstar sdd` now writes each task brief with `plan_id` and `task` front matter, plus an optional `files` list holding the task's own entries when it declares any (a task with none omits the key); the sliced body is byte-identical.
+- **`--type acceptance`**: `mstar lint <report.md> --type acceptance` validates `plan_id`, `gate`, `verdict` and `generated_at` through the shared schema (`gate: pm-acceptance`; `verdict` one of the four PM verdict values), and the acceptance template opens with that block.
+- **Corpus**: the skills and host documents name the front matter shape once per owning topic and point at `mstar-roles/references/project-manager/dispatch-and-assignment.md` § Assignment Template (Canonical) instead of restating a field list.
+- **The dashboard screens the effort field before any write.** The effort input keeps the raw text (a plain numeric-mode input, not a sanitising `type="number"` field); an empty field sends `effortSessions: null` where the count changes at all, a whole number inside the safely representable range is sent as that number (the engine still owns the range, so `0` is refused by the engine, not the UI), and anything else — non-integer text, or a number too large to represent exactly — is refused at the screen instead of being coerced into a cleared estimate. An estimated milestone renders `<n> sessions`; an unestimated one renders a word, matching the prototype.
+- **Project milestones carry a count of standard sessions instead of a calendar date.** `project_milestones.target` is replaced by `effort_sessions` (null = unestimated, or an integer of at least 1); `milestone add|update` take `--effort-sessions <n>` and `--clear-effort-sessions` in place of the date flags, the roadmap export and the dashboard show `<n> sessions` or "unestimated", and the milestone timeline orders by `ordinal`. An existing target becomes **unestimated** on `store upgrade` — it is not converted, and a `local`/`mirror` lane advances through `store upgrade` while `remote bind` replaces a pre-current remote cache (refused as `remote.effect-pending` while it holds an unsettled outbox intent). An observe document that still carries `target` — the milestone rows ride the observe submission; bind's document is the check batch — is refused with `remote.input-invalid`.
+
+### Changed
+
+- **An absent `[collaboration]` mode now selects `local`.** A repository needs no `.mstarc` declaration to use its local user-level authority; `mirror` and `remote` remain explicit, an empty `mode=` still refuses `collaboration.mode-required`, and a published remote selector refuses a checkout that defaulted to local instead of reading local rows. The refusal now names that recovery.
+
+### Fixed
+
+- **A journal lane this checkout does not hold no longer refuses workflow selection, and a pending registration now vetoes the workflow/ralph dispatch instead of degrading to an unreadable read.** A bound remote checkout whose private cache is absent, or a scope with no collaboration store yet, carries no `catalog_operations` row, so it gets the same pre-activation pass-through `store.not-active` already had instead of `collaboration.not-initialized`. A registered workflow with a genuinely pending registration still refuses `catalog.registration-pending`, the verdict now runs on the source read the host actually uses (`readExecutionWorkflowSource`), and that read carries the verdict as its own field: the fan-out gate denies the call under `warn`, `ask` and `hard` alike rather than reporting "cannot read the store" and allowing it, so `ralph` cannot start work beside a lifecycle whose catalog registration never committed. Genuinely unreadable sources keep their documented fail-open.
+- **A v4 collaboration lane reaches the effort schema.** The ladder's v4 step is guarded by its own ledger
+  row instead of running unconditionally, so a lane that already holds the move ledger stops re-proving v3
+  and re-running the v4 DDL before the v5 alter.
+- **A fenced combined store upgrades past the effort migration.** The cutover fence moves
+  `project_milestones` to the collaboration lane and drops the local copy, so migration 23 declares the
+  table its body alters and is recorded without running that body when the store's own fence proves the
+  move. The same absence without fence evidence is still damage and still refuses.
+- **Carried pre-route move rows are labelled by the generation's own v5 rule**: a replacement that carries a predecessor ledger without the `route` column now computes each half's route from the row's role and the predecessor's own recorded mode, instead of leaving the successor's `local-local` column default on the row — a default that made the discard of a remote exchange half refuse as a one-checkout move and left it stuck.
+- **The cutover-required disclosure no longer implies a released 4.9.x build can use the store after activation.** The execution schema is never lowered, so that build refuses it as `store.schema-unsupported` even after the cutover; the failure now says so and names this newer build as the one that completes the ladder.
+- **`@mstar-harness/engine` declares the `zod` dependency it imports.** `src/remote-documents.ts` imports `zod`, but the package manifest did not list it, so a clean `bun install` never placed it where the engine workspace resolves modules; every CI job that built the engine failed with `Could not resolve: "zod"`. Local checkouts masked it through a stale `packages/engine/node_modules/zod`.
+- **A frozen pre-upgrade write with a milestone target settles.** The outbox reads a stored request under
+  the contract that froze it: a milestone carrying the retired calendar `target` reads as unestimated
+  (`effortSessions: null`), because a date is not a count of sessions. A new submission carrying
+  `target` is still refused at the boundary.
+- **The published observation document matches the runtime parser.** The `inputDocument` descriptor an agent
+  discovers through the schema command now types a milestone row as `effortSessions` (null or an integer of
+  at least 1) with the retired `target` member gone, so a submission built from the advertised shape is the
+  one the runtime accepts instead of one it refuses.
+- **A cache replacement keeps a move-only ledger.** The successor now carries the settled ledger when either
+  the outbox intents or the move rows are non-empty, so a staged move recorded before any intent exists
+  survives the replacement instead of being dropped with the handoff it belongs to.
+- **`store upgrade` honours `--operation` as the idempotency key of the exact request, and on the normal upgrade path refuses a malformed id before it advances the execution schema.** A clean retry under the same id replays its retained reservation and receipt instead of minting a fresh operation. A retry that changes a request-identity option (`--ack-skip-workflow`, `--ack-skip-compass` or `--delivery`) is a different request and refuses `execution.operation-conflict`, so it must omit `--operation` and mint a fresh id — which the option's own help now states instead of promising a same-id retry. `--ack-skip-dsh` alone does not change the request identity — it only disposes DSH host-state facts — so a retry that adds only it under the same id replays the already-committed execution import instead of conflicting. The malformed-id refusal belongs to the normal upgrade path alone. Before `upgradeStoreMinimal`'s entry, `store upgrade` may already have advanced an existing v1 collaboration lane or created and published this scope's first lane on a fresh or file-era checkout, and on a combined store the `collaboration.cutover-required` branch advances the execution schema before it refuses. The guarantee is therefore exactly this: on the normal path a malformed id is refused without touching the execution schema or the execution authority.
+- **`store upgrade` refuses to strand an open mirror run.** A combined store whose `sync_runs` still holds a run now refuses `store.upgrade-sync-run-open` before the schema passes migration 20 — the fence the last released 4.9.x build refuses — and the recovery names that build's own `issue-sync apply` settlement. After the advance neither build could settle it.
+- **The combined upgrade branch now honours the documented automatic attestation.** It reaches the same provision-and-retry path as the legacy import (`advanceSchemaWithGeneratedAttestation`), so `store upgrade --help`'s promise holds on both branches.
+- **A bound remote checkout with no cache is no longer told to run `store init`.** The catalog journal's `collaboration.not-initialized` refusal on that path names the reviewed `remote bind` instead, with the code and lane message unchanged.
+- Removed forbidden byte/JSON snapshot assertions from `catalog-registration.test.ts` and `execution-coordination.test.ts` in favour of semantic assertions, and moved the remote journal scenario to `packages/engine/test/` per the test-layout rule.
+
+### Removed
+
+- **Removed the legacy `.agents/` harness kind and its `.gitignore` snippet.** `emitGitignoreSnippet()` takes no kind and always returns the `.mstar/` snippet; `detectHarnessKind`, `HarnessKind`, and the legacy `.agents/` snippet exports are gone. A `.agents/` rule in `.gitignore` no longer counts as a harness-root declaration, so scaffold and `validateGitignore` still require `.mstar/`; `.agents/{knowledge,specs,adr}` remain the tracked corpora.
+
+- Version alignment with harness **5.0.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **5.0.0**.
+
 ## [4.9.0] - 2026-11-25
 
 ### Breaking

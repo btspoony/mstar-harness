@@ -6,6 +6,24 @@ The monorepo root [CHANGELOG.md](../../CHANGELOG.md) summarizes cross-surface re
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-28
+
+### Changed
+
+- Raised the `@deepseek-ai/dsh-*` peer cohort and the architectural dev pins (`dsh-client-ui-*`, `dsh-scope`, `dsh-session-format-v3-to-v4`, `dsh-tool-executor-native`, `dsh-util-code-language`) to `0.2.2-rc.5`; the rc.3 → rc.5 audit finds no removed export, no package-set change and no session-format change, so the plugin consumes the same surfaces.
+- Bridged the role declaration to `dsh-llm-fallbacks`: its reader resolves a role only from the body-label `**Execute as**: <id>` header and stops at the first `---`, so a front-matter `execute_as` Assignment left its fallback chain, persona and notice row unbound. With the fallbacks capability mounted, the role channel now prepends that one header line ahead of the opening fence at dispatch time; the document, the role channel and the dispatch gate keep reading front matter.
+- Moved the `dsh-llm-fallbacks` pin to `0.8.11` in both places at once (`packages/dsh` devDependency and the CLI `mstar.dshLlmFallbacks`), whose peers are the same `^0.2.2-rc.5` cohort.
+
+### Fixed
+
+- **`mstar lint` refusals carry one literal recovery per branch.** The recovery no longer interpolates the caller's `--type` value, so `lint:refusal-quality` proves it statically; `--type acceptance` keeps its own arm because the filename inference never reproduces that type, and the generic arm tells the caller to repeat the flag it supplied. No allowlist entry was added.
+- **The engine-absent inertness fixture stubs the current engine import surface.** The stub still exported names `packages/opencode/src/mstar.ts` no longer imports and was missing `readAssignmentSource`, `assignmentFrontmatterEntries` and `parseAssignmentFieldsFromFrontmatter`, so the copied plugin failed to load and the probe exited 1 with one stderr line instead of proving the hook inert.
+- **The `issue obsolete` end-to-end case declares its own 30s budget.** It spawns the built bundle about eleven times, so the default 5s bound fails on a loaded `test-cli-ops-a` shard (reproduced at 5.08s under CPU contention); no assertion changed.
+
+- Version alignment with harness **5.0.0**.
+
+See root [CHANGELOG.md](../../CHANGELOG.md) **5.0.0**.
+
 ## [4.9.0] - 2026-11-25
 
 - Version alignment with harness **4.9.0**.
