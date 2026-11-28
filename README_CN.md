@@ -99,11 +99,12 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 |------|------|
 | `/codebase-audit [keywords]` | 只读盘点，产出按优先级排序、可直接执行的改进计划；按类别聚焦（`bug`、`security`、`perf`、`tech-debt`、…）可缩小范围。 |
 | `/codebase-comment-cleanup [path\|subsystem] [dry-run]` | 把每条代码注释归入 删除 / ADR / issue / 保留并定型 四类；按 PR 逐个收紧（ratchet）只读取本次 diff 触及的注释，因此闸门只判定本次变更新增或修改的注释，既有语料保持 advisory。 |
+| `/codebase-arch-governance [path\|subsystem] [dry-run] [rounds N]` | 把代码库分闭环批次收敛到其当前需求本应产出的形态：每批只做总复杂度最低的一项改动，迁移全部调用方、删除被替代的实现，并把已确立的规则固化为可执行检查。`dry-run` 只在回复中给出排序后的候选与已观测基线——不建审计运行目录、不写报告/证据文件、不捕获 issue、不写 ADR，也不改代码。`rounds N`（正整数，默认 1）限定一次调用可完成的闭环批次数。 |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | 合并前审查 PR 或分支，三档强度，最终给出唯一结论：settled（无中断完成、必需领域全部打开、已解析的 diff basis 可读且完整）的 run 按 finding tally 给出 `ship it`、`needs fixes` 或 `blocked`；仅在三种情况下给出唯一派生的 `incomplete`：run 在综合之前被中止，必需领域从未打开，或已解析的 diff basis 不可读。超过 wall clock 预算不属于这三种情况：完整覆盖的 run 即使超时，仍按 tally 给出结论，并把超时作为 note 声明。 |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | 对测试面做只读审计 → 产出删除、修复、合并或迁移测试的计划。 |
 | `/amazing-e2e-check [environment] [scenarios]` | 在独立 workflow 中运行你明确要求的浏览器、真机或安装部署场景。 |
 
-审计类命令只读取并报告，不会改你的代码。有两条边界要知道：`/amazing-pr-review` 在你给出 PR 编号时会把发现以 comment review 发布到 GitHub —— 它从不 approve、request changes 或 merge；`/amazing-e2e-check` 只在你主动要求时运行，其中触及真实环境的步骤需要明确授权。
+审计类入口只读取并报告，不改你的代码——`/codebase-arch-governance` 是例外：默认在常规 plan 门禁下执行闭环批次，`dry-run` 只报告。有两条边界要知道：`/amazing-pr-review` 在你给出 PR 编号时会把发现以 comment review 发布到 GitHub —— 它从不 approve、request changes 或 merge；`/amazing-e2e-check` 只在你主动要求时运行，其中触及真实环境的步骤需要明确授权。
 
 ## 工作流
 
@@ -185,8 +186,8 @@ mstar-harness schema --command issue.close  # 同一份契约的机器可读 JSO
 
 - [`docs/runtime-reference.md`](docs/runtime-reference.md) —— 组件、存储布局、角色与技能、CLI 与 MCP 参考。
 - [`INSTALL.md`](INSTALL.md) —— 各宿主的安装与校验，以及 `report` 命令的完整说明。
+- [`docs/commands.md`](docs/commands.md) —— 九条斜杠命令：参数、适用场景、归属 skill。
 - [`docs/migration-5.0.md`](docs/migration-5.0.md) —— 从 4.9.x 升级到 5.0 协作权威：有哪些破坏性变更、cutover 阶梯，以及拒绝后的恢复。
-- [`docs/commands.md`](docs/commands.md) —— 八条斜杠命令：参数、适用场景、归属 skill。
 - [`CONCEPTS.md`](CONCEPTS.md) —— harness 在 skills 与文档中使用的术语表。
 - 更新说明：[`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md)。CLI 参数：**`mstar-use-cli`** skill。
 - 维护者：[`AGENTS.md`](AGENTS.md)。

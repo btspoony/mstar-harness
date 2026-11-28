@@ -98,11 +98,12 @@ An iteration ends only after Workflow Close Out: a closed phase, an open pull re
 |---------|------|
 | `/codebase-audit [keywords]` | Read-only survey that produces prioritized, ready-to-execute improvement plans; narrow it with a category focus (`bug`, `security`, `perf`, `tech-debt`, …). |
 | `/codebase-comment-cleanup [path\|subsystem] [dry-run]` | Triage every code comment into delete / ADR / issue / keep-with-shape; the per-PR ratchet only reads comments a diff touches, so the gate judges only what the change adds or edits and the existing corpus stays advisory. |
+| `/codebase-arch-governance [path\|subsystem] [dry-run] [rounds N]` | Converge the codebase toward the shape its current requirements would have produced, in closed batches: one lowest-total-complexity move at a time, every caller migrated, the replaced path deleted, the settled rule locked by a check. `dry-run` returns the ranked candidates and their observed baseline in the response — no audit run, report, issue or ADR write, and no editing. `rounds N` (a positive integer, one by default) bounds how many closed batches one invocation completes. |
 | `/amazing-pr-review [pr\|branch] [quick\|default\|deep]` | Pre-merge review of a PR or branch at three strengths, ending in one verdict — `ship it`, `needs fixes`, or `blocked` from the finding tally on a settled run (completed without a stop, every required domain opened, the resolved diff basis readable and complete), or the single derived `incomplete` on exactly three conditions — the run stopped before synthesis, a required domain seat never opened, or the resolved diff basis could not be read. A wall-clock overrun is not one of them: a fully covered run past its budget publishes its tally-derived verdict and declares the overrun as a note. |
 | `/amazing-test-audit [scope] [quick\|deep] [campaign]` | Read-only audit of the test surface → plans to delete, repair, consolidate, or relocate tests. |
 | `/amazing-e2e-check [environment] [scenarios]` | Runs browser, device, or installed-deployment scenarios you explicitly asked for, in a separate workflow. |
 
-The audit commands read and report; they do not edit your code. Two boundaries to know: `/amazing-pr-review` posts its findings to GitHub as a comment review when you give it a pull-request number — it never approves, requests changes, or merges — and `/amazing-e2e-check` runs only when you ask for it, with steps that touch a real environment requiring explicit authorization.
+The audit entries read and report; they do not edit your code — `/codebase-arch-governance` is the exception, since its default executes closed batches under the normal plan gates while `dry-run` only reports. Two boundaries to know: `/amazing-pr-review` posts its findings to GitHub as a comment review when you give it a pull-request number — it never approves, requests changes, or merges — and `/amazing-e2e-check` runs only when you ask for it, with steps that touch a real environment requiring explicit authorization.
 
 ## Workflow
 
@@ -184,8 +185,8 @@ Host wiring, the issue and roadmap command families, and the details behind thes
 
 - [`docs/runtime-reference.md`](docs/runtime-reference.md) — components, storage layout, roles and skills, CLI and MCP reference.
 - [`INSTALL.md`](INSTALL.md) — install and verification per host, plus the `report` command in detail.
+- [`docs/commands.md`](docs/commands.md) — the nine slash commands: arguments, when to use, owning skill.
 - [`docs/migration-5.0.md`](docs/migration-5.0.md) — upgrading from 4.9.x to the 5.0 collaboration authority: what breaks, the cutover ladder, and refusal recovery.
-- [`docs/commands.md`](docs/commands.md) — the eight slash commands: arguments, when to use, owning skill.
 - [`CONCEPTS.md`](CONCEPTS.md) — the vocabulary the harness uses across skills and docs.
 - Release notes: [`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md). CLI flags: the **`mstar-use-cli`** skill.
 - Maintainers: [`AGENTS.md`](AGENTS.md).

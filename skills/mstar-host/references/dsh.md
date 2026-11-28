@@ -18,17 +18,7 @@ or a custom profile).
   provider as a **single canonical mount** (`providerName: mstar`). Skills are
   loadable by **name** via `ctx.skills`; the canonical skill-root form is
   `$DSH_BUNDLED_SKILL_DIR/<name>[/<rel>]`.
-- Plugin commands: the plugin registers the **eight** bundled
-  **`harness-commands/`** commands on `ctx.commands` — **`/iteration-start`**,
-  **`/iteration-drive`**, **`/iteration-loop`**, **`/codebase-audit`**, **`/codebase-comment-cleanup`**,
-  **`/amazing-pr-review`**, **`/amazing-e2e-check`**,
-  **`/amazing-test-audit`**. Each
-  command steers its command body into the receiving agent as a USER-source
-  message (the mstar workflow prompt — the model executes it as a task, not
-  injected context), returning a success result. The plugin registers **no
-  duplicated** mstar command tools: the writable mstar command surface on this
-  host is the **MCP** route (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface),
-  and the only native tools are the three the MCP route cannot replace.
+- Plugin commands: the plugin registers the bundled **`harness-commands/`** commands on `ctx.commands` — every shipped mstar slash command (full set: `docs/commands.md`), each steering its command body into the receiving agent as a USER-source message (the mstar workflow prompt — the model executes it as a task, not injected context) and returning a success result. The plugin registers **no duplicated** mstar command tools: the writable mstar command surface on this host is the **MCP** route (the dsh package README — `@mstar-harness/dsh/README.md` in an installed host, `packages/dsh/README.md` in this repo's checkout — § Native command surface), and the only native tools are the three the MCP route cannot replace.
 - **No `sessionStart.skill`** — enter PM manually via the `pm` skill (the
   `mstar-roles` load path), then **Read next** → `mstar-harness-core` →
   `project-manager.md`.
@@ -394,7 +384,7 @@ through the agent-flow ledger (§ Agent-flow ledger).
 | Surface | Path / invocation |
 |---------|-------------------|
 | Plugin skills | Skill **name** via the mstar skill-local provider (`ctx.skills`); canonical `$DSH_BUNDLED_SKILL_DIR/<name>` |
-| Plugin commands | The eight bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` |
+| Plugin commands | The nine bundled `harness-commands/` commands — `/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/codebase-arch-governance`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit` |
 | Session entry | `pm` skill → `mstar-harness-core` via pm **Read next** |
 
 ## Command delivery (dsh host, updated 2026-08-11)
@@ -403,7 +393,7 @@ The dsh web client resolves slash commands against a client-side lexicon driven 
 
 **Degradation fallback:** when a command is NOT claimed client-side (lexicon fetch timing, args parsing, manual typing), the model receives the **bare text** (`/iteration-loop <方向> …`) with NO command body — unlike opencode/cursor/omp where the body always arrives.
 
-**Rule:** when a user message begins with a registered mstar command name (`/iteration-start`, `/iteration-drive`, `/iteration-loop`, `/codebase-audit`, `/codebase-comment-cleanup`, `/amazing-pr-review`, `/amazing-e2e-check`, `/amazing-test-audit`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = execute with layer delivery alongside → close → close-delta layer if nonempty, then whole-chain proof on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
+**Rule:** when a user message begins with a registered mstar command name (full set: `docs/commands.md`) but carries no command body, treat it as that command invoked with the user text as its argument — execute the command's OWN semantics from the repo `commands/<name>.md` (or the mirrored `harness-commands/`): in particular **`/iteration-loop` = autonomous (code-first direction lock, NO grill-me questions)**, `/iteration-drive` = execute with layer delivery alongside → close → close-delta layer if nonempty, then whole-chain proof on the active iteration, `/iteration-start` = interactive (grill-me). Do not silently substitute the interactive start flow for `/iteration-loop`. Also do not re-ask what the command already specifies (e.g. scale auto → M default, branch policy continuity).
 
 ## Harness dir and environment
 
