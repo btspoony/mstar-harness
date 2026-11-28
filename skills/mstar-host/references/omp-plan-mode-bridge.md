@@ -4,7 +4,7 @@ Load with **`omp.md`** when omp Plan mode is active (`/plan`, plan-yolo / plan-m
 
 ## Dual-write contract
 
-omp session plans, composer todos, and plan-mode UI text are **session UX only**. Durable SSOT remains **`{HARNESS_DIR}`** (default `.mstar/`, legacy `.agents/`):
+omp session plans, composer todos, and plan-mode UI text are **session UX only**. Durable SSOT remains **`{HARNESS_DIR}`** (fixed `.mstar/`):
 
 | Artifact | SSOT |
 |----------|------|

@@ -1119,70 +1119,34 @@ const GITIGNORE_SNIPPET = `# Morning Star harness: the process root stays local.
 .mstar/
 `;
 
-/**
- * Legacy `.agents/` `.gitignore` snippet — verbatim embedded copy of the
- * skill's legacy equivalent (plan-conventions § Git 跟踪策略 "Legacy
- * `.agents/` 等价"), comments included. Used when the resolved harness kind
- * is `.agents`.
- */
-const GITIGNORE_SNIPPET_AGENTS = `# Morning Star harness (.agents/) \u2014 legacy
-# Default-ignore everything under .agents/, then re-include the tracked results.
-.agents/**
-!.agents/AGENTS.md
-!.agents/knowledge/
-!.agents/knowledge/**
-!.agents/specs/
-!.agents/specs/**
-!.agents/adr/
-!.agents/adr/**
-`;
-
 /** Harness `.gitignore` fence entries, derived from the `.mstar/` snippet (process root only). */
 const GITIGNORE_PROCESS_ENTRIES: readonly string[] = GITIGNORE_SNIPPET.split("\n")
   .filter((line) => line.startsWith(".mstar/") || line.startsWith("!.mstar/"))
   .map((line) => line.trim());
 
-/** Harness `.gitignore` fence entries (ignore + re-include), derived from the legacy `.agents/` snippet. */
-const GITIGNORE_PROCESS_ENTRIES_AGENTS: readonly string[] = GITIGNORE_SNIPPET_AGENTS.split("\n")
-  .filter((line) => line.startsWith(".agents/") || line.startsWith("!.agents/"))
-  .map((line) => line.trim());
-
-/**
- * Harness kind for the gitignore fence — the canonical snippet is per
- * harness layout (plan-conventions § Git 跟踪策略): `.mstar/` (default) and
- * legacy `.agents/`.
- */
-export type HarnessKind = "mstar" | "agents";
-
-/**
- * Emit the canonical `.gitignore` snippet for `kind` (plan-conventions
- * § Git 跟踪策略). The `.mstar/` kind ignores the whole process root — tracked
- * results live under `.agents/` and the tracked `.mstarc` declares that
- * layout, so the snippet carries no re-include; the legacy `.agents/` kind
- * keeps its re-includes. When the kind is unknown (omitted), both snippets
- * are emitted so either fence can be applied.
- */
-export function emitGitignoreSnippet(kind?: HarnessKind): string {
-  if (kind === "agents") return GITIGNORE_SNIPPET_AGENTS;
-  if (kind === "mstar") return GITIGNORE_SNIPPET;
-  return `${GITIGNORE_SNIPPET}${GITIGNORE_SNIPPET_AGENTS}`;
+/** Emit the canonical `.gitignore` snippet (plan-conventions § Git 跟踪策略). */
+export function emitGitignoreSnippet(): string {
+  return GITIGNORE_SNIPPET;
 }
 
 /**
  * Harness-root declaration rule: a trimmed, non-blank, non-comment line
- * matching `^!?/?\.(?:mstar|agents)(?:\/|$)`.
- * Both root spellings count, with or without a leading slash, as does a
- * negation (`!`); `.mstarc` alone does not declare. This is a mechanical
- * line scan — no escaping, glob, precedence or custom-root semantics.
+ * matching `^!?/?\.mstar(?:\/|$)`.
+ * The `.mstar/` root counts with or without a leading slash, as does a
+ * negation (`!`); `.agents/` holds tracked corpora, never the harness root,
+ * so its rules do not declare. `.mstarc` alone does not declare either. This
+ * is a mechanical line scan — no escaping, glob, precedence or custom-root
+ * semantics.
+ * see skills/mstar-conventions/references/git-tracking-and-gitignore.md
  */
-const HARNESS_ROOT_DECLARATION = /^!?\/?\.(?:mstar|agents)(?:\/|$)/;
+const HARNESS_ROOT_DECLARATION = /^!?\/?\.mstar(?:\/|$)/;
 
 /**
  * Whether `content` states a harness-root declaration: any trimmed non-blank,
- * non-comment line naming a `.mstar` or `.agents` harness root. Read only —
- * the lines are trimmed for recognition and the input bytes are never
- * rewritten. A declared file is author-owned: the caller must not append,
- * reorder, dedupe or normalize its contents.
+ * non-comment line naming the `.mstar` harness root. Read only — the lines
+ * are trimmed for recognition and the input bytes are never rewritten. A
+ * declared file is author-owned: the caller must not append, reorder, dedupe
+ * or normalize its contents.
  */
 export function hasHarnessRootDeclaration(content: string): boolean {
   return content
@@ -1197,19 +1161,15 @@ export function hasHarnessRootDeclaration(content: string): boolean {
 /**
  * Validate that `<root>/.gitignore` carries a harness ignore policy. An
  * authored harness-root declaration makes the file author-owned and the gate
- * passes as `gitignore.author-declared` — regardless of the DETECTED harness
- * kind, and without proposing a rewrite, normalization or canonical-completion
- * append. A file with no such declaration is undeclared: it reports the
- * canonical entries it lacks for the detected kind — `.mstar/` for a `.mstar`
- * harness, `.agents/` for a legacy `.agents` harness, the default `.mstar/`
- * set for a layout without a canonical snippet (rung-3 `.plans`/`plans`, or no
- * harness yet) — plus the fix that appends the canonical snippet. A missing
- * file stays `gitignore.missing`. Non-blocking: returns a `ValidationResult`
- * instead of throwing.
+ * passes as `gitignore.author-declared` without proposing a rewrite,
+ * normalization or canonical-completion append. A file with no such
+ * declaration is undeclared: it reports the canonical `.mstar/` entry it
+ * lacks plus the fix that appends the canonical snippet. A missing file stays
+ * `gitignore.missing`. Non-blocking: returns a `ValidationResult` instead of
+ * throwing.
  */
 export function validateGitignore(root: string): ValidationResult {
   const gitignorePath = join(resolve(root), ".gitignore");
-  const kind = detectHarnessKind(resolveHarnessDir(root));
   let content: string;
   try {
     content = readFileSync(gitignorePath, "utf8");
@@ -1219,7 +1179,7 @@ export function validateGitignore(root: string): ValidationResult {
       severity: "medium",
       code: "gitignore.missing",
       message: `no .gitignore found at ${gitignorePath}`,
-      fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
+      fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
     };
   }
   if (hasHarnessRootDeclaration(content)) {
@@ -1236,30 +1196,14 @@ export function validateGitignore(root: string): ValidationResult {
       .map((line) => line.trim())
       .filter((line) => line.length > 0),
   );
-  // Every canonical entry itself states a `.mstar/`/`.agents/` root
-  // declaration, so an undeclared file cannot hold any of them: the
-  // diagnostic lists the complete set for the detected kind (the default
-  // `.mstar/` set when the layout is unknown).
-  const canonical = kind === "agents" ? GITIGNORE_PROCESS_ENTRIES_AGENTS : GITIGNORE_PROCESS_ENTRIES;
-  const missing = canonical.filter((entry) => !lines.has(entry));
-  const label =
-    kind === "agents" ? ".agents/ set" : kind === "mstar" ? ".mstar/ set" : "either .mstar/ or .agents/ set";
+  const missing = GITIGNORE_PROCESS_ENTRIES.filter((entry) => !lines.has(entry));
   return {
     ok: false,
     severity: "medium",
     code: "gitignore.missing-entries",
-    message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (${label}): ${missing.join(", ")}`,
-    fix: `append the canonical snippet (emitGitignoreSnippet(${kind ? `"${kind}"` : ""})) to ${gitignorePath}`,
+    message: `.gitignore at ${gitignorePath} is missing canonical harness ignore entries (.mstar/ set): ${missing.join(", ")}`,
+    fix: `append the canonical snippet (emitGitignoreSnippet()) to ${gitignorePath}`,
   };
-}
-
-/** Detect the gitignore fence kind from a resolved harness dir (basename). */
-export function detectHarnessKind(harnessDir: string | null): HarnessKind | null {
-  if (!harnessDir) return null;
-  const name = basename(resolve(harnessDir));
-  if (name === ".mstar") return "mstar";
-  if (name === ".agents") return "agents";
-  return null;
 }
 
 /**

@@ -22,7 +22,7 @@ The host **Plan mode** (session plan file, todos, UI) is a **session UX mirror**
 ## Before the first plan (bootstrap init)
 
 1. **Read** (minimum): `mstar-conventions`, `mstar-artifacts` (SKILL.md); Prepare gates from `mstar-phase-gates` if not hotfix.
-2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-conventions` (prefer `.mstar/` + `.mstar/plans/`; reuse legacy `.agents/` only when already present and `.mstar/` is absent).
+2. **Discover** `{HARNESS_DIR}` / `{PLAN_DIR}` per `mstar-conventions` (`.mstar/` + `.mstar/plans/`; `.agents/` holds tracked corpora only and is never a harness root).
 3. **Initialize** absent directories and process-artifact gitignore per `mstar-conventions` (`mstar harness scaffold`), then create/activate the store (`mstar store init`, or `mstar store upgrade` for historical file state). Full PM checklist: `mstar-roles/references/project-manager/plan-management.md`.
 
 ## Build resume contract

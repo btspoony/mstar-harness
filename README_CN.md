@@ -110,13 +110,13 @@ Morning Star 为你在用的 AI 编程工具带来一套交付流程 —— 支�
 
 ![分层交付：从执行到 Workflow Close Out — 层 PR 与执行并行，只有 close-delta 层依赖 close，所有必需层合并后整链证明，最后 Workflow Close Out](assets/workflow.zh.svg)
 
-交互版是仓库中的 `assets/workflow.zh.html`；GitHub 只显示文件源码而非渲染后的页面，请在本地用浏览器打开。上面的内嵌图片就是可读版本。层 PR 与执行并行；只有 close-delta 层依赖 close；所有必需层合并后整链证明，最后 Workflow Close Out。
+交互版是 `assets/workflow.zh.html`；GitHub 只显示源码，请在本地打开。层 PR 与执行并行；只有 close-delta 层依赖 close；所有必需层合并后整链证明，最后 Workflow Close Out。
 
-主路径展示 **development** 交付。每个 plan 都有 plan 级 QC，默认三个独立席位；多任务 plan 另有 per-task review，hotfix/inline 仍保留较轻的席位规则。**PM Acceptance** 是所有范围唯一的验收路径：每条必需标准都映射到相关证据与真实结果，QC 批准本身不是测试证明。PM 可为具名缺口执行短小、有界的验收检查，但不得代做实现、编写测试、长套件或运维。已确认但未修复的问题仍作为 issue 跟踪。
+**development** 交付让每个 plan 走完 plan 级 QC —— 默认三个独立席位，多任务 plan 加 per-task review，hotfix/inline 用较轻规则 —— 再由 **PM Acceptance** 唯一验收：每条标准映射到真实证据，QC 批准本身不是证明。已确认但未修复的问题仍作为 issue 跟踪。
 
-**范围说明。** 迭代会先与你锁定方向，然后对承接的每个 plan 各跑一遍上述循环，执行期间按层发布 PR，最后统一收尾；不跑迭代时，这套循环就只为一个 plan 执行一次。验证或 report-only 的交付物 —— 例如一次审计 —— 在达到约定的完成条件时结束，没有 PR，也没有合并环节。在 development 这条路径上，plan 只有在证据齐全时才算完成：plan 完成、merge-ready 与已合并是三件不同的事，只有核实合并、走完 Workflow Close Out，交付才算结束。是否合并是一次单独的授权，来源只有一个记录：`owner-gated` 下由你批准或你自己合并；`reviewed-auto` 下该记录只在当前 PR head 上存在 settled、已 posted 的 `ship it` 报告时才构成授权；`reviewed-bot` 下只认挂载 bot 在该 head 上最新一次达到自身门的 review，而不是「有过一次 review」。从未记录 policy 的迭代会回到 Phase 1 补齐，而不是回退到任一值。分支清理则是收尾之后单独的、显式的动作。
+迭代先与你锁定方向，对承接的每个 plan 跑一遍上述循环，执行期间按层发布 PR，最后统一收尾；不跑迭代时只为一个 plan 执行。验证或 report-only 交付物在约定完成条件时结束，没有 PR 或合并。plan 完成、merge-ready 与已合并是三件不同的事：只有核实合并并走完 Workflow Close Out，交付才结束。是否合并是单独的授权 —— `owner-gated`、`reviewed-auto`（当前 head 上有 settled、已 posted 的 `ship it`）或 `reviewed-bot`（挂载 bot 在该 head 上最新一次过门 review；未记录 policy 会回到 Phase 1）。分支清理是收尾之后的显式动作。
 
-引擎负责校验流程中可机械校验的部分 —— 工作流状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。这些校验默认是 advisory：只报告问题；项目或迭代可以用 `enforcement: hard` 升级为阻断，具体能否阻断取决于宿主。过程状态（计划、workflow 记录、发现、审查报告）存放在 harness 目录，默认 `.mstar/`，由 scaffold 的规范 `.gitignore` 片段忽略 —— 安装器 init 不改动 `.gitignore`。
+引擎校验可机械校验的部分：状态流转、分支与 worktree 对齐、派发前置条件、plan 与 issue 记录。默认 advisory，除非设置 `enforcement: hard`；能否真正阻断取决于宿主。过程状态存放在 `.mstar/`，由 scaffold 的规范 `.gitignore` 片段忽略；安装器不改动 `.gitignore`。
 
 ## Dashboard：本地看板
 

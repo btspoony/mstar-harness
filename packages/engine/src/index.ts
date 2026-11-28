@@ -39,7 +39,6 @@
 export type { GateResult, Severity, ValidationResult } from "./core.js";
 export { SEVERITY_ORDER, applyEnforcement, readDeclaredNodeFloor, warnUncheckableNodeFloor, readHarnessVersion, readJson, resolveProjectRoot, writeJson } from "./core.js";
 export type {
-  HarnessKind,
   ResolveHarnessDirOptions,
   ResolveSpecsDirOptions,
   ResolveTrackedDirOptions,
@@ -222,7 +221,6 @@ export {
 export {
   assertPlanWritingPath,
   canonicalizeNearestExisting,
-  detectHarnessKind,
   emitGitignoreSnippet,
   HarnessRootRetiredError,
   hasHarnessRootDeclaration,
