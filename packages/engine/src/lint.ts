@@ -582,8 +582,9 @@ export type UnclassifiedComment = { line: number; endLine: number; text: string 
 const POINTER_PATH_SOURCE = "(?:\\.\\/)?(?:docs|skills|packages|scripts)\\/[\\w./-]*[\\w/-]";
 const POINTER_URL_SOURCE = "https?:\\/\\/[^\\s)]+";
 
-/** see skills/mstar-coding-behavior/references/comments.md § MUST: four shapes —
- * a bounded marker, a contract pointer, @generated, or a tracked TODO. Anything
+/** see skills/mstar-coding-behavior/references/comments.md § MUST: five shapes —
+ * a bounded marker, a contract pointer, @generated, a tracked TODO, or a
+ * lint-owned marker (`hash-gate: authorized`, `reachability: manual`). Anything
  * else is a restatement, a stale note or a changelog line. */
 const COMMENT_SHAPES: readonly RegExp[] = [
   // why: the bounded-shortcut vocabulary (comments.md § Markers).
@@ -599,8 +600,11 @@ const COMMENT_SHAPES: readonly RegExp[] = [
   /@generated\b/i,
 ];
 
-/** see skills/mstar-coding-behavior/references/comments.md § MUST: the single-line `//` marker `scripts/lint-hash-gates.ts` owns. */
-const HASH_GATE_SHAPE = /^hash-gate:\s*authorized\s*\u2014\s*\S/;
+/** see skills/mstar-coding-behavior/references/comments.md § MUST: the single-line `//` markers the hash-gate and help-reachability scripts own. */
+const LINT_MARKER_SHAPES: readonly RegExp[] = [
+  /^hash-gate:\s*authorized\s*\u2014\s*\S/,
+  /^reachability:\s*manual\s*\u2014\s*\S/,
+];
 
 /** why: the marker is a shape only when a tracking reference (an owner, an
  * issue, a removal path) holds somebody to it. */
@@ -749,7 +753,7 @@ function documentsExport(lines: readonly string[], afterLine: number): boolean {
  * it opens the comment content — a mid-sentence mention is prose. */
 function hasCommentShape(line: string, unit: CommentUnit): boolean {
   if (COMMENT_SHAPES.some((shape) => shape.test(line))) return true;
-  if (unit.singleLine && HASH_GATE_SHAPE.test(line.trimStart())) return true;
+  if (unit.singleLine && LINT_MARKER_SHAPES.some((shape) => shape.test(line.trimStart()))) return true;
   if (!TODO_MARKER_RE.test(line) || !hasTrackingReference(line)) return false;
   return line.search(TODO_MARKER_RE) === 0;
 }

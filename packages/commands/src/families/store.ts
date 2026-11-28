@@ -114,6 +114,7 @@ function refused(id: string, error: unknown): CommandEnvelope<never> {
   }
   return error instanceof SddScriptError
     ? refusalEnvelope({ command: id, status: "usage", code: "usage", exitCode: 2, message })
+    // reachability: manual — the repo-identity, cutover-not-quiescent, cutover-unconfirmed and not-initialized branches recover through runtime-selected store verbs, persisted-evidence inspection, or the collaboration-restore route whose required flags directly follow the registered verb name, so the action-word candidate scan cannot parse them; no single statically provable command covers these branches
     : refusalEnvelope({
       command: id,
       status: "refused",

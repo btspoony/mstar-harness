@@ -766,6 +766,8 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("// hash-gate: authorized\n")).toHaveLength(1);
     expect(findUnclassifiedComments("// note: hash-gate: authorized \u2014 a mention, not the marker\n")).toHaveLength(1);
     expect(findUnclassifiedComments("/**\n * hash-gate: authorized \u2014 a block form the owner never reads\n */\n")).toHaveLength(1);
+    expect(findUnclassifiedComments("// reachability: manual \u2014 runtime-selected verbs cover these branches\n")).toEqual([]);
+    expect(findUnclassifiedComments("// reachability: manual \u2014\n")).toHaveLength(1);
   });
 
   test("rejects pointer forms the linter cannot resolve", () => {
