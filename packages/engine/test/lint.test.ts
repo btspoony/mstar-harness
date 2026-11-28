@@ -759,15 +759,21 @@ describe("findUnclassifiedComments", () => {
     expect(findUnclassifiedComments("// scripts/comment-gate-select.sh\n")).toEqual([]);
   });
 
-  test("the hash-gate marker is a shape only as an anchored single-line marker with a reason", () => {
-    expect(findUnclassifiedComments("// hash-gate: authorized \u2014 a staged digest proves the reviewed rows\n")).toEqual([]);
-    expect(findUnclassifiedComments("// hash-gate: authorized - a staged digest proves the reviewed rows\n")).toHaveLength(1);
-    expect(findUnclassifiedComments("// hash-gate: authorized \u2014   \n")).toHaveLength(1);
-    expect(findUnclassifiedComments("// hash-gate: authorized\n")).toHaveLength(1);
-    expect(findUnclassifiedComments("// note: hash-gate: authorized \u2014 a mention, not the marker\n")).toHaveLength(1);
-    expect(findUnclassifiedComments("/**\n * hash-gate: authorized \u2014 a block form the owner never reads\n */\n")).toHaveLength(1);
-    expect(findUnclassifiedComments("// reachability: manual \u2014 runtime-selected verbs cover these branches\n")).toEqual([]);
-    expect(findUnclassifiedComments("// reachability: manual \u2014\n")).toHaveLength(1);
+  test("the hash-gate and reachability markers are shapes only under their owner's roots", () => {
+    const engine = "packages/engine/src/x.ts";
+    const commands = "packages/commands/src/x.ts";
+    const cli = "packages/cli/src/x.ts";
+    expect(findUnclassifiedComments("// hash-gate: authorized \u2014 a staged digest proves the reviewed rows\n", "c", engine)).toEqual([]);
+    expect(findUnclassifiedComments("// hash-gate: authorized - a staged digest proves the reviewed rows\n", "c", engine)).toHaveLength(1);
+    expect(findUnclassifiedComments("// hash-gate: authorized \u2014   \n", "c", engine)).toHaveLength(1);
+    expect(findUnclassifiedComments("// hash-gate: authorized\n", "c", engine)).toHaveLength(1);
+    expect(findUnclassifiedComments("// note: hash-gate: authorized \u2014 a mention, not the marker\n", "c", engine)).toHaveLength(1);
+    expect(findUnclassifiedComments("/**\n * hash-gate: authorized \u2014 a block form the owner never reads\n */\n", "c", engine)).toHaveLength(1);
+    expect(findUnclassifiedComments("// hash-gate: authorized \u2014 outside the hash-gate root\n", "c", commands)).toHaveLength(1);
+    expect(findUnclassifiedComments("// reachability: manual \u2014 runtime-selected verbs cover these branches\n", "c", commands)).toEqual([]);
+    expect(findUnclassifiedComments("// reachability: manual \u2014\n", "c", commands)).toHaveLength(1);
+    expect(findUnclassifiedComments("// reachability: manual \u2014 outside the reachability root\n", "c", cli)).toHaveLength(1);
+    expect(findUnclassifiedComments("// hash-gate: authorized \u2014 no path is unanchored\n")).toHaveLength(1);
   });
 
   test("rejects pointer forms the linter cannot resolve", () => {

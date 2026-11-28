@@ -483,7 +483,7 @@ function lintOne(file: string, cwd: string, pointerCache: Map<string, boolean>, 
       // finding stays an advisory marker and the count line is its only
       // output; under `--diff-base` a comment the change added or modified
       // (any line of a block moving counts) becomes a violation instead.
-      for (const finding of findUnclassifiedComments(text, dialect)) {
+      for (const finding of findUnclassifiedComments(text, dialect, path.relative(cwd, file).split(path.sep).join("/"))) {
         const changed = touched === undefined
           ? false
           : touched.some(([start, end]) => finding.line <= end && finding.endLine >= start);
