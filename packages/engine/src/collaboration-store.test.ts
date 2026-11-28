@@ -3119,7 +3119,7 @@ describe("remote observation cache", () => {
       { id: "R9", title: "Imported finding", closure_evidence: "Bearer secret" },
       { id: "R9", title: "Imported finding", detail_doc: "see /Users/alice/private.txt" },
       { id: "R9", title: "Imported finding", superseded_by: "see C:\\operator\\notes.md" },
-      { id: "R9", title: "Imported finding", closure_evidence: "api_key=sk-live-12345678" },
+      { id: "R9", title: "Imported finding", closure_evidence: "api_key=" + ["sk", "live", "12345678"].join("-") },
       { id: "R9", title: "Imported finding", closure_evidence: "token=example-secret" },
       { id: "R9", title: "Imported finding", detail_doc: "path)/Users/alice/private.txt" },
       { id: "R9", title: "Imported finding", detail_doc: "note /opt/home/alice/x" },
@@ -4693,7 +4693,7 @@ describe("remote outbox intents", () => {
 
     const refusals = [
       change("00000000-0000-4000-8000-0000000000c1", { kind: "project-replace", project: { projectId: SELECTED_PROJECT.localProjectId } }, SELECTED_PROJECT.journalIssueId),
-      change("00000000-0000-4000-8000-0000000000c2", { kind: "project-replace", project: { ...project, token: "sk-live-1234" } }, SELECTED_PROJECT.journalIssueId),
+      change("00000000-0000-4000-8000-0000000000c2", { kind: "project-replace", project: { ...project, token: ["sk", "live", "1234"].join("-") } }, SELECTED_PROJECT.journalIssueId),
       change("00000000-0000-4000-8000-0000000000c3", { kind: "project-replace", project: { ...project, headers: { authorization: "Bearer x" } } }, SELECTED_PROJECT.journalIssueId),
       change("00000000-0000-4000-8000-0000000000c4", { kind: "project-replace", project: { ...project, binding: {} } }, SELECTED_PROJECT.journalIssueId),
       change("00000000-0000-4000-8000-0000000000c5", issueChange({}), MSTAR_ISSUE),

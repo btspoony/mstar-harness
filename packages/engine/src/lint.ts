@@ -597,6 +597,9 @@ const COMMENT_SHAPES: readonly RegExp[] = [
   new RegExp(POINTER_URL_SOURCE, "i"),
   new RegExp(`(?<![\\w./-])${POINTER_PATH_SOURCE}`),
   /@generated\b/i,
+  // see skills/mstar-coding-behavior/references/comments.md § MUST: the
+  // hash-gate marker scripts/lint-hash-gates.ts requires on a reviewed site.
+  /\bhash-gate\s*:\s*authorized\s*[\u2014-]/i,
 ];
 
 /** why: the marker is a shape only when a tracking reference (an owner, an

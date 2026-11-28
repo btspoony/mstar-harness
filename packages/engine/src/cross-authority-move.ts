@@ -384,11 +384,13 @@ export function stagedMismatch(source: IssueMoveRecord, staged: IssueMoveRecord)
     return `the staged copy carries reference ${staged.issueRef}, not ${source.issueRef}`;
   }
   if (
+    // hash-gate: authorized — The staged copy must carry the digest frozen with its source row.
     source.payloadDigest !== staged.payloadDigest
   ) {
     return `the staged copy carries digest ${staged.payloadDigest}, not ${source.payloadDigest}`;
   }
   if (
+    // hash-gate: authorized — A staged payload that no longer hashes to its recorded digest was rewritten after the freeze.
     digestOf(staged.payloadJson) !== staged.payloadDigest
   ) {
     return "the staged copy's payload no longer hashes to its recorded digest, so it was rewritten after it was frozen";
@@ -1048,6 +1050,7 @@ function carriedIssueImage(issue: Record<string, unknown>, destinationProject: s
 }
 
 function carriedDifferences(actual: MoveCopy, frozen: MoveCopy, destinationProject: string): string[] {
+  // hash-gate: authorized — The destination adopts a move only when every carried row still matches the frozen record.
   const same = (left: unknown, right: unknown): boolean => JSON.stringify(left) === JSON.stringify(right);
   const differing: string[] = [];
   const actualIssue = carriedIssueImage(actual.issue, destinationProject);
@@ -2023,6 +2026,7 @@ export function moveDocumentOf(value: unknown): IssueMoveDocument {
   const operationId = text("operationId");
   const payloadJson = text("payloadJson");
   const payloadDigest = text("payloadDigest");
+  // hash-gate: authorized — A handoff document whose payload no longer hashes to its carried digest was rewritten in transit.
   if (digestOf(payloadJson) !== payloadDigest) {
     throw documentRefusal("carries a payload that does not hash to its recorded digest", { operationId });
   }
@@ -2308,9 +2312,11 @@ export function remoteMoveOperationId(operationId: string, step: string): string
 
 function documentMismatch(row: IssueMoveRecord, document: IssueMoveDocument): string | null {
   if (document.issueRef !== row.issueRef) return `the handoff carries reference ${document.issueRef}, not ${row.issueRef}`;
+  // hash-gate: authorized — The handoff must carry the digest frozen with the row it claims to continue.
   if (document.payloadDigest !== row.payloadDigest) {
     return `the handoff carries digest ${document.payloadDigest}, not ${row.payloadDigest}`;
   }
+  // hash-gate: authorized — A handoff payload that no longer hashes to the frozen row's digest was rewritten after the freeze.
   if (digestOf(document.payloadJson) !== row.payloadDigest) {
     return "the handoff's payload no longer hashes to its recorded digest, so it was rewritten after the freeze";
   }
@@ -2334,11 +2340,13 @@ function adoptCarriedCopy(row: IssueMoveRecord, document: IssueMoveDocument): Mo
     return null;
   }
   for (const column of ["project_id", "issue_ref", "identity_key", "disposition", "closed_at", "closure_note"] as const) {
+    // hash-gate: authorized — Canonical equality proves the carried copy keeps the record's identity and live disposition: identity columns and the tombstone's own writes must equal the staged values; every other field is the confirmed subject's own, which a reviewed repair legitimately rewrote.
     if (JSON.stringify(carried.issue[column] ?? null) !== JSON.stringify(staged.issue[column] ?? null)) return null;
   }
   const stagedFirst = staged.occurrences[0];
   const carriedFirst = carried.occurrences[0];
   for (const column of ["source_identity", "root_cause_key", "acceptance_key"] as const) {
+    // hash-gate: authorized — Canonical equality proves the carried copy's first occurrence keeps the identity triple the destination admission derives `identity_key` from; a prepended observation with a different triple is a different record, not a repair.
     if (JSON.stringify(carriedFirst?.[column] ?? null) !== JSON.stringify(stagedFirst?.[column] ?? null)) return null;
   }
   const members: Array<keyof Omit<MoveCopy, "issue">> = ["occurrences", "transitions", "provenance", "projectMoves", "relations"];
@@ -2349,6 +2357,7 @@ function adoptCarriedCopy(row: IssueMoveRecord, document: IssueMoveDocument): Mo
     const used = new Array<boolean>(after.length).fill(false);
     for (const row of before) {
       const at = after.findIndex(
+        // hash-gate: authorized — Canonical equality is the only proof every staged row survives unchanged in the carried set; a missing row names a rewritten, not extended, payload.
         (candidate, index) => !used[index] && JSON.stringify(candidate) === JSON.stringify(row),
       );
       if (at < 0) return null;
@@ -3154,6 +3163,7 @@ export async function exchangeLocalDestination(
   }
   let row = await requireOwnDestinationRow(context, request);
   if (row.destinationIssueId !== null) return exchangeReceipt(row, "destination", documentOfRow(row, "admission"));
+  // hash-gate: authorized — A payload digest that differs from the staged row's is admissible only as the confirmed tombstone's extended subject; the compare routes it to the prefix-proof rather than the discard.
   if (handoff.payloadDigest !== row.payloadDigest) {
     const replaced = adoptCarriedCopy(row, handoff);
     if (replaced === null) {

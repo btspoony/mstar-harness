@@ -811,6 +811,7 @@ function assertManifest(manifest: CutoverManifest): string {
   if (typeof manifest.repoKey !== "string" || manifest.repoKey === "" || (manifest.mode !== "local" && manifest.mode !== "mirror")) {
     throw conflict("The supplied manifest's repository identity is malformed. Re-run `store collaboration plan` and review its output.");
   }
+  // hash-gate: authorized — A manifest with no recorded source digest carries no integrity evidence to verify, so it can never be staged, fenced or activated.
   if (typeof manifest.sourceDigest !== "string" || manifest.sourceDigest === "") {
     throw conflict("The supplied manifest carries no source digest. Re-run `store collaboration plan` and review its output.");
   }
@@ -826,6 +827,7 @@ function assertManifest(manifest: CutoverManifest): string {
     throw conflict("The supplied manifest carries no blocker list. Re-run `store collaboration plan` and review its output.");
   }
   const digest = sha256(canonicalJson(manifestBody(manifest)));
+  // hash-gate: authorized — Accept only the reviewed plan output as the manifest: its id must equal the content digest of this very manifest, so substituted or edited manifests refuse.
   if (manifest.manifestId !== digest.slice(0, 32)) {
     throw conflict(
       "The supplied manifest is not the reviewed output of `store collaboration plan` for this content (its id does not " +
@@ -864,6 +866,7 @@ function sameCounts(a: Readonly<Record<string, number>>, b: Readonly<Record<stri
 function assertSnapshotMatches(snapshot: SourceSnapshot, manifest: CutoverManifest, detail: string): void {
   if (
     !sameSource(snapshot.source, manifest.source) ||
+    // hash-gate: authorized — Reuse staged evidence only when the snapshot digest equals the reviewed manifest's source digest; any other digest means the evidence no longer proves the reviewed rows.
     snapshot.digest !== manifest.sourceDigest ||
     !sameCounts(snapshot.counts, manifest.counts)
   ) {
@@ -880,6 +883,7 @@ function assertFenceMatches(
   digest: string,
   target?: Readonly<{ storeId: string; epoch: number }>,
 ): void {
+  // hash-gate: authorized — A fence vouches only for the manifest digest it was created with; a differing digest names another cutover and must never share this one's activation.
   if (fence.manifestId !== manifest.manifestId || fence.manifestDigest !== digest) {
     throw conflict(
       `The combined store was already fenced for manifest ${fence.manifestId} (fenced at ${fence.fencedAt}), not for ` +
@@ -1031,6 +1035,7 @@ function verifyStagedEvidence(db: StoreDb, manifest: CutoverManifest): void {
   const ledger = readStagedLedger(db);
   if (
     !sameCounts(countsOf(rows, ledger), manifest.counts) ||
+    // hash-gate: authorized — Activate only a staged copy whose actual row bytes digest to the reviewed manifest's source digest; drift here would promote unreviewed rows into the authority.
     digestOfSource(manifest.source, rows, ledger) !== manifest.sourceDigest
   ) {
     throw conflict(
@@ -1187,6 +1192,7 @@ async function releaseStaleClaim(
       const snapshot = readSourceSnapshot(source.db);
       const aligned =
         sameSource(snapshot.source, manifest.source) &&
+        // hash-gate: authorized — Own the source claim only while its snapshot digest equals the reviewed manifest's; any other digest makes the claim stale and releasable, not reusable.
         snapshot.digest === manifest.sourceDigest &&
         sameCounts(snapshot.counts, manifest.counts);
       if (aligned) return { kind: "aligned" };
@@ -1427,6 +1433,7 @@ async function prepareActivation(
     if (source.fence === null) {
       const aligned =
         sameSource(source.snapshot!.source, manifest.source) &&
+        // hash-gate: authorized — Fence the source only while its live snapshot digest still equals the reviewed manifest's; drift between review and fence would seal an unreviewed source state.
         source.snapshot!.digest === manifest.sourceDigest &&
         sameCounts(source.snapshot!.counts, manifest.counts);
       if (!aligned) {
@@ -1454,6 +1461,7 @@ async function prepareActivation(
 
     if (target.authority.state === "active") {
       const published = target.publication;
+      // hash-gate: authorized — An active authority is proof for exactly one manifest digest; a differing digest names another activation and is never republished or replaced.
       if (published === null || published.phase !== "active" || published.manifestDigest !== digest) {
         throw conflict(
           `The collaboration store at ${location.dbPath} is active, but not for manifest ${manifest.manifestId}. Read it ` +
@@ -1481,6 +1489,7 @@ async function prepareActivation(
       };
     }
     const publication = target.publication;
+    // hash-gate: authorized — Activation builds only on a publication verified for this manifest digest; a foreign staged publication is not evidence for this cutover.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
         `The staged target holds no verified publication for manifest ${manifest.manifestId}. Run ` +
@@ -1518,6 +1527,7 @@ async function claimActivation(prepared: Prepared): Promise<void> {
       );
     }
     const publication = readPublication(db, manifest.manifestId);
+    // hash-gate: authorized — Re-verify under the write lock that the staged publication still belongs to this manifest digest before taking the activation claim; a raced replacement must refuse.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
         `The staged target no longer holds the verified publication for manifest ${manifest.manifestId}. Re-apply the ` +
@@ -1570,6 +1580,7 @@ async function verifyBackupRows(path: string, manifest: CutoverManifest): Promis
     db.close();
   }
   const counts = countsOf(rows, ledger);
+  // hash-gate: authorized — Fence only on a recovery image whose rows digest to the reviewed manifest's source digest; an image holding other bytes does not preserve the reviewed history.
   if (!sameCounts(counts, manifest.counts) || digestOfSource(manifest.source, rows, ledger) !== manifest.sourceDigest) {
     throw backupIncomplete(
       `The retained recovery point at ${path} does not hold the reviewed rows (it records ` +
@@ -1758,6 +1769,7 @@ async function recordFenced(prepared: Prepared, fence: CollaborationFence): Prom
   await writeCollaborationStage(location, ({ db, authority }) => {
     if (authority.state !== "staged") return;
     const publication = readPublication(db, manifest.manifestId);
+    // hash-gate: authorized — Record the source-fenced phase only for the publication whose digest still equals the reviewed manifest's; the fence row must never outlive its matching evidence.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
         `The staged target lost the verified publication for manifest ${manifest.manifestId} after the source was ` +
@@ -1778,6 +1790,7 @@ async function publishTarget(prepared: Prepared, fence: CollaborationFence): Pro
   return writeCollaborationStage(location, ({ db, authority }) => {
     assertFenceMatches(fence, manifest, digest, { storeId: authority.storeId, epoch: authority.epoch });
     const publication = readPublication(db, manifest.manifestId);
+    // hash-gate: authorized — Publish the target only from a publication still bound to the fenced manifest's digest; the source is already fenced, so mismatched evidence would orphan it.
     if (publication === null || publication.manifestDigest !== digest) {
       throw conflict(
         `The staged target holds no publication for the fenced manifest ${manifest.manifestId}. Preserve the fence ` +

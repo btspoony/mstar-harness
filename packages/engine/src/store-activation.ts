@@ -953,6 +953,7 @@ function isOwnedDecline(row: Record<string, unknown>, declined: unknown): boolea
   if (declined.details !== null && !isPlainRecord(declined.details)) return false;
   if (typeof row.execution_store_id !== "string" || row.execution_store_id === "") return false;
   if (typeof row.execution_epoch !== "number" || !Number.isSafeInteger(row.execution_epoch)) return false;
+  // hash-gate: authorized — A row with no recorded request hash is not a complete recorded decline; treating it as settled history would replay a refusal that was never recorded.
   if (typeof row.request_hash !== "string" || row.request_hash === "") return false;
   return true;
 }
@@ -1204,6 +1205,7 @@ async function repairOwnRestorePublication(
       if (parsed === null || typeof parsed !== "object") continue;
       const record = parsed as Record<string, unknown>;
       const restoredFrom = record.restoredFrom;
+      // hash-gate: authorized — Adopt only a restore record naming this database image's exact sha256; a record for different image bytes describes another restore and cannot repair this one.
       if (record.imageSha256 !== imageSha) continue;
       const authority = record.authority;
       if (authority === null || typeof authority !== "object") continue;
@@ -1503,6 +1505,7 @@ async function resumeInterruptedPair(
           `would adopt unverified bytes. Remove it and retry, or pass --out <path> naming a new destination. Nothing was published.`,
       );
     }
+    // hash-gate: authorized — Reuse the destination image only when its bytes equal the digest this pair attempt verified; a replaced image never shared the attempt's snapshot window.
     if (sha256Bytes(readFileSync(path)) !== side.sha256) {
       throw incompletePair(
         `The image at ${path} is not the one this attempt copied (its bytes differ from the recorded attempt), so the two ` +
@@ -1609,6 +1612,7 @@ function ownsPrivateImage(side: PairAttemptClaim["execution"], attempt: string, 
     return false;
   }
   if (!stats.isFile() || stats.size === 0) return false;
+  // hash-gate: authorized — Adopt the retained private image as this attempt's evidence only when its bytes match the digest the attempt verified.
   return sha256Bytes(readFileSync(side.privatePath)) === side.sha256;
 }
 
@@ -1627,6 +1631,7 @@ function reusePrivateImage(
     return false;
   }
   if (!stats.isFile() || stats.size === 0) return false;
+  // hash-gate: authorized — Re-verify the private image bytes immediately before linking it into the public name so bytes changed after the ownership check are never published.
   if (sha256Bytes(readFileSync(side.privatePath)) !== side.sha256) {
     throw incompletePair(
       `The attempt's retained private image ${side.privatePath} no longer matches the digest this attempt verified, so it ` +
@@ -3444,6 +3449,7 @@ export async function retireStoreSources(
     );
   }
   const recordedActivation = JSON.parse(lane.activation.resultJson) as Omit<ActivationReceipt, "replayed">;
+  // hash-gate: authorized — Retire the lane's sources only against the recorded activation receipt; a hash naming another activation must refuse instead of retiring foreign evidence.
   if (recordedActivation.activationHash !== activationReceipt.activationHash) {
     throw new StoreActivationError(
       "store.activation-stale",
