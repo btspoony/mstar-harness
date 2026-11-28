@@ -1165,14 +1165,6 @@ export type Migration = {
   requiresTable?: string;
 };
 
-/**
- * invariant: Refuse a schema advance that would strand an open mirror run in a combined store.
- *
- * `sync_runs` is settlement state the 4.8.x mirror lane owns, and it settles the
- * run only in the combined store - the split lane (and so every 5.0 build's
- * `issue-sync`) refuses that mode. The fence migration is the last version that
- * build admits, so the batch stops here while the store is still readable by it.
- */
 function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
   const runs = openMirrorRuns(db);
   if (runs.length === 0) return;
@@ -1183,7 +1175,7 @@ function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
     new StoreError(
       "store.upgrade-sync-run-open",
       `The combined store at schema ${currentVersion} still holds open mirror run(s): ${named}. Migration ` +
-        `${RELEASED_COMBINED_SCHEMA_MAX + 1} is the fence the last released 4.8.x build refuses, and that build is the only one that ` +
+        `${RELEASED_COMBINED_SCHEMA_MAX + 1} is the fence the last released 4.9.x build refuses, and that build is the only one that ` +
         `settles a run in a combined store, so advancing past schema ${RELEASED_COMBINED_SCHEMA_MAX} would strand it: after the advance ` +
         `neither build can settle it. Nothing was modified.`,
       { runs },
@@ -1194,7 +1186,7 @@ function refuseOpenMirrorRuns(db: StoreDb, currentVersion: number): void {
       // absolute harness: a run settled from another checkout settles THAT store and leaves this
       // control root's run open, so the retry would refuse again.
       recovery:
-        "Settle or take over the open mirror run(s) the refusal names with the 4.8.x build's " +
+        "Settle or take over the open mirror run(s) the refusal names with the 4.9.x build's " +
         "mstar issue-sync apply --harness <same-control-root> --project <project-id> --results <file|-> " +
         "(add --take-run with an empty result list for a dead holder), then retry " +
         "mstar store upgrade --harness <same-control-root> --operator <name>; after this build's schema advance " +
@@ -2216,11 +2208,6 @@ export const MIGRATIONS: readonly Migration[] = [
 ];
 const DSH_HOST_STATE_MIGRATION = MIGRATIONS.find((migration) => migration.name === "dsh-host-ledgers");
 
-/**
- * note: The highest schema the last released 4.8.x build writes and admits. Migration 20 is the
- * cutover fence, which that build refuses as `store.schema-unsupported`; so a combined store's
- * open mirror run is only settleable while the store stays at or below this version.
- */
 const RELEASED_COMBINED_SCHEMA_MAX = 19;
 
 /**
@@ -2547,7 +2534,7 @@ export function heldCollaborationSourceTables(db: StoreDb): string[] {
  * The open mirror runs a COMBINED store still holds, in listing order.
  *
  * Migration 18 created `sync_runs` for the one-way mirror, which the released
- * 4.8.x build owns and settles in the combined store. Migration 19 is the last
+ * 4.9.x build owns and settles in the combined store. Migration 19 is the last
  * schema that build admits; migration 20 (the cutover fence) is the one it
  * refuses as `store.schema-unsupported`, so an upgrade past 19 strands every
  * open run: the settling build refuses the newer store, and this build's mirror

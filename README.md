@@ -61,6 +61,8 @@ Install through the host's native plugin manager, or this CLI's `init` flow wher
   - CLI: `npx @mstar-harness/cli init --target codex`
   - Native: `codex plugin marketplace add btspoony/mstar-harness --ref main`, then `codex plugin add morning-star-harness@mstar-repo`
 
+Upgrading an existing 4.x install is a reviewed cutover, not an installer step; follow [`docs/migration-5.0.md`](docs/migration-5.0.md).
+
 ## Use
 
 Enter the PM once per session, then describe the work in your own words; the PM runs the process in that session.
@@ -184,6 +186,7 @@ Host wiring, the issue and roadmap command families, and the details behind thes
 - [`docs/runtime-reference.md`](docs/runtime-reference.md) — components, storage layout, roles and skills, CLI and MCP reference.
 - [`INSTALL.md`](INSTALL.md) — install and verification per host, plus the `report` command in detail.
 - [`docs/commands.md`](docs/commands.md) — the nine slash commands: arguments, when to use, owning skill.
+- [`docs/migration-5.0.md`](docs/migration-5.0.md) — upgrading from 4.9.x to the 5.0 collaboration authority: what breaks, the cutover ladder, and refusal recovery.
 - [`CONCEPTS.md`](CONCEPTS.md) — the vocabulary the harness uses across skills and docs.
 - Release notes: [`CHANGELOG.md`](CHANGELOG.md) / [`CHANGELOG_CN.md`](CHANGELOG_CN.md). CLI flags: the **`mstar-use-cli`** skill.
 - Maintainers: [`AGENTS.md`](AGENTS.md).
