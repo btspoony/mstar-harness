@@ -6,6 +6,21 @@ A governance round targets the codebase's **shape**, not one feature: many small
 
 Assume the product launched on its first day today, with today's real requirements, constraints and product shape already known. Describe the codebase that state would have produced, then converge on it in safe, verifiable batches. The description is a direction, not a license to rewrite: a batch that cannot preserve the shipped behaviour is not a batch, it is a migration project needing its own plan and authority.
 
+## Recon
+
+No batch is selected before this recon exists; an incomplete recon blocks selection, and the round names the missing evidence instead of guessing a candidate. The recon is six inventories, one row each, answered with `file:line` evidence — or `spec:line ↔ code:line` for a deviation — and recorded in the round's plan or in the audit report the round reuses, so it adds no file type and no directory:
+
+| Inventory | The question it answers | Evidence |
+|---|---|---|
+| Architecture map | Which modules exist, where do they enter, what do they build, how do they run, on what stack? | `file:line` per boundary, entry point, build output, runtime shape |
+| Dependency graph | Which way do dependencies point, where are the cycles, cross-layer accesses and shared mutable state? | `file:line` per edge, cycle, cross-layer access, shared value |
+| State-ownership map | Who owns each mutable state, how long does it live, who reads it and who writes it? | `file:line` per owner, lifecycle, reader, writer |
+| Duplicate implementations | Which semantic has more than one implementation? | `file:line` per implementation |
+| Technology options | Which responsibility is served by more than one stack or library? | `file:line` per option |
+| Spec deviations | Where does the code depart from a recorded spec, ADR or contract? | `spec:line ↔ code:line` |
+
+The recon is not a repository-wide test or scan run, not an audit report of its own, and not a licence to widen scope: territory reads follow `mstar-audit` § Phase 1 — Recon (always), coverage follows `mstar-audit/references/codebase-audit.md` § Phase 2 (nine categories), and the read bound is `mstar-harness-core` § 定向执行与验证边界.
+
 ## The seven properties
 
 Each property has a question that decides it and an owner file that answers it; do not restate an owner's method here.
@@ -29,7 +44,7 @@ Each property has a question that decides it and an owner file that answers it; 
 
 ## Choosing the batch
 
-Generate candidate moves, then take the one with the **lowest total complexity**: the post-move code, the caller churn it forces, and the prose that must remain to cover what no constraint can see. A move that simplifies one module while scattering work across twelve callers is not the cheapest move, it is the cheapest local diff.
+Every candidate comes from the recon above, not from memory of the last round: generate candidate moves, then take the one with the **lowest total complexity**: the post-move code, the caller churn it forces, and the prose that must remain to cover what no constraint can see. A move that simplifies one module while scattering work across twelve callers is not the cheapest move, it is the cheapest local diff.
 
 ## Not a finding
 
