@@ -259,9 +259,9 @@ function selectorStale(cause: string, recovery?: string): never {
 }
 
 const SELECTOR_ABSENT_RECOVERY =
-  `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin to keep this checkout remote, or declare ` +
-  `'mode=local' in ${MSTARC_FILE} when it no longer should be; the reviewed and observe verbs cannot bind a ref that ` +
-  `the origin does not publish, so bind is not the recovery here`;
+  `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin, then re-run; this checkout keeps the observation ` +
+  `it recorded, so a mode change alone does not clear the fence and the reviewed and observe verbs cannot bind a ref ` +
+  `the origin does not publish`;
 
 function lookupSelector(mainRoot: string): string | null {
   let out: string;

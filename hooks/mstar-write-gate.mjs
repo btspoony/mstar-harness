@@ -906,7 +906,7 @@ var init_collaboration_identity = __esm(() => {
   SAFE_REPO_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
   DEFAULT_PORT = { "https:": "443", "http:": "80", "ssh:": "22" };
   SAFE_HOST = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*$/;
-  SELECTOR_ABSENT_RECOVERY = `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin to keep this checkout remote, or declare ` + `'mode=local' in ${MSTARC_FILE} when it no longer should be; the reviewed and observe verbs cannot bind a ref that ` + `the origin does not publish, so bind is not the recovery here`;
+  SELECTOR_ABSENT_RECOVERY = `Re-publish the reviewed ${AUTHORITY_REF} at the canonical origin, then re-run; this checkout keeps the observation ` + `it recorded, so a mode change alone does not clear the fence and the reviewed and observe verbs cannot bind a ref ` + `the origin does not publish`;
   LINEAR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
   CANONICAL_SHA256 = /^[0-9a-f]{64}$/;
   GIT_OBJECT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
